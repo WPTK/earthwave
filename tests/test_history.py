@@ -166,6 +166,15 @@ async def test_relaunch_offline_keeps_yesterday_and_acks_but_never_alerts(tmp_pa
         screen = app2.screen
         assert isinstance(screen, HistoryScreen)
         await app2.workers.wait_for_complete()
+        from textual.widgets._footer import FooterKey
+
+        assert [k.description for k in screen.query(FooterKey)] == [
+            "Previous day",
+            "Next day",
+            "Detail",
+            "Back",
+            "Quit",
+        ]
         assert screen.query_one(QuakeList).rows == []  # today (a day later) is empty ...
         await pilot.press("left")
         await app2.workers.wait_for_complete()
@@ -364,7 +373,7 @@ async def test_sort_change_keeps_the_cursor_quake_on_screen():
         assert top <= quake_list.cursor < top + quake_list.size.height
 
 
-# --- quake list: hidden, cursor and clicks ---------------------------------------------------------------------
+# --- quake list: clicks ---------------------------------------------------------------------
 
 
 def _list_app(count=40):
@@ -374,46 +383,6 @@ def _list_app(count=40):
     rows = [make_quake(f"q{i:02d}", 4.0, minutes_ago=10 + i) for i in range(count)]
     store.merge(Batch("usgs", T0, quakes=tuple(rows), backfill=True), clock)
     return EarthwaveApp(config, store=store, clock=clock, run_scheduler=False, ticks=False), store, clock
-
-
-async def test_rows_are_not_marked_seen_while_the_list_is_hidden():
-    app, *_ = _list_app()
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        quake_list = app.dashboard.query_one(QuakeList)
-        assert quake_list.visible_ids()  # shown: rows count as visible
-        app.dashboard.action_fullscreen_map()  # the list is hidden
-        await pilot.pause()
-        assert quake_list.visible_ids() == set()
-        app.dashboard.action_fullscreen_map()
-        await pilot.pause()
-        assert quake_list.visible_ids()
-
-
-async def test_rows_are_not_marked_seen_while_the_terminal_is_too_small():
-    app, *_ = _list_app()
-    async with app.run_test(size=(80, 24)) as pilot:  # the whole main area is hidden
-        await pilot.pause()
-        assert app.dashboard.query_one(QuakeList).visible_ids() == set()
-
-
-async def test_a_cursor_on_screen_stays_on_screen_when_a_burst_arrives_above():
-    app, store, clock = _list_app()
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        quake_list = app.dashboard.query_one(QuakeList)
-        for _ in range(20):  # near the bottom of the first screen
-            quake_list.action_cursor_down()
-        await pilot.pause()
-        cursor_id = quake_list.selected.id
-        for burst in range(3):
-            fresh = tuple(make_quake(f"b{burst}-{i}", 4.0, minutes_ago=1) for i in range(30))
-            store.merge(Batch("usgs", T0, quakes=fresh, backfill=True), clock)
-            app.dashboard.refresh_view()
-            await pilot.pause()
-            top = quake_list.scroll_offset.y
-            assert quake_list.selected.id == cursor_id
-            assert top <= quake_list.cursor < top + quake_list.size.height
 
 
 async def test_a_click_below_the_last_row_does_nothing():

@@ -460,9 +460,11 @@ async def test_footer_is_built_from_bindings_and_leaves_the_status_bar_visible()
         status = app.screen.query_one("#status")
         assert footer.display and status.display
         assert footer.region.y == 29 and status.region.y == 28  # one row each, the footer last
-        await pilot.pause()  # the footer composes its keys after the screen is up
-        await pilot.pause()
-        keys = list(app.screen.query(FooterKey))
+        for _ in range(100):  # the footer composes its keys after the screen is up
+            keys = list(app.screen.query(FooterKey))
+            if keys and all(k.region.width > 0 for k in keys):
+                break
+            await pilot.pause(0.02)
         # Every shown dashboard binding is in the footer, in BINDINGS order, and none is cut off by the width.
         assert [k.description for k in keys[:-1]] == [b.description for b in DashboardScreen.BINDINGS if b.show]
         assert keys[-1].description == "Quit"

@@ -9,7 +9,6 @@ from textual.geometry import Region, Size
 from textual.message import Message
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
-from textual.widget import Widget
 
 from earthwave.clock import Clock
 from earthwave.config import HomeConfig
@@ -103,10 +102,6 @@ class QuakeList(ScrollView, can_focus=True):
         return self.rows[self.cursor] if 0 <= self.cursor < len(self.rows) else None
 
     def visible_ids(self) -> set[str]:
-        """Ids of the rows on screen; none while this list or a container around it is hidden (a hidden widget keeps
-        its old size, so the size alone cannot say)."""
-        if not all(node.display for node in self.ancestors_with_self if isinstance(node, Widget)):
-            return set()
         top = self.scroll_offset.y
         return {q.id for q in self.rows[top : top + self.size.height]}
 

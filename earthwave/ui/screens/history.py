@@ -41,6 +41,17 @@ def stats_text(quakes: list[Earthquake], alert_levels: dict[str, int]) -> str:
     return text
 
 
+class HistoryList(QuakeList):
+    """The day's quakes. Its keys are bound here, on the focused widget, so the footer shows them: the list's own
+    arrow bindings would shadow the screen's, and the dashboard's footer is too full to show Enter."""
+
+    BINDINGS = [
+        Binding("enter", "select", "Detail"),
+        Binding("left", "screen.day(-1)", "Previous day"),
+        Binding("right", "screen.day(1)", "Next day"),
+    ]
+
+
 class HistoryScreen(Screen):
     DEFAULT_CSS = """
     HistoryScreen #history_head { height: 1; background: $panel; padding: 0 1; }
@@ -49,8 +60,6 @@ class HistoryScreen(Screen):
     HistoryScreen #history_list { height: 1fr; overflow-x: hidden; }
     """
     BINDINGS = [
-        Binding("left", "day(-1)", "Previous day"),
-        Binding("right", "day(1)", "Next day"),
         Binding("escape,h", "back", "Back"),
     ]
 
@@ -67,7 +76,7 @@ class HistoryScreen(Screen):
         yield Static("", id="history_head")
         yield Static("", id="history_stats")
         yield Static("", id="history_header")
-        yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="history_list")
+        yield HistoryList(app.clock, app.tracker, app.glyphs, app.config.home, id="history_list")
         yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
