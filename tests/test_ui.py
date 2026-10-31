@@ -405,6 +405,16 @@ async def test_empty_list_says_what_to_do():
         assert empty.display and "No quakes match" in str(empty.render()) and "Press f" in str(empty.render())
 
 
+async def test_a_markup_looking_search_does_not_crash_the_empty_hint():
+    app = week_app()
+    app.store.merge(Batch("usgs", WEEK_NOW, quakes=()), app.clock)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.set_query("[/x] [bold]")
+        await pilot.pause()
+        assert "[/x] [bold]" in str(app.dashboard.query_one("#empty").render())
+
+
 async def test_empty_hint_waits_for_the_first_poll():
     app = week_app()  # backfilled only: no steady poll has answered, so an empty list proves nothing
     assert not app.store.warm

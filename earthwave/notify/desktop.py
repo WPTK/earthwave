@@ -89,11 +89,26 @@ class WindowsToast(_ThreadedNotifier):
             log.warning("toast PowerShell exited %s: %s", result.returncode, (result.stderr or "").strip()[:300])
 
 
+def _run_quietly(cmd: list[str]) -> None:
+    """Run a notifier with its output captured: a child writing to our terminal would corrupt the TUI screen."""
+    result = subprocess.run(
+        cmd,
+        check=False,
+        timeout=10,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode:
+        log.warning("%s exited %s: %s", cmd[0], result.returncode, (result.stderr or "").strip()[:300])
+
+
 class NotifySend(_ThreadedNotifier):
     def _show(self, note: Notification) -> None:
         level = "critical" if note.urgency == "critical" else "normal"
         cmd = ["notify-send", "-u", level, "-a", "earthwave", "--", note.title, note.body]
-        subprocess.run(cmd, check=False, timeout=10)
+        _run_quietly(cmd)
 
 
 class Osascript(_ThreadedNotifier):
@@ -102,7 +117,7 @@ class Osascript(_ThreadedNotifier):
             return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
         script = f"display notification {quote(note.body)} with title {quote(note.title)}"
-        subprocess.run(["osascript", "-e", script], check=False, timeout=10)
+        _run_quietly(["osascript", "-e", script])
 
 
 def default_notifier(platform: str | None = None) -> Notifier | None:

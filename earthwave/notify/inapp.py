@@ -174,7 +174,7 @@ class AttentionTracker:
             self.ack(quake_id)
 
     def retain(self, quake_ids: set[str]) -> None:
-        """Drop attention for quakes outside the current view (filtered out or aged out): they can never be seen."""
+        """Drop attention for quakes the store no longer holds; a search or filter only hides rows."""
         keep = (TSUNAMI_PREFIX, GAUGE_PREFIX)
         for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]

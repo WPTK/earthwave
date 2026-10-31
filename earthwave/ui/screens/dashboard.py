@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -95,11 +96,11 @@ class DashboardScreen(Screen):
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
-        app.tracker.retain({q.id for q in rows})
+        app.tracker.retain({q.id for q in app.store.all()})  # search and filters are reversible: keep what is hidden
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
-        empty.update(f"No quakes match {filter_summary(app.view)}. Press f to change filters.")
+        empty.update(Text(f"No quakes match {filter_summary(app.view)}. Press f to change filters."))
         self.refresh_ticker()
         self.refresh_tsunami()
         self.refresh_status(shown=len(rows))

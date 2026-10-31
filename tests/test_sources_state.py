@@ -380,6 +380,8 @@ def test_backoff_doubles_with_jitter_and_caps():
     for delay, centre in zip(delays, (120, 240, 480, 600, 600, 600), strict=True):
         assert centre * 0.9 <= delay <= centre * 1.1
     assert 27 <= backoff_delay(0, 0, rng) <= 33
+    for failures in (1023, 1024, 5000):  # 2**1024 does not fit a float
+        assert 540 <= backoff_delay(60.0, failures, rng) <= 660
 
 
 def test_freshness_states(clock):
@@ -527,7 +529,7 @@ def test_threshold_crossing_without_a_material_change_still_fires(clock):
     assert store.merge(batch(make_quake("a", 6.1, updated=T0 + timedelta(minutes=2))), clock) == []
 
 
-def test_tracker_retain_drops_attention_outside_the_view(clock):
+def test_tracker_retain_drops_attention_for_quakes_the_store_no_longer_holds(clock):
     tracker = AttentionTracker(clock)
     tracker.observe([QuakeNew(make_quake("in")), QuakeNew(make_quake("out"))])
     tracker.retain({"in"})
@@ -549,6 +551,42 @@ async def test_startup_feed_is_retried_until_it_succeeds(clock):
         feeds = [(await source.fetch(client, None)).meta["feed"] for _ in range(3)]
     assert first.call_count == 2 and feeds == ["4.5_week", "all_day", "significant_month"]
     assert not source.starting
+
+
+@respx.mock
+async def test_a_startup_feed_that_keeps_failing_is_skipped_so_the_steady_feed_runs(clock):
+    broken = respx.get(FEED_BASE + "4.5_week.geojson").mock(return_value=httpx.Response(500))
+    respx.get(FEED_BASE + "all_day.geojson").mock(return_value=httpx.Response(200, json={"features": []}))
+    respx.get(FEED_BASE + "significant_month.geojson").mock(return_value=httpx.Response(500))
+    respx.get(FEED_BASE + "2.5_day.geojson").mock(return_value=httpx.Response(200, json={"features": []}))
+    source = UsgsSource(clock)
+    async with build_client() as client:
+        for _ in range(2):
+            with pytest.raises(httpx.HTTPStatusError):
+                await source.fetch(client, None)
+        assert broken.call_count == 2 and source.starting
+        assert (await source.fetch(client, None)).meta["feed"] == "all_day"
+        for _ in range(2):
+            with pytest.raises(httpx.HTTPStatusError):
+                await source.fetch(client, None)
+        assert not source.starting
+        assert (await source.fetch(client, None)).meta["feed"] == "2.5_day"
+
+
+def test_the_steady_feed_also_covers_quakes_that_can_alert():
+    assert UsgsSource(None, min_magnitude=5.0).steady == "4.5_day"
+    assert UsgsSource(None, min_magnitude=5.0, alert_floor=3.0).steady == "2.5_day"
+    source = UsgsSource(None, min_magnitude=1.0, alert_floor=3.0)
+    assert source.steady == "1.0_day"
+    source.set_min_magnitude(6.0)
+    assert source.steady == "2.5_day"
+
+
+async def test_attention_survives_a_search_that_hides_the_quake(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeNew(make_quake("hidden"))])
+    tracker.retain({"hidden"})  # the store still holds it, whatever the view shows
+    assert tracker.unseen() == 1
 
 
 @respx.mock

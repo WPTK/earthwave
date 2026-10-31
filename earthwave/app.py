@@ -86,7 +86,11 @@ class EarthwaveApp(App):
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
-        self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude)
+        # The steady feed must hold every quake that can alert, whatever magnitude the display filter hides.
+        alert_floor = min(
+            config.alerts.major_magnitude, config.alerts.near_home_magnitude if config.home.enabled else 99
+        )
+        self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude, alert_floor=alert_floor)
         self.client = build_client(config.notify.contact, transport)
         self.rules = AlertRules(config.alerts)
         self.notifier = notifier
@@ -236,13 +240,15 @@ class EarthwaveApp(App):
         for event in result.events:
             if isinstance(event, QuakeMajor):
                 q = event.quake
-                self.notify(f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10)
+                self.notify(
+                    f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10, markup=False
+                )
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
                 body = f"{event.name}: {event.residual_m:+.3f} m from the tide"
                 if event.late:
                     body += f" at {fmt_time(event.ts, self.config.view.time_zone)}"
-                self.notify(body, title="Gauge anomaly", severity="warning", timeout=10)
+                self.notify(body, title="Gauge anomaly", severity="warning", timeout=10, markup=False)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
         if not self.usgs.starting and not self._coverage_checked:
