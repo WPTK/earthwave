@@ -13,6 +13,7 @@ from earthwave.ui.widgets.gauge_strip import (
     GaugeRowData,
     GaugeStrip,
     age_text,
+    is_stale,
     max_residual,
     max_text,
     row_label,
@@ -65,6 +66,7 @@ def fixture_rows() -> list[GaugeRowData]:
             standard[-1].ts,
             tuple(r.residual_m for r in standard),
             DART_THRESHOLD,
+            "dart",
         ),
         GaugeRowData(
             "32401",
@@ -74,9 +76,17 @@ def fixture_rows() -> list[GaugeRowData]:
             event_rows[-1].ts,
             tuple(r.residual_m for r in event),
             DART_THRESHOLD,
+            "dart",
         ),
         GaugeRowData(
-            "9414290", "San Francisco", 95.0, "1m", gauge[-1].ts, tuple(r.residual_m for r in gauge), GAUGE_THRESHOLD
+            "9414290",
+            "San Francisco",
+            95.0,
+            "1m",
+            gauge[-1].ts,
+            tuple(r.residual_m for r in gauge),
+            GAUGE_THRESHOLD,
+            "coops",
         ),
     ]
 
@@ -94,18 +104,40 @@ def test_label_and_max_text():
         label.startswith("46402 Aleutians") and "1234 km" in label and "15m" in label and "last batch 3h ago" in label
     )
     assert row_label(_row(distance_km=None), NOW).plain.count("km") == 0
-    quiet = max_text(_row())
+    quiet = max_text(_row(), NOW)
     assert quiet.plain == "-0.012 m" and "green" in str(quiet.style)
-    loud = max_text(_row(residuals=(0.01, -0.081, 0.02)))
+    loud = max_text(_row(residuals=(0.01, -0.081, 0.02)), NOW)
     assert loud.plain == "-0.081 m !" and "red" in str(loud.style)
-    assert max_text(_row(residuals=())).plain == "no residual"
+    assert max_text(_row(residuals=()), NOW).plain == "no residual"
     assert max_residual(()) is None and max_residual((0.01, -0.02, 0.015)) == -0.02
+
+
+def test_a_row_with_old_data_says_stale_instead_of_flagging_it():
+    old = _row(mode="1m", newest=NOW - timedelta(hours=20), residuals=(0.01, -0.081, 0.02))
+    text = max_text(old, NOW)
+    assert text.plain == "-0.081 m stale" and "!" not in text.plain and "red" not in str(text.style)
+    live = _row(mode="1m", newest=NOW - timedelta(minutes=2), residuals=(0.01, -0.081, 0.02))
+    assert max_text(live, NOW).plain == "-0.081 m !"
+    # a 15-minute DART file arrives in batches, so hours-old data is normal for it, a day is not
+    assert not is_stale(_row(), NOW) and is_stale(_row(newest=NOW - timedelta(hours=20)), NOW)
+    assert is_stale(_row(mode="6m", newest=NOW - timedelta(hours=2)), NOW)
+
+
+async def test_strip_says_when_no_tide_gauge_is_in_range():
+    dart_only = [r for r in fixture_rows() if r.kind == "dart"]
+    app = StripApp(dart_only)
+    async with app.run_test(size=(110, 8)) as pilot:
+        await pilot.pause()
+        text = " ".join(str(w.render()) for w in app.query("Static"))
+        assert "No tide gauge within 1500 km" in text
+        app.query_one(GaugeStrip).show(fixture_rows(), NOW)
+        await pilot.pause()
+        assert "No tide gauge" not in " ".join(str(w.render()) for w in app.query("Static"))
 
 
 def test_sparkline_is_framed_by_zero_and_threshold():
     data = sparkline_data((0.001, -0.02, 0.5), DART_THRESHOLD)
     assert data[:2] == [0.0, DART_THRESHOLD] and data[2:] == [0.001, 0.02, 0.5]
-    assert all(v >= 0 for v in data)
     # a quiet series never exceeds the frame, so a 2 cm wobble cannot fill the strip
     quiet = sparkline_data((0.02, -0.01), DART_THRESHOLD)
     assert max(quiet) == DART_THRESHOLD
@@ -117,7 +149,7 @@ def test_summary_and_colour_use_only_the_drawn_window():
 
     residuals = (0.9, *([0.001] * (MAX_POINTS + 59)))  # a spike 300 samples back, outside the drawn 240
     row = _row(residuals=residuals)
-    assert max_text(row).plain == "+0.001 m" and "green" in str(max_text(row).style)
+    assert max_text(row, NOW).plain == "+0.001 m" and "green" in str(max_text(row, NOW).style)
     assert max(sparkline_data(residuals, DART_THRESHOLD)) == DART_THRESHOLD
     assert max_residual((float("nan"), -0.02)) == -0.02 and max_residual((float("nan"),)) is None
 

@@ -70,6 +70,7 @@ def nearest_n[T](
 DART_COUNT = 6
 DART_MAX_KM = 3000.0
 COOPS_COUNT = 4
+COOPS_MAX_KM = 1500.0  # CO-OPS is US-only; a gauge further than this from the footprint says nothing about it
 MAX_GEOMETRY_POINTS = 48  # polygon vertices ranked against; enough to find the nearest coast without a slow scan
 
 EDGE_STEP_KM = 100.0  # polygon edges are sampled at least this densely
@@ -116,6 +117,11 @@ def geometry_points(geometry: tuple | None, quake: Point | None = None) -> list[
     return [quake] if quake is not None else []
 
 
+def footprint_radius_km(geometry: tuple | None) -> float:
+    """The radius of a CAP circle footprint, else 0 (a polygon is already sampled along its boundary)."""
+    return float(geometry[3]) if geometry and geometry[0] == "circle" and len(geometry) > 3 else 0.0
+
+
 def select_dart(
     stations: Iterable[Station],
     source: Point,
@@ -132,15 +138,22 @@ def select_dart(
 
 
 def select_coops(
-    stations: Iterable[Station], points: Sequence[Point], n: int = COOPS_COUNT
+    stations: Iterable[Station],
+    points: Sequence[Point],
+    n: int = COOPS_COUNT,
+    max_km: float = COOPS_MAX_KM,
+    radius_km: float = 0.0,
 ) -> list[tuple[float, Station]]:
-    """The n tide gauges nearest any of `points` (see geometry_points), as (distance_km, station), nearest first."""
+    """The n tide gauges within max_km of any of `points` (see geometry_points), as (km, station), nearest first.
+
+    `radius_km` is the footprint's own radius (a CAP circle): the cap and the distances are measured to its edge.
+    """
     if not points:
         return []
     best: list[tuple[float, Station]] = []
     for s in stations:
         if s.kind != "coops":
             continue
-        best.append((min(haversine_km(lat, lon, s.lat, s.lon) for lat, lon in points), s))
+        best.append((max(0.0, min(haversine_km(lat, lon, s.lat, s.lon) for lat, lon in points) - radius_km), s))
     best.sort(key=lambda pair: pair[0])
-    return best[:n]
+    return [pair for pair in best if pair[0] <= max_km][:n]

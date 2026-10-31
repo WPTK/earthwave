@@ -15,6 +15,7 @@ from earthwave.state.events import (
     TsunamiChanged,
     TsunamiIssued,
 )
+from earthwave.ui.labels import fmt_time
 
 PAGER_RANK = {"green": 0, "yellow": 1, "orange": 2, "red": 3}
 BURST = 3  # this many quake toasts at once collapse into one summary
@@ -107,4 +108,6 @@ class AlertRules:
         """One toast per anomaly episode: the store only raises the event when an episode starts."""
         name = event.name or event.station_id
         body = f"{name}: {event.residual_m:+.3f} m from the tide (threshold {event.threshold_m:g} m)"
+        if event.late:
+            body += f" at {fmt_time(event.ts)}"
         return Notification(f"gauge:{event.station_id}:{event.ts:%Y%m%dT%H%M%S}", "Gauge anomaly", body, "warning")

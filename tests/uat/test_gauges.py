@@ -5,8 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import make_quake
-from test_observations import REPLAY, GatedReplay, gauge_app
-from test_ui import wait_for
+from test_observations import REPLAY, GatedReplay, drive, gauge_app
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -67,7 +66,7 @@ async def test_observations_view_says_so_for_an_unflagged_quake(clock):
 async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
     """Real 32401 payloads: stale standard batch ('last batch'), then the 3 cm pulse flagged, one toast, ticker line."""
     monkeypatch.setattr("earthwave.notify.inapp.GAUGE_SECONDS", 1e9)
-    clock = ReplayClock(recording_start(REPLAY), speed=300)
+    clock = ReplayClock(recording_start(REPLAY), real=lambda: 0.0)
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     config = replace(config, alerts=replace(config.alerts, gauge_anomaly_dart_m=0.02))
     store = Store(config.alerts, config.home)
@@ -83,7 +82,7 @@ async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
         assert isinstance(app.screen, ObservationsScreen)
 
         # standard mode: the strip says 'last batch', never implying a live stream
-        await wait_for(lambda: app.store.gauge_readings("32401") and transport.requests >= 2)
+        await drive(clock, lambda: app.store.gauge_readings("32401") and transport.requests >= 2, step=300)
         app.screen.refresh_gauges()
         await pilot.pause()
         text = screen_text(app)
@@ -92,14 +91,14 @@ async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
 
         # event mode: the pulse is flagged on screen and announced once
         transport.gate.set()
-        await wait_for(lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
+        await drive(clock, lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
         await app._outbox.join()
 
         def flagged() -> bool:
             app.screen.refresh_gauges()
             return "-0.031 m !" in screen_text(app)
 
-        await wait_for(flagged)
+        await drive(clock, flagged, step=15)
         assert [n.title for n in fake.sent].count("Gauge anomaly") == 1
         assert next(r for r in app.gauge_rows() if r.station_id == "32401").mode != "15m"
 

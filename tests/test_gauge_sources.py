@@ -13,7 +13,7 @@ from earthwave.net import build_client
 from earthwave.sources import coops, ndbc
 from earthwave.sources.anomaly import find_anomaly, threshold_m
 from earthwave.sources.base import SourceHealth
-from earthwave.sources.geo import epicentre, geometry_points, haversine_km, select_coops, select_dart
+from earthwave.sources.geo import COOPS_MAX_KM, epicentre, geometry_points, haversine_km, select_coops, select_dart
 
 HEALTH = SourceHealth()
 STATIONS_XML = (FIXTURES / "ndbc" / "activestations.xml").read_text(encoding="utf-8")
@@ -96,6 +96,24 @@ def test_select_coops_nearest_four_to_points():
     assert hawaii and min(hawaii) < 50
     assert select_coops(stations, []) == []
     assert select_coops(ndbc.load_bundled_stations(), [(37.8, -122.4)]) == []
+
+
+def test_select_coops_ignores_gauges_beyond_the_distance_cap():
+    stations = _coops_stations()
+    assert select_coops(stations, [(-6.2, 106.8)]) == []  # Jakarta: no US gauge is anywhere near
+    assert select_coops(stations, [(37.8, -122.4)]) and all(
+        d <= COOPS_MAX_KM for d, _ in select_coops(stations, [(37.8, -122.4)])
+    )
+
+
+def test_the_distance_cap_is_measured_to_the_edge_of_a_circle():
+    stations = _coops_stations()
+    pt = (30.0, -140.0)
+    nearest = min(haversine_km(*pt, s.lat, s.lon) for s in stations)
+    assert COOPS_MAX_KM < nearest < COOPS_MAX_KM + 1000
+    assert select_coops(stations, [pt]) == []
+    inside = select_coops(stations, [pt], radius_km=1000.0)
+    assert inside and inside[0][0] == pytest.approx(nearest - 1000.0)
 
 
 # --- anomaly decisions -------------------------------------------------------------------------------------------
@@ -217,6 +235,39 @@ async def test_dart_station_list_hourly_with_bundled_fallback(clock):
         clock.advance(2)
         await source.fetch(client, None)
         assert server.count("activestations") == 3
+
+
+async def test_dart_404_is_retried_after_a_while(clock):
+    """NDBC rewrites a file and answers 404 once; the buoy must come back, not vanish for the whole session."""
+    answers = [(404, "x"), DART_46402]
+    pop = lambda _r: answers.pop(0) if len(answers) > 1 else answers[0]  # noqa: E731
+    server = Server({"activestations.xml": STATIONS_XML, "46402.dart": pop})
+    source = ndbc.DartSource(clock)
+    source.set_selection(["46402"])
+    async with server.client() as client:
+        assert (await source.fetch(client, None)).readings == ()
+        assert source.unavailable == {"46402"}
+        clock.advance(ndbc.UNAVAILABLE_RETRY + 1)
+        assert source.unavailable == frozenset()  # selection will pick it again
+        batch = await source.fetch(client, None)
+    assert {r.station_id for r in batch.readings} == {"46402"} and source.unavailable == frozenset()
+
+
+async def test_dart_404_wait_doubles_and_resets_on_success(clock):
+    source = ndbc.DartSource(clock)
+    retry = ndbc.UNAVAILABLE_RETRY
+    source.mark_unavailable("21413")
+    clock.advance(retry + 1)
+    assert source.unavailable == frozenset()
+    source.mark_unavailable("21413")
+    clock.advance(retry + 1)
+    assert source.unavailable == {"21413"}  # twice the wait the second time
+    clock.advance(retry)
+    assert source.unavailable == frozenset()
+    for _ in range(20):
+        source.mark_unavailable("21413")
+    clock.advance(ndbc.UNAVAILABLE_MAX + 1)
+    assert source.unavailable == frozenset()  # capped
 
 
 async def test_dart_404_marks_unavailable_and_total_failure_raises(clock):
