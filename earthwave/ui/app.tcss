@@ -209,7 +209,7 @@ FiltersScreen, HelpScreen {
 #help_box {
     width: 80;
     height: auto;
-    max-height: 90%;
+    max-height: 100%;
     padding: 1 2;
     border: round $primary;
     background: $panel;
