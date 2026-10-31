@@ -92,8 +92,9 @@ def bulletin_header(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert:
-    """A CAP 1.2 product to a TsunamiAlert. The dedupe key is the bulletin's WMO header (shared with the NWS API)."""
+def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert | None:
+    """A CAP 1.2 product to a TsunamiAlert, or None for a Test, Exercise, System or Draft product (never shown as an
+    alert, and it cannot close one). The dedupe key is the bulletin's WMO header (shared with the NWS API)."""
     root = ET.fromstring(xml)
     ident = _text(root.find(f"{CAP}identifier"))
     sent = parse_time(_text(root.find(f"{CAP}sent")))
@@ -101,6 +102,8 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert:
     info = root.find(f"{CAP}info")
     if not ident or sent is None or info is None:
         raise ValueError("CAP product lacks identifier, sent or info")
+    if (status := _text(root.find(f"{CAP}status")).lower()) and status != "actual":
+        return None  # Test, Exercise, System or Draft; an unreadable status is shown, never dropped
     params = {_text(p.find(f"{CAP}valueName")): _text(p.find(f"{CAP}value")) for p in info.findall(f"{CAP}parameter")}
     event = _text(info.find(f"{CAP}event"))
     level = levels.CANCELLATION if msg_type.lower() == "cancel" else levels.level_from_text(event)
@@ -246,7 +249,8 @@ class TsunamiGovSource:
                             bulletin = await self._get_text(client, entry["bulletin_url"])
                         except httpx.HTTPError as exc:
                             log.warning("tsunamigov: bulletin %s unavailable: %r", entry["bulletin_url"], exc)
-                    alerts.append(parse_cap(cap, bulletin, entry["cap_url"]))
+                    if (alert := parse_cap(cap, bulletin, entry["cap_url"])) is not None:
+                        alerts.append(alert)
                 except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
                     if not permanent(exc):
                         # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.

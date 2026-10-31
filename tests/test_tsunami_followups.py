@@ -42,6 +42,8 @@ def test_an_nws_alert_missing_from_a_complete_listing_is_withdrawn(kclock):
     assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
     store.merge(nws_batch(kclock, incomplete=True), kclock)  # a partial answer proves nothing
     assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
+    store.merge(nws_batch(kclock), kclock)  # one omission is a blip
+    assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
     store.merge(nws_batch(kclock), kclock)
     assert store.active_alerts(kclock) == [] and store.alert_status(alert, kclock) == "withdrawn"
 
@@ -80,6 +82,7 @@ async def test_jma_gives_up_on_a_report_that_never_parses(caplog):
     polls = [await feed.poll() for _ in range(jma.MAX_ENTRY_FAILURES + 3)]
     assert all(b.meta["incomplete"] for b in polls[: jma.MAX_ENTRY_FAILURES - 1])
     assert not any(b.meta["incomplete"] for b in polls[jma.MAX_ENTRY_FAILURES - 1 :])
+    assert len(polls[jma.MAX_ENTRY_FAILURES - 1].alerts) == 1  # a headline from the list entry, not a silent loss
     assert caplog.text.count("giving up") == 1 and caplog.text.count("skipping") == 0
 
 
@@ -136,6 +139,7 @@ def test_a_withdrawn_nws_alert_comes_back_when_it_is_listed_again(kclock):
     alert = nws_alert()
     kclock.advance_to(alert.updated)
     store.merge(listed(kclock, alert), kclock)
+    store.merge(listed(kclock), kclock)
     store.merge(listed(kclock), kclock)
     assert store.active_alerts(kclock) == []
     store.merge(listed(kclock, alert), kclock)

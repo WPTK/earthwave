@@ -48,6 +48,8 @@ def parse_geometry(geometry: dict | None) -> tuple | None:
 
 def parse_feature(feature: dict) -> TsunamiAlert | None:
     props = feature["properties"]
+    if str(props.get("status") or "Actual").lower() != "actual":  # Test, Exercise, System, Draft
+        return None
     event = props.get("event") or ""
     level = levels.level_from_text(event)
     if str(props.get("messageType", "")).lower() == "cancel" or "cancellation" in (props.get("headline") or "").lower():
@@ -112,7 +114,7 @@ class NwsSource:
         return self._interval
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
-        params = {"event": EVENTS}
+        params = {"event": EVENTS, "status": "actual"}
         headers = {"Accept": "application/geo+json"}
         response = await client.get(URL, params=params, headers=headers)
         if response.status_code == 429:

@@ -138,8 +138,11 @@ class DashboardScreen(Screen):
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
         feeds, none_fresh = app.tsunami_feeds_down()
-        down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in feeds)
+        down = tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
         pulse = bool(unacked) and blink
+        if app.offline:  # nothing was fetched, so an empty list says nothing
+            self.query_one(TsunamiPanel).show_offline()
+            return
         self.query_one(TsunamiPanel).show(
             active,
             app.clock.now(),
