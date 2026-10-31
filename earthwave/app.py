@@ -267,6 +267,7 @@ class EarthwaveApp(App):
             self.store, self.clock, self.dart.stations, self.coops.stations, self.dart.unavailable, self._gauge_quake
         )
         old, self.gauge_selection = self.gauge_selection, chosen
+        self.store.forget_gauges(set(old.ids) - set(chosen.ids))
         if chosen.dart_ids != old.dart_ids:
             self.dart.set_selection(chosen.dart_ids)
             self.scheduler.reschedule(self.dart.name, immediate=True)

@@ -3,7 +3,7 @@
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -14,6 +14,8 @@ from earthwave.ui.labels import fmt_age
 
 MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
 NAME_WIDTH = 20
+STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
+STALE_AFTER_BATCH = timedelta(hours=6)  # a 15-minute DART file arrives in batches, hours apart
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,13 @@ def max_residual(residuals: Sequence[float]) -> float | None:
     """The residual with the largest magnitude, sign kept; None when there is none (NaN is ignored)."""
     finite = [r for r in residuals if not math.isnan(r)]
     return max(finite, key=abs) if finite else None
+
+
+def is_stale(row: GaugeRowData, now: datetime) -> bool:
+    """The newest reading is too old for the row to describe the water now (a row with no reading is 'no data')."""
+    if row.newest is None:
+        return False
+    return now - row.newest > (STALE_AFTER_BATCH if row.mode == "15m" else STALE_AFTER)
 
 
 def sparkline_data(residuals: Sequence[float], threshold_m: float) -> list[float]:
@@ -66,10 +75,12 @@ def row_label(row: GaugeRowData, now: datetime) -> Text:
     return text
 
 
-def max_text(row: GaugeRowData) -> Text:
+def max_text(row: GaugeRowData, now: datetime) -> Text:
     peak = max_residual(shown_residuals(row.residuals))
     if peak is None:
         return Text("no residual", style="grey50", no_wrap=True)
+    if is_stale(row, now):  # old data is never flagged or coloured as if it were live
+        return Text(f"{peak:+.3f} m stale", style="grey50", no_wrap=True)
     over = abs(peak) >= row.threshold_m
     return Text(f"{peak:+.3f} m{' !' if over else ''}", style="bold red" if over else "green", no_wrap=True)
 
@@ -88,14 +99,16 @@ class GaugeRow(Horizontal):
         self._now = now
 
     def compose(self) -> ComposeResult:
-        over = any(abs(r) >= self.row.threshold_m for r in shown_residuals(self.row.residuals))
+        over = not is_stale(self.row, self._now) and any(
+            abs(r) >= self.row.threshold_m for r in shown_residuals(self.row.residuals)
+        )
         yield Static(row_label(self.row, self._now), classes="gauge-label")
         yield Sparkline(
             sparkline_data(self.row.residuals, self.row.threshold_m),
             min_color="green",
             max_color="red" if over else "yellow",
         )
-        yield Static(max_text(self.row), classes="gauge-max")
+        yield Static(max_text(self.row, self._now), classes="gauge-max")
 
 
 class GaugeStrip(Vertical):

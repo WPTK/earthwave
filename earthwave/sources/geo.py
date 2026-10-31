@@ -70,6 +70,7 @@ def nearest_n[T](
 DART_COUNT = 6
 DART_MAX_KM = 3000.0
 COOPS_COUNT = 4
+COOPS_MAX_KM = 1500.0  # CO-OPS is US-only; a gauge further than this from the footprint says nothing about it
 MAX_GEOMETRY_POINTS = 48  # polygon vertices ranked against; enough to find the nearest coast without a slow scan
 
 EDGE_STEP_KM = 100.0  # polygon edges are sampled at least this densely
@@ -132,9 +133,9 @@ def select_dart(
 
 
 def select_coops(
-    stations: Iterable[Station], points: Sequence[Point], n: int = COOPS_COUNT
+    stations: Iterable[Station], points: Sequence[Point], n: int = COOPS_COUNT, max_km: float = COOPS_MAX_KM
 ) -> list[tuple[float, Station]]:
-    """The n tide gauges nearest any of `points` (see geometry_points), as (distance_km, station), nearest first."""
+    """The n tide gauges within max_km of any of `points` (see geometry_points), as (km, station), nearest first."""
     if not points:
         return []
     best: list[tuple[float, Station]] = []
@@ -143,4 +144,4 @@ def select_coops(
             continue
         best.append((min(haversine_km(lat, lon, s.lat, s.lon) for lat, lon in points), s))
     best.sort(key=lambda pair: pair[0])
-    return best[:n]
+    return [pair for pair in best if pair[0] <= max_km][:n]

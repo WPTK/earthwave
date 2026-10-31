@@ -27,7 +27,12 @@ DART_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station_id}.dart"
 
 # The ``T`` column of a .dart row: 1 = standard 15-minute, 2 = event 1-minute, 3 = event 15-second.
 MODES = {1: "15m", 2: "1m", 3: "15s"}
-MISSING = 99.999
+# NDBC marks a missing value with a run of 9s whose width depends on the field. The short ones fall inside the
+# physical range, so they are listed; 9999.000 and the like are caught by the range, which also drops zero, negative
+# and NaN heights. A DART water column is between a few metres and the deepest trench.
+MISSING = frozenset({99.999, 999.999})
+MIN_HEIGHT_M = 1.0
+MAX_HEIGHT_M = 9000.0
 DETREND_WINDOW = timedelta(hours=3)
 DETREND_DEGREE = 3
 MIN_FIT_POINTS = 8
@@ -77,8 +82,8 @@ def parse_active_stations(xml_text: str | bytes) -> list[Station]:
 def parse_dart(text: str, station_id: str) -> list[GaugeReading]:
     """Parse a ``.dart`` file into readings, oldest first.
 
-    Comment and blank lines, short or malformed rows, unknown ``T`` codes and the 99.999
-    missing-value marker are skipped. Timestamps are UTC.
+    Comment and blank lines, short or malformed rows, unknown ``T`` codes and the missing-value
+    markers and heights outside ``MIN_HEIGHT_M``..``MAX_HEIGHT_M`` are skipped. Timestamps are UTC.
     """
     rows: list[GaugeReading] = []
     for line in text.splitlines():
@@ -91,7 +96,7 @@ def parse_dart(text: str, station_id: str) -> list[GaugeReading]:
             ts = datetime(yy, mo, dd, hh, mi, ss, tzinfo=UTC)
         except ValueError:
             continue
-        if t not in MODES or height == MISSING:
+        if t not in MODES or height in MISSING or not MIN_HEIGHT_M <= height <= MAX_HEIGHT_M:
             continue
         rows.append(GaugeReading(station_id, "dart", ts, height, MODES[t]))
     rows.sort(key=lambda r: r.ts)
@@ -179,6 +184,7 @@ def detrend(
 
 STATIONS_TTL = 3600.0  # activestations.xml is refetched hourly
 STATIONS_RETRY = 600.0  # after a failed refresh, keep the known list and retry in ten minutes
+UNAVAILABLE_RETRY = 600.0  # a buoy whose file answered 404 is left out of the selection this long, then tried again
 HISTORY = timedelta(hours=12)  # readings kept per station per batch: the 3 h fit plus room to draw
 
 
@@ -215,7 +221,7 @@ class DartSource:
         self._alert_active = False
         self._stations = load_bundled_stations()
         self._stations_due: float | None = None  # clock.monotonic() when activestations.xml is next refetched
-        self._unavailable: set[str] = set()
+        self._unavailable: dict[str, float] = {}  # station -> clock.monotonic() when it is tried again
         self._event_until: dict[str, datetime] = {}  # per station; only a fresh answer from that station changes it
         self._unsent: tuple[models.Station, ...] = ()
 
@@ -234,8 +240,9 @@ class DartSource:
 
     @property
     def unavailable(self) -> frozenset[str]:
-        """Stations whose file answered 404; selection should skip them."""
-        return frozenset(self._unavailable)
+        """Stations whose file answered 404 less than ``UNAVAILABLE_RETRY`` ago; selection should skip them."""
+        now = self._clock.monotonic()
+        return frozenset(k for k, retry in self._unavailable.items() if retry > now)
 
     def event_mode(self) -> bool:
         now = self._clock.now()
@@ -272,7 +279,7 @@ class DartSource:
             try:
                 response = await client.get(DART_URL.format(station_id=station_id))
                 if response.status_code == 404:
-                    self._unavailable.add(station_id)
+                    self._unavailable[station_id] = self._clock.monotonic() + UNAVAILABLE_RETRY
                     self._event_until.pop(station_id, None)
                     continue
                 response.raise_for_status()
@@ -280,7 +287,7 @@ class DartSource:
                 failures.append(exc)
                 continue
             ok += 1
-            self._unavailable.discard(station_id)
+            self._unavailable.pop(station_id, None)
             rows = parse_dart(response.text, station_id)
             self._event_until.pop(station_id, None)
             if rows:

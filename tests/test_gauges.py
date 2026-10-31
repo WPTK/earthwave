@@ -76,6 +76,14 @@ def test_parser_edge_cases():
     assert not ndbc.in_event_mode([])
 
 
+@pytest.mark.parametrize("bad", ["9999.000", "999.999", "99.999", "0.000", "-12.500", "12000.000", "nan", "inf"])
+def test_missing_markers_and_implausible_heights_are_dropped(bad):
+    text = chr(10).join(
+        ["2026 10 31 00 00 00 1 4717.700", f"2026 10 31 00 15 00 1 {bad}", "2026 10 31 00 30 00 1 4717.800"]
+    )
+    assert [r.value_m for r in ndbc.parse_dart(text, "X")] == [4717.7, 4717.8]
+
+
 def tide(t: datetime) -> float:
     s = t.timestamp()
     return 4700 + 0.5 * math.sin(2 * math.pi * s / (12.42 * 3600)) + 0.2 * math.sin(2 * math.pi * s / (12 * 3600) + 1)
@@ -194,6 +202,17 @@ def test_residual_injected_pulse():
     obs.append(coops.GaugeReading("S", "coops", t0 + timedelta(minutes=3), 9.0, "6m"))  # no prediction
     res = coops.residuals(obs, pred)
     assert [round(r.residual_m, 3) for r in res] == [0, 0, 0.1, 0, 0]
+
+
+def test_baseline_removal_drops_a_steady_offset_and_keeps_a_pulse():
+    t0 = datetime(2026, 10, 31, tzinfo=UTC)
+    pred = [coops.Prediction("S", t0 + timedelta(minutes=6 * i), 1.0) for i in range(60)]
+    obs = [coops.GaugeReading("S", "coops", p.ts, 1.4 + (0.5 if i == 50 else 0), "6m") for i, p in enumerate(pred)]
+    out = coops.remove_baseline(coops.residuals(obs, pred))
+    assert out[0].ts >= t0 + coops.BASELINE_MIN_SPAN  # no baseline, no residual, until there is an hour of history
+    assert all(abs(r.residual_m) < 1e-9 for r in out if r.ts != pred[50].ts)
+    pulse = next(r for r in out if r.ts == pred[50].ts)
+    assert pulse.residual_m == pytest.approx(0.5) and pulse.observed_m - pulse.predicted_m == pytest.approx(0.5)
 
 
 # ---- snapshot script ------------------------------------------------------------------------

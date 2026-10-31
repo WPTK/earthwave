@@ -1,7 +1,7 @@
 """Canonical in-memory quake store: merge and dedupe, material-update rules, filtered views, coverage tracking."""
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -219,6 +219,12 @@ class Store:
             events.extend(self._judge_gauge(station_id, kind, clock, silent))
         return events
 
+    def forget_gauges(self, station_ids: Iterable[str]) -> None:
+        """Stations that left the selection: their next look is a first look again (see `_judge_gauge`)."""
+        for station_id in station_ids:
+            self._evaluated.pop(station_id, None)
+            self._episode_end.pop(station_id, None)
+
     def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
         """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""
         rows = self.gauge_readings(station_id)
@@ -226,7 +232,7 @@ class Store:
             new = ndbc.detrend(rows, since=since)  # type: ignore[arg-type]
         else:
             self._predictions[station_id] = self.predictions_for(station_id) or self._predictions.get(station_id, [])
-            new = coops.residuals(rows, self._predictions[station_id])  # type: ignore[arg-type]
+            new = coops.remove_baseline(coops.residuals(rows, self._predictions[station_id]))  # type: ignore[arg-type]
             since = datetime.min.replace(tzinfo=UTC)
         kept = {ts: r for ts, r in self._residuals.get(station_id, {}).items() if ts < since}
         kept.update({r.ts: r for r in new})
@@ -236,15 +242,15 @@ class Store:
     def _judge_gauge(self, station_id: str, kind: str, clock: Clock, silent: bool) -> list[Event]:
         """An anomaly event at the start of each episode; the rest of an episode only extends it.
 
-        Each station remembers the newest residual it judged, so a restart or a new selection (which reads hours of
-        history at once) does not replay old exceedances; the first look only counts the last GAUGE_FRESH minutes.
+        Each station remembers the newest residual it judged, so everything after that counts however late it arrives
+        (a feed that was down for an hour reports the exceedance in the batch that follows). Only the first look at a
+        station, after a restart or `forget_gauges`, reads hours of history at once, and it counts just the last
+        GAUGE_FRESH minutes so old exceedances are not replayed.
         """
         residuals = self.gauge_residuals(station_id)
         if not residuals:
             return []
-        fresh = clock.now() - GAUGE_FRESH
-        evaluated = self._evaluated.get(station_id)
-        since = fresh if evaluated is None else max(evaluated, fresh)  # a re-selected station has old history too
+        since = self._evaluated.get(station_id) or clock.now() - GAUGE_FRESH
         self._evaluated[station_id] = residuals[-1].ts
         decision = find_anomaly(station_id, kind, residuals, self._alerts, since)
         if decision is None:

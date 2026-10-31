@@ -95,7 +95,7 @@ def test_coops_residuals_use_the_source_predictions(dclock):
     clock = ReplayClock(obs[-1].ts, real=lambda: 0.0)
     store.merge(Batch("coops", clock.now(), readings=tuple(coops.to_reading(r) for r in obs)), clock)
     assert [r.residual_m for r in store.gauge_residuals("9414290")] == pytest.approx(
-        [r.residual_m for r in coops.residuals(obs, preds)]
+        [r.residual_m for r in coops.remove_baseline(coops.residuals(obs, preds))]
     )
 
 
@@ -162,6 +162,50 @@ def test_one_event_per_anomaly_episode(dclock):
     assert merge_dart(store, dclock, calm) == []
     again = pulse_rows(last, range(160, 184), 0.15)
     assert [type(e) for e in merge_dart(store, dclock, again)] == [GaugeAnomaly]
+
+
+def test_a_late_exceedance_for_a_polled_station_is_reported(dclock):
+    """CO-OPS or NDBC went quiet for an hour; the pulse in the batch that follows is older than GAUGE_FRESH."""
+    store = anomaly_store(dclock)
+    pulse = pulse_rows(dart_rows()[-1], range(1, 40), 0.15)  # the bump is at minutes 9-14
+    dclock.advance(3600)
+    assert [type(e) for e in merge_dart(store, dclock, pulse)] == [GaugeAnomaly]
+
+
+def test_a_reselected_station_does_not_replay_hours_old_history(dclock):
+    store = anomaly_store(dclock)
+    store.forget_gauges(["46402"])  # the selection dropped it; its readings stay in the store
+    dclock.advance(3 * 3600)
+    assert merge_dart(store, dclock, pulse_rows(dart_rows()[-1], range(1, 40), 0.15)) == []
+
+
+def _coops_tide(hours: int = 8):
+    t0 = datetime(2026, 10, 31, tzinfo=UTC)
+    return [coops.Prediction("9414290", t0 + timedelta(minutes=6 * i), 1.0) for i in range(hours * 10)]
+
+
+def _coops_store(offset: float, pulse: float = 0.0):
+    preds = _coops_tide()
+    obs = [
+        GaugeReading("9414290", "coops", p.ts, p.value_m + offset + (pulse if i >= len(preds) - 3 else 0), "6m")
+        for i, p in enumerate(preds)
+    ]
+    store = Store(ALERTS)
+    store.predictions_for = lambda station_id: preds
+    clock = ReplayClock(obs[-1].ts + timedelta(minutes=2), real=lambda: 0.0)
+    return store.merge(Batch("coops", clock.now(), readings=tuple(obs)), clock), store
+
+
+def test_a_steady_non_tidal_offset_is_not_a_gauge_anomaly():
+    """A storm surge lifts every gauge by tens of centimetres for hours; that is weather, not a tsunami."""
+    events, store = _coops_store(0.4)
+    assert events == []
+    assert max(abs(r.residual_m) for r in store.gauge_residuals("9414290")) < 0.01
+
+
+def test_a_pulse_on_top_of_a_surge_still_trips_the_gauge():
+    events, _ = _coops_store(0.4, pulse=0.5)
+    assert [type(e) for e in events] == [GaugeAnomaly]
 
 
 def test_resending_a_batch_does_not_repeat_the_event(dclock):
@@ -237,7 +281,7 @@ def test_selection_follows_the_geometry_chain(clock):
     circle = alert(geometry=("circle", 52.5, 160.3, 300.0), origin=(T0, 52.5, 160.3))
     store.merge(Batch("tsunamigov", T0, alerts=(circle,)), clock)
     sel = choose_stations(store, clock, darts, tides)
-    assert 0 < len(sel.dart) <= 6 and 0 < len(sel.coops) <= 4
+    assert 0 < len(sel.dart) <= 6 and sel.coops == ()  # no US tide gauge is within reach of Kamchatka
     assert [km for km, _ in sel.dart] == sorted(km for km, _ in sel.dart) and all(km <= 3000 for km, _ in sel.dart)
     assert sel.ids == sel.dart_ids + sel.coops_ids
 
@@ -401,6 +445,20 @@ async def wait_for(predicate, timeout=20.0):
         await asyncio.sleep(0.02)
 
 
+async def drive(clock: ReplayClock, predicate, step: float = 60.0, timeout: float = 20.0) -> None:
+    """Move a frozen replay clock forward `step` seconds at a time until `predicate()` holds.
+
+    The clock only moves here and when the transport serves a recorded response, so no 30-minute window on it can
+    close because the test runner was slow.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for condition")
+        clock.advance(step)
+        await asyncio.sleep(0.05)
+
+
 class GatedReplay(ReplayTransport):
     """Holds the second 32401 request until the test opens the gate, so the standard-mode state can be inspected."""
 
@@ -419,8 +477,8 @@ class GatedReplay(ReplayTransport):
 
 async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_switch(monkeypatch):
     """Real 32401 payloads of 2026-10-09: a stale standard batch, then 1-minute and 15-second rows with a 3 cm pulse."""
-    monkeypatch.setattr("earthwave.notify.inapp.GAUGE_SECONDS", 1e9)  # replay at 300x would age the flag out in 1 s
-    clock = ReplayClock(recording_start(REPLAY), speed=300)
+    monkeypatch.setattr("earthwave.notify.inapp.GAUGE_SECONDS", 1e9)  # keep the flag up however long the test takes
+    clock = ReplayClock(recording_start(REPLAY), real=lambda: 0.0)  # moves only with `drive` and the recordings
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     config = replace(config, alerts=replace(config.alerts, gauge_anomaly_dart_m=0.02))  # the real pulse peaks at 3.1 cm
     store = Store(config.alerts, config.home)
@@ -446,22 +504,22 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
         assert isinstance(app.screen, ObservationsScreen)
 
         # standard mode: one stale batch, the default 15-minute cadence, and a strip that says 'last batch'
-        await wait_for(lambda: app.store.gauge_readings("32401") and transport.requests >= 2)
+        await drive(clock, lambda: app.store.gauge_readings("32401") and transport.requests >= 2, step=300)
         row = next(r for r in app.gauge_rows() if r.station_id == "32401")
-        assert row.mode == "15m" and intervals[:1] == [
-            900
-        ]  # the replay clock keeps running, so only the first batch is exact
+        assert row.mode == "15m" and intervals[:1] == [900]
         app.screen.refresh_gauges()
         await wait_for(lambda: re.search(r"last batch \d+h ago", strip_text(app)) is not None)
         assert not fake.sent
 
         # event mode: 1-minute and 15-second rows arrive, the source drops to alert cadence, the pulse trips the flag
         transport.gate.set()
-        await wait_for(lambda: intervals[-1:] == [60.0] and len(intervals) >= 3)
-        await wait_for(lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
+        await drive(clock, lambda: intervals[-1:] == [60.0] and len(intervals) >= 3)
+        await drive(clock, lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
         await app._outbox.join()
         assert [n.title for n in fake.sent].count("Gauge anomaly") == 1  # one toast for the whole episode
-        await wait_for(lambda: min(app.store.gauge_residuals("32401"), key=lambda r: r.residual_m).residual_m < -0.025)
+        await drive(
+            clock, lambda: min(app.store.gauge_residuals("32401"), key=lambda r: r.residual_m).residual_m < -0.025
+        )
         row = next(r for r in app.gauge_rows() if r.station_id == "32401")
         assert row.mode != "15m" and row.threshold_m == 0.02
 
@@ -469,7 +527,7 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
             app.screen.refresh_gauges()
             return "-0.031 m !" in strip_text(app)  # the signed maximum of the real pulse, flagged
 
-        await wait_for(pulse_flagged)
+        await drive(clock, pulse_flagged)
         assert app.tracker.gauge_active() == ["32401"]
         assert "Gauge anomaly" in str(app.dashboard.query_one("#ticker").render())
 
