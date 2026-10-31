@@ -19,6 +19,7 @@ def setup_logging(path: Path | None = None, debug: bool = False) -> Path | None:
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
         handler.close()
+    logger.setLevel(logging.DEBUG if debug else logging.WARNING)  # also when disabled: a stale DEBUG must not linger
     if path is None and not debug:
         logger.addHandler(logging.NullHandler())
         return None
@@ -27,5 +28,4 @@ def setup_logging(path: Path | None = None, debug: bool = False) -> Path | None:
     handler = RotatingFileHandler(target, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG if debug else logging.WARNING)
     return target

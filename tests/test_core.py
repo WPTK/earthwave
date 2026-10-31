@@ -317,3 +317,11 @@ def test_a_crashed_app_exits_non_zero(monkeypatch):
 
     monkeypatch.setattr(cli, "EarthwaveApp", Crashed)
     assert cli.main(["--no-config"]) == 1
+
+
+def test_disabling_logging_resets_a_debug_level():
+    import logging
+
+    setup_logging(None, True)
+    setup_logging(None, False)
+    assert logging.getLogger("earthwave").level == logging.WARNING
