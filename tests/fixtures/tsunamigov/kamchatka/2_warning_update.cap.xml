@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>PAAQ-2-kam002</identifier>
+  <sender>ntwc@noaa.gov</sender>
+  <sent>2025-07-29T23:51:07-00:00</sent>
+  <status>Actual</status>
+  <msgType>Update</msgType>
+  <source>NTWC</source>
+  <scope>Public</scope>
+  <code>IPAWSv1.0</code>
+  <references>ntwc@noaa.gov,PAAQ-1-kam001,2025-07-29T23:34:12-00:00</references>
+  <info>
+    <category>Geo</category>
+    <event>Tsunami Warning</event>
+    <responseType>Prepare</responseType>
+    <urgency>Immediate</urgency>
+    <severity>Severe</severity>
+    <certainty>Likely</certainty>
+    <onset>2025-07-29T23:51:07-00:00</onset>
+    <expires>2025-07-30T03:51:07-00:00</expires>
+    <senderName>NWS NATIONAL TSUNAMI WARNING CENTER PALMER AK</senderName>
+    <headline>TSUNAMI WARNING NUMBER 2</headline>
+    <description>A tsunami warning is in effect. Tsunami waves are expected. Move to high ground or inland now.</description>
+    <instruction>  N/A </instruction>
+    <web>https://www.tsunami.gov/events/PAAQ/2025/07/29/kam001/2/WEAK51/WEAK51.txt</web>
+    <parameter>
+      <valueName>EventLocationName</valueName>
+      <value>OFF EAST COAST OF KAMCHATKA</value>
+    </parameter>
+    <parameter>
+      <valueName>EventPreliminaryMagnitude</valueName>
+      <value>8.7</value>
+    </parameter>
+    <parameter>
+      <valueName>EventPreliminaryMagnitudeType</valueName>
+      <value>Mww</value>
+    </parameter>
+    <parameter>
+      <valueName>EventOriginTime</valueName>
+      <value>2025-07-29T23:24:52-00:00</value>
+    </parameter>
+    <parameter>
+      <valueName>EventLatLon</valueName>
+      <value>52.500,160.300 0.000</value>
+    </parameter>
+    <parameter>
+      <valueName>WEAK51</valueName>
+      <value>Tsunami Warnings, Advisories and Watches for AK, BC, and US West Coast</value>
+    </parameter>
+    <area>
+      <areaDesc>Aleutian Islands</areaDesc>
+      <circle>52.5,160.3 0.0</circle>
+    </area>
+    <area>
+      <areaDesc>Alaska Peninsula</areaDesc>
+      <circle>52.5,160.3 0.0</circle>
+    </area>
+    <area>
+      <areaDesc>Kodiak Island</areaDesc>
+      <circle>52.5,160.3 0.0</circle>
+    </area>
+  </info>
+</alert>

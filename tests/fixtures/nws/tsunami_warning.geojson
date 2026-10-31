@@ -1,0 +1,66 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.kam002",
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -176.0,
+       51.0
+      ],
+      [
+       -176.0,
+       55.5
+      ],
+      [
+       -158.0,
+       57.0
+      ],
+      [
+       -155.0,
+       55.0
+      ],
+      [
+       -165.0,
+       52.0
+      ],
+      [
+       -176.0,
+       51.0
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "urn:oid:2.49.0.1.840.0.kam002",
+    "areaDesc": "Aleutian Islands; Alaska Peninsula; Kodiak Island",
+    "sent": "2025-07-29T23:51:07+00:00",
+    "effective": "2025-07-29T23:51:07+00:00",
+    "expires": "2025-07-30T03:51:07+00:00",
+    "ends": null,
+    "status": "Actual",
+    "messageType": "Update",
+    "severity": "Severe",
+    "certainty": "Likely",
+    "urgency": "Immediate",
+    "event": "Tsunami Warning",
+    "headline": "Tsunami Warning issued July 29 at 3:51PM AKDT by NWS National Tsunami Warning Center",
+    "description": "A tsunami warning is in effect. Tsunami waves are expected. Move to high ground or inland now.",
+    "instruction": "Move to high ground or inland now.",
+    "references": [],
+    "parameters": {
+     "WMOidentifier": [
+      "WEAK51 PAAQ 292351"
+     ],
+     "AWIPSidentifier": [
+      "TSUAK1"
+     ]
+    }
+   }
+  }
+ ]
+}
