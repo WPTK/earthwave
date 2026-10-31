@@ -191,7 +191,7 @@ def test_zoom_cycle_world_region_home_and_skips():
 def test_pan_math():
     m = model(160, 40)
     m.pan(1, 1)
-    assert m.view() == world_view(30) and m.view().lon1 - m.view().lon0 == 360  # world scrolls sideways only
+    assert m.view().lon0 == WORLD.lon0 + 30 and m.view().lon1 - m.view().lon0 == 360  # world scrolls sideways only
     m.pan(-1, 0)
     assert m.view() == WORLD
     m.cycle_zoom()
@@ -270,7 +270,11 @@ async def test_dashboard_refresh_does_not_reset_the_map_pan():
 
 
 def test_world_view_wraps_and_pan_views_are_cache_friendly():
-    assert world_view(360) == WORLD and world_view(-30).lon0 == -30.0
+    assert (
+        world_view(360) == WORLD
+        and world_view(-30).lon0 == WORLD.lon0 - 30 + 360
+        and world_view(30).lon0 == WORLD.lon0 + 30
+    )
     m = model(160, 40)
     m.cycle_zoom()
     base_lines.cache_clear()
@@ -408,7 +412,7 @@ async def test_dashboard_keys_zoom_fullscreen_and_selection_follow():
         assert app.dashboard.has_class("map-full") and app.focused is panel
         assert panel.size.width > 150
         await pilot.press("right")
-        assert panel.model.pan_lon == 30
+        assert panel.model.pan_lon == 30 and panel.model.view().lon0 == WORLD.lon0 + 30  # one step, not a jump
         await pilot.press("M")
         await pilot.pause()
         assert not app.dashboard.has_class("map-full") and app.focused is quake_list

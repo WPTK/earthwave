@@ -2,6 +2,7 @@
 
 from conftest import wait_until
 
+from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
 from uat.harness import screen_text, week_app
 
@@ -121,3 +122,58 @@ async def test_list_keeps_focus_after_a_too_small_round_trip():
         before = quake_list.selected
         await pilot.press("j")
         assert quake_list.selected is not before
+
+
+async def test_closing_search_in_the_full_screen_map_keeps_focus_on_the_map():
+    app = week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("M", "slash")
+        assert app.focused is app.dashboard.query_one("#search")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.focused is app.dashboard.query_one(MapPanel)
+
+
+async def test_focus_survives_the_map_hiding_on_resize():
+    app = week_app()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+        assert app.focused is app.dashboard.query_one(MapPanel)
+        await pilot.resize_terminal(110, 30)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.focused is app.dashboard.query_one(QuakeList)
+
+
+async def test_an_open_search_box_keeps_focus_through_a_too_small_round_trip():
+    app = week_app()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.focused is app.dashboard.query_one("#search")
+        await pilot.press("a")  # typed into the box, not run as the ack-all binding
+        assert app.dashboard.query_one("#search").value.endswith("a")
+
+
+async def test_quakes_under_a_hidden_list_are_not_marked_seen():
+    app = week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        quake_list = app.dashboard.query_one(QuakeList)
+        assert app.dashboard.list_shown and quake_list.visible_ids()
+        await pilot.press("M")
+        await pilot.pause()
+        assert not app.dashboard.list_shown
+        app._previous_visible = set(quake_list.visible_ids())
+        app._tick()
+        assert app._previous_visible == set()  # the full-screen map hides the list: nothing on it can be seen
+        await pilot.press("M")
+        await pilot.pause()
+        assert app.dashboard.list_shown
