@@ -11,11 +11,11 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Sparkline, Static
 
 from earthwave.sources.geo import COOPS_MAX_KM
+from earthwave.state.store import GAUGE_FRESH
 from earthwave.ui.labels import fmt_age
 
 MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
 NAME_WIDTH = 20
-RECENT_SAMPLES = {"15s": 120, "1m": 30, "6m": 5, "15m": 2}  # samples in GAUGE_FRESH (30 min) at each cadence
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
 STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
 
@@ -30,6 +30,7 @@ class GaugeRowData:
     residuals: tuple[float, ...]  # signed metres, oldest first
     threshold_m: float  # the anomaly threshold for this station's kind
     kind: str = ""  # dart | coops
+    exceeded_at: datetime | None = None  # timestamp of the newest residual at or past the threshold
 
 
 def shown_residuals(residuals: Sequence[float]) -> list[float]:
@@ -79,9 +80,8 @@ def row_label(row: GaugeRowData, now: datetime) -> Text:
 
 
 def is_over_now(row: GaugeRowData, now: datetime) -> bool:
-    """A live row with a residual at or past the threshold in the last GAUGE_FRESH; an older peak does not count."""
-    recent = shown_residuals(row.residuals)[-RECENT_SAMPLES.get(row.mode, 5) :]
-    return not is_stale(row, now) and any(abs(r) >= row.threshold_m for r in recent)
+    """A live row whose newest exceedance is within GAUGE_FRESH; an older peak does not count."""
+    return not is_stale(row, now) and row.exceeded_at is not None and now - row.exceeded_at <= GAUGE_FRESH
 
 
 def max_text(row: GaugeRowData, now: datetime) -> Text:

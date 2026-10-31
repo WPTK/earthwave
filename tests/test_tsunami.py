@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from conftest import FIXTURES, make_quake
+from rich.text import Text
 from test_ui import wait_for
 
 from earthwave.app import EarthwaveApp
@@ -18,11 +19,13 @@ from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import ReplayTransport, recording_start
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
-from earthwave.poll import Freshness, Scheduler
+from earthwave.poll import Freshness, PollResult, Scheduler
 from earthwave.sources import jma, levels, nws, tsunamigov
 from earthwave.sources.base import SourceHealth
 from earthwave.state.events import (
+    GaugeAnomaly,
     QuakeMajor,
+    QuakeNearHome,
     QuakeNew,
     QuakeUpdated,
     TsunamiCancelled,
@@ -728,7 +731,7 @@ def note(**kwargs) -> Notification:
 
 async def test_notify_send_builds_the_command(monkeypatch):
     calls = []
-    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls))
     await NotifySend().send(note())
     await NotifySend().send(note(urgency="warning"))
     assert calls[0][0] == ["notify-send", "-u", "critical", "-a", "earthwave", "--", TITLE, BODY]
@@ -737,8 +740,9 @@ async def test_notify_send_builds_the_command(monkeypatch):
 
 async def test_osascript_escapes_quotes_and_backslashes(monkeypatch):
     calls = []
-    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls))
     await Osascript().send(note())
+    calls = [cmd for cmd, _ in calls]
     assert calls[0][:2] == ["osascript", "-e"]
     body = f'"Back{BS}{BS}slash {BS}"quoted{BS}""'
     title = f'"Tsunami {BS}"Warning{BS}""'
@@ -806,8 +810,9 @@ async def test_windows_toast_times_out(monkeypatch, caplog):
 
 async def test_notify_send_ends_options_before_feed_text(monkeypatch):
     calls = []
-    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls))
     await NotifySend().send(note(title="--hint=x", body="-u critical"))
+    calls = [cmd for cmd, _ in calls]
     assert calls[0][-3:] == ["--", "--hint=x", "-u critical"]
 
 
@@ -916,8 +921,42 @@ async def test_tick_leaves_the_tsunami_screen_table_alone():
         app._tick()
         app._tick()
         assert calls == []
-        app.on_poll_done(type("M", (), {"result": type("R", (), {"events": ()})()})())
+        app.on_poll_done(type("M", (), {"result": PollResult("usgs", 0)})())
         assert calls == [1]  # refreshed on a poll
+
+
+async def test_feed_text_that_looks_like_markup_cannot_crash_the_tsunami_screen():
+    app = kam_app()
+    hostile = replace(nws_alert(), id="hostile", dedupe_key="hostile", areas=("[/x] Coast [Foo]",), quake_ref=None)
+    app.store.merge(Batch("nws", NOW, alerts=(hostile,)), app.clock)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        assert isinstance(app.screen, TsunamiScreen)
+        row = app.screen.query_one("DataTable").get_row("hostile")
+        areas = next(c for c in row if "[/x]" in str(c))
+        assert isinstance(areas, Text) and areas.plain == "[/x] Coast [Foo]"
+
+
+async def test_feed_text_that_looks_like_markup_cannot_crash_a_toast():
+    app = kam_app()
+    anomaly = GaugeAnomaly("s1", 0.3, NOW, name="[/x] Station [Foo]")
+    events = (QuakeMajor(kam_quake(place="[/x] Alaska")), anomaly)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.on_poll_done(type("M", (), {"result": PollResult("usgs", 0, events)})())
+        await pilot.pause()
+        notices = list(app._notifications)
+        assert len(notices) == 2 and all(n.markup is False for n in notices)
+        assert "[/x] Alaska" in notices[0].message and "[/x] Station [Foo]" in notices[1].message
+        for toast in app.query("Toast"):
+            toast.render()  # would raise MarkupError on feed text parsed as markup
+
+
+def test_a_major_quake_near_home_keeps_its_distance_in_the_one_toast():
+    rules = AlertRules(AlertsConfig(major_magnitude=6.0))
+    quake = make_quake("big", 7.2, place="Somewhere, Chile")
+    (only,) = rules.evaluate([QuakeNew(quake), QuakeMajor(quake), QuakeNearHome(quake, 12.0)])
+    assert only.title == "Major earthquake" and only.body == "M7.2 Somewhere, Chile (12 km from home)"
 
 
 async def test_tsunami_screen_ack_only_acknowledges_tsunami_attention():
@@ -1494,3 +1533,27 @@ async def test_panel_says_awaiting_follow_up_during_the_grace_with_a_fresh_feed(
     overdue = frozenset(a.id for a in store.active_alerts(kclock) if store.alert_status(a, kclock) == "overdue")
     panel = build_panel([alert], kclock.now(), overdue=overdue, expiry=store.expiry).plain
     assert "OVERDUE, awaiting follow-up" in panel and "not confirmed" not in panel
+
+
+@pytest.mark.parametrize("notifier", [NotifySend, Osascript])
+async def test_posix_notifiers_keep_their_output_off_the_tui_screen(monkeypatch, caplog, notifier):
+    calls = []
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls, returncode=1, stderr="no D-Bus"))
+    await notifier().send(note())
+    ((_, kw),) = calls
+    assert kw["stdin"] == kw["stdout"] == subprocess.DEVNULL and kw["stderr"] == subprocess.PIPE
+    assert "no D-Bus" in caplog.text
+
+
+def test_one_quake_raising_several_notifications_is_not_a_burst():
+    rules = AlertRules(AlertsConfig(major_magnitude=6.0, pager_min="yellow"))
+    quake = make_quake("big", 7.2, pager_alert="yellow", place="Somewhere, Chile")
+    notes = rules.evaluate([QuakeNew(quake), QuakeMajor(quake), QuakeNearHome(quake, 12.0)])
+    assert [n.title for n in notes] == ["Major earthquake"] and "M7.2 Somewhere, Chile" in notes[0].body
+
+
+def test_a_burst_of_quakes_names_the_largest():
+    rules = AlertRules(AlertsConfig(major_magnitude=6.0))
+    quakes = [make_quake(f"m{i}", 6.0 + i / 10, place=f"Place {i}") for i in range(3)]
+    (note_,) = rules.evaluate([e for q in quakes for e in (QuakeNew(q), QuakeMajor(q))])
+    assert "3 notable quakes" in note_.body and "M6.2 Place 2" in note_.body

@@ -13,12 +13,12 @@ MIN_PLACE = 8  # the place is shortened to fit the line, but never below this
 class Ticker(Static):
     def __init__(self, **kwargs):
         super().__init__("", **kwargs)
-        self.show(None, 0.0)
+        self.show(None, 0.0, warm=False)
 
     def show(self, quake: Earthquake | None, age_seconds: float, gauge: str = "", warm: bool = True) -> None:
         """The latest major quake (or a quiet message), then any gauge anomaly in progress.
 
-        The place is the part that gives way when the line is too long, so the age and the gauge value stay visible.
+        The place is shortened first when the line is too long; with under MIN_PLACE columns left, the end is cut.
         """
         tail = Text()
         if quake is not None:

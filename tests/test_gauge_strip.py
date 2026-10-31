@@ -39,6 +39,10 @@ def _row(**kwargs) -> GaugeRowData:
     return GaugeRowData(**{**base, **kwargs})
 
 
+def _last_over(residuals, threshold):
+    return next((r.ts for r in reversed(residuals) if abs(r.residual_m) >= threshold), None)
+
+
 def fixture_rows() -> list[GaugeRowData]:
     """Three rows from saved live payloads: a standard-mode buoy, the 32401 event-mode buoy and a tide gauge."""
     dart = (FIXTURES / "ndbc" / "46402.dart").read_text(encoding="utf-8")
@@ -68,6 +72,7 @@ def fixture_rows() -> list[GaugeRowData]:
             tuple(r.residual_m for r in standard),
             DART_THRESHOLD,
             "dart",
+            _last_over(standard, DART_THRESHOLD),
         ),
         GaugeRowData(
             "32401",
@@ -78,6 +83,7 @@ def fixture_rows() -> list[GaugeRowData]:
             tuple(r.residual_m for r in event),
             DART_THRESHOLD,
             "dart",
+            _last_over(event, DART_THRESHOLD),
         ),
         GaugeRowData(
             "9414290",
@@ -88,6 +94,7 @@ def fixture_rows() -> list[GaugeRowData]:
             tuple(r.residual_m for r in gauge),
             GAUGE_THRESHOLD,
             "coops",
+            _last_over(gauge, GAUGE_THRESHOLD),
         ),
     ]
 
@@ -107,10 +114,8 @@ def test_label_and_max_text():
     assert row_label(_row(distance_km=None), NOW).plain.count("km") == 0
     quiet = max_text(_row(), NOW)
     assert quiet.plain == "-0.012 m" and "green" in str(quiet.style)
-    loud = max_text(_row(residuals=(0.01, -0.081, 0.02)), NOW)  # 15-minute samples: the last two cover 30 min
+    loud = max_text(_row(residuals=(0.01, -0.081, 0.02), exceeded_at=NOW - timedelta(minutes=10)), NOW)
     assert loud.plain == "-0.081 m !" and "red" in str(loud.style)
-    settled = max_text(_row(residuals=(-0.081, 0.01, 0.02)), NOW)  # the peak is older than that
-    assert settled.plain == "-0.081 m peak" and "red" not in str(settled.style) and not is_over_now(_row(), NOW)
     assert max_text(_row(residuals=()), NOW).plain == "no residual"
     assert max_residual(()) is None and max_residual((0.01, -0.02, 0.015)) == -0.02
 
@@ -119,11 +124,27 @@ def test_a_row_with_old_data_says_stale_instead_of_flagging_it():
     old = _row(mode="1m", newest=NOW - timedelta(hours=20), residuals=(0.01, -0.081, 0.02))
     text = max_text(old, NOW)
     assert text.plain == "-0.081 m stale" and "!" not in text.plain and "red" not in str(text.style)
-    live = _row(mode="1m", newest=NOW - timedelta(minutes=2), residuals=(0.01, 0.02, -0.081))
+    live = _row(
+        mode="1m",
+        newest=NOW - timedelta(minutes=2),
+        residuals=(0.01, 0.02, -0.081),
+        exceeded_at=NOW - timedelta(minutes=2),
+    )
     assert max_text(live, NOW).plain == "-0.081 m !"
     # a 15-minute DART file arrives in batches, so hours-old data is normal for it, a day is not
     assert not is_stale(_row(), NOW) and is_stale(_row(newest=NOW - timedelta(hours=20)), NOW)
     assert is_stale(_row(mode="6m", newest=NOW - timedelta(hours=2)), NOW)
+
+
+def test_an_exceedance_older_than_gauge_fresh_reads_peak_even_on_a_live_batch_row():
+    # a 15-minute DART batch 6 h old is still live (not stale), but its exceedance is 6 h old, so no red "!"
+    six_hours = NOW - timedelta(hours=6)
+    row = _row(newest=six_hours, residuals=(0.01, -0.081, 0.02), exceeded_at=six_hours - timedelta(minutes=15))
+    assert not is_stale(row, NOW) and not is_over_now(row, NOW)
+    text = max_text(row, NOW)
+    assert text.plain == "-0.081 m peak" and "red" not in str(text.style)
+    fresh = _row(newest=NOW - timedelta(minutes=5), residuals=(0.01, -0.081), exceeded_at=NOW - timedelta(minutes=20))
+    assert is_over_now(fresh, NOW) and max_text(fresh, NOW).plain.endswith("!")
 
 
 async def test_strip_says_when_no_tide_gauge_is_in_range():

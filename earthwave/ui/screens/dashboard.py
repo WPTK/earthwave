@@ -1,7 +1,9 @@
 """Main screen: ticker, quake list, map panel, status bar, search box and the too-small overlay."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -101,12 +103,13 @@ class DashboardScreen(Screen):
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
-        app.tracker.retain({q.id for q in rows})
+        # A search only hides rows; quakes the magnitude and hours filter excludes can never be seen, so they drop out.
+        app.tracker.retain({q.id for q in app.store.visible(replace(app.view, query=""), app.clock)})
         width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
-        empty.update(f"No quakes match {filter_summary(app.view)}. Press f to change filters.")
+        empty.update(Text(f"No quakes match {filter_summary(app.view)}. Press f to change filters."))
         self.refresh_ticker()
         self.refresh_tsunami()
         self.refresh_status(shown=len(rows))

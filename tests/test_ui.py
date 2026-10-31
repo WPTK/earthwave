@@ -406,6 +406,61 @@ async def test_empty_list_says_what_to_do():
         assert empty.display and "No quakes match" in str(empty.render()) and "Press f" in str(empty.render())
 
 
+async def test_a_markup_looking_search_does_not_crash_the_empty_hint():
+    app = week_app()
+    app.store.merge(Batch("usgs", WEEK_NOW, quakes=()), app.clock)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.set_query("[/x] [bold]")
+        await pilot.pause()
+        assert "[/x] [bold]" in str(app.dashboard.query_one("#empty").render())
+
+
+async def test_attention_follows_what_the_filter_can_show_not_what_the_search_hides():
+    app = week_app()
+    shown = app.store.visible(app.view, app.clock)[0]
+    low = make_quake("low", 0.5, time=WEEK_NOW)  # below the 4.5 view filter: the list can never show it
+    app.store.merge(Batch("usgs", WEEK_NOW, quakes=(low,)), app.clock)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.tracker.observe([QuakeNew(shown), QuakeNew(low)])
+        app.set_query(shown.place)  # search hides the others, and the 0.5 never shows
+        await pilot.pause()
+        assert app.tracker.is_unseen(shown.id) and not app.tracker.is_unseen("low")
+
+
+def test_alert_floor_keeps_the_steady_feed_wide_enough_for_alerts():
+    home = (40.7, -74.0)
+    config = with_overrides(Config(), 5.0, 24, home, "ascii")
+    assert EarthwaveApp(config, run_scheduler=False).usgs.steady == "2.5_day"  # near-home 3.0 beats the 4.5 feed
+    no_home = with_overrides(Config(), 5.0, 24, None, "ascii")
+    assert EarthwaveApp(no_home, run_scheduler=False).usgs.steady == "4.5_day"  # major 6.0 is above the filter
+
+
+async def test_coverage_backfill_waits_for_the_first_good_steady_batch():
+    from types import SimpleNamespace
+
+    from earthwave.poll import PollResult
+
+    app = week_app()
+    calls = []
+    app._backfill_if_needed = lambda force: calls.append(force)
+    app.usgs._startup.clear()  # every startup feed finished or was skipped
+    steady = Batch("usgs", WEEK_NOW, quakes=())
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        for result in (
+            PollResult("usgs", 0, error="HTTPStatusError: 500"),  # the network is still down
+            PollResult("usgs", 0, batch=Batch("usgs", WEEK_NOW, backfill=True)),  # a startup batch is not steady
+            PollResult("nws", 0, batch=Batch("nws", WEEK_NOW)),
+        ):
+            app.on_poll_done(SimpleNamespace(result=result))
+            assert calls == []
+        app.on_poll_done(SimpleNamespace(result=PollResult("usgs", 0, batch=steady)))
+        app.on_poll_done(SimpleNamespace(result=PollResult("usgs", 0, batch=steady)))
+        assert calls == [False]
+
+
 async def test_empty_hint_waits_for_the_first_poll():
     app = week_app()  # backfilled only: no steady poll has answered, so an empty list proves nothing
     assert not app.store.warm
