@@ -100,7 +100,8 @@ class Store:
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
         self._sources: dict[str, set[str]] = {}  # alert id -> every source that has confirmed it
-        self._omitted: set[str] = set()  # alerts the last complete listing of a listing source left out
+        # Alerts the last complete listing left out. Not keyed by source: the only listing source is NWS.
+        self._omitted: set[str] = set()
         self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded" | "withdrawn"
         self._gauge_stations: dict[str, Station] = {}
         self._readings: dict[str, dict[datetime, GaugeReading]] = {}
@@ -454,27 +455,33 @@ class Store:
                 self._omitted.add(held.id)
         return relisted
 
+    @staticmethod
+    def _ends(closer: TsunamiAlert, target: TsunamiAlert) -> bool:
+        """Whether `closer` may end `target`: not when both times are known and it is the older one (a product
+        retried late does not end what came after it). One rule for every order the two arrive in."""
+        return not (closer.issued and target.issued and closer.issued < target.issued)
+
+    @staticmethod
+    def _replaces_nothing(alert: TsunamiAlert) -> bool:
+        """A snapshot-source alert with no areas that is not a cancellation: an observation-only report, or the
+        fallback built from a list entry. It cannot say what it replaces, and nothing it names replaces it."""
+        return alert.source in SNAPSHOT_SOURCES and not alert.areas and alert.level != levels.CANCELLATION
+
     def _closed_by_stored(self, alert: TsunamiAlert) -> bool:
-        """Close `alert` when a product already held ends it: one that names it and is not older, or (a snapshot
-        source such as JMA names the earlier reports of an event, not the later) a newer cancellation among the
-        reports it names. It was retried after its own cancellation or replacement, which found nothing to close."""
-        for ref in alert.references if alert.source in SNAPSHOT_SOURCES else ():
-            target = self.get_alert(ref)
-            if target is None or not (target.issued and alert.issued) or target.issued <= alert.issued:
+        """Close `alert` on arrival when a product already held ends it, because it was retried after its own
+        cancellation or replacement and found nothing to close then. Two cases, both through `_ends`: a held product
+        that names `alert`, or (a snapshot source such as JMA names the earlier reports of an event, not the
+        later) a held report among those `alert` names."""
+        enders = [self.get_alert(ref) for ref in alert.references if alert.source in SNAPSHOT_SOURCES]
+        enders += [o for o in self._tsunamis.values() if any(self.get_alert(ref) is alert for ref in o.references)]
+        for other in enders:
+            if other is None or other.id == alert.id or self._replaces_nothing(other):
                 continue
-            if target.level == levels.INFORMATION and not target.areas:
-                continue  # an observation-only report restates nothing
-            self._closed[alert.id] = "cancelled" if target.level == levels.CANCELLATION else "superseded"
-            return True
-        for other in self._tsunamis.values():
-            if other.id == alert.id or not any(self.get_alert(ref) is alert for ref in other.references):
-                continue
-            if other.level == levels.INFORMATION and not (other.source in SNAPSHOT_SOURCES and other.areas):
-                continue
-            if not (other.issued and alert.issued) or other.issued < alert.issued:
-                continue  # never close on a missing time
-            self._closed[alert.id] = "cancelled" if other.level == levels.CANCELLATION else "superseded"
-            return True
+            if other.level == levels.INFORMATION and other.source not in SNAPSHOT_SOURCES:
+                continue  # an INFORMATION statement closes nothing but a JMA report that names areas
+            if self._ends(other, alert):
+                self._closed[alert.id] = "cancelled" if other.level == levels.CANCELLATION else "superseded"
+                return True
         return False
 
     def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
@@ -500,8 +507,8 @@ class Store:
         snapshot = alert.level == levels.INFORMATION and alert.source in SNAPSHOT_SOURCES and bool(alert.areas)
         if alert.level == levels.INFORMATION and not snapshot:
             return []
-        if alert.source in SNAPSHOT_SOURCES and not alert.areas and alert.level != levels.CANCELLATION:
-            return []  # a fallback built from a list entry: it cannot say what it replaces
+        if self._replaces_nothing(alert):
+            return []
         targets = [self.get_alert(ref) for ref in alert.references]
         if alert.level == levels.CANCELLATION and not any(targets) and alert.quake_ref:
             wanted = {a.lower() for a in alert.areas}
@@ -521,8 +528,8 @@ class Store:
                 continue  # already ended; a withdrawal alone may be overwritten by the product that ends it
             if target.level == levels.CANCELLATION:
                 continue
-            if alert.issued and target.issued and alert.issued < target.issued:
-                continue  # a product retried late does not end what came after it
+            if not self._ends(alert, target):
+                continue
             self._closed[target.id] = status
             closed.append(target)
         return closed

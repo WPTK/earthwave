@@ -255,15 +255,15 @@ def test_a_withdrawn_nws_alert_replaced_in_the_relisting_batch_is_not_revived(kc
 
 def test_a_relisted_alert_whose_level_changed_emits_one_event(kclock):
     store = Store()
-    n1 = nws_alert()
+    n1 = replace(nws_alert(), level=levels.ADVISORY)
     kclock.advance_to(n1.updated)
     store.merge(listed(kclock, n1), kclock)
     store.merge(listed(kclock), kclock)
     store.merge(listed(kclock), kclock)
-    downgraded = replace(n1, level=levels.ADVISORY, updated=n1.updated + timedelta(minutes=1))
-    kclock.advance_to(downgraded.updated)
-    events = store.merge(listed(kclock, downgraded), kclock)
-    assert [type(e).__name__ for e in events] == ["TsunamiIssued"]  # its attention was gone: one fresh event, not two
+    upgraded = replace(n1, level=levels.WARNING, updated=n1.updated + timedelta(minutes=1))
+    kclock.advance_to(upgraded.updated)
+    events = store.merge(listed(kclock, upgraded), kclock)
+    assert [type(e).__name__ for e in events] == ["TsunamiChanged"]  # one event, not Changed and Issued
 
 
 def jma_report(rid, level, issued, areas=("Ishikawa",), references=()):
@@ -283,7 +283,7 @@ def jma_report(rid, level, issued, areas=("Ishikawa",), references=()):
 
 def test_a_jma_warning_retried_after_a_downgrade_is_not_issued(kclock):
     a = jma_report("a", levels.WARNING, NOW)
-    b = jma_report("b", levels.ADVISORY, NOW + timedelta(minutes=30), references=(a.id,))
+    b = jma_report("b", levels.ADVISORY, NOW + timedelta(minutes=30))  # a was skipped: b does not name it
     late = replace(a, references=(b.id,))
     store = Store()
     kclock.advance_to(b.issued)
@@ -301,14 +301,19 @@ def test_an_observation_only_report_does_not_close_a_late_warning(kclock):
     assert [type(e) for e in merge(store, kclock, replace(a, references=(obs.id,)), source="jma")] == [TsunamiIssued]
 
 
-def test_a_missing_time_never_closes_a_late_product(kclock):
+def test_a_cancellation_without_a_time_ends_the_warning_in_either_order(kclock):
     warning = kam(1)
     cancel = replace(
         warning, id="cancel-b", dedupe_key="cancel-b", level=levels.CANCELLATION, references=(warning.id,), issued=None
     )
-    store = Store()
-    merge(store, kclock, cancel)
-    assert [type(e) for e in merge(store, kclock, warning)] == [TsunamiIssued]
+    first = Store()
+    merge(first, kclock, cancel)
+    assert merge(first, kclock, warning) == [] and first.active_alerts(kclock) == []
+    second = Store()
+    merge(second, kclock, warning)
+    assert second.alert_status(warning, kclock) == "active"
+    merge(second, kclock, cancel)
+    assert second.active_alerts(kclock) == []  # the same result whichever arrives first
 
 
 def test_a_jma_fallback_alert_replaces_nothing(kclock):
@@ -323,3 +328,18 @@ def test_a_jma_fallback_alert_replaces_nothing(kclock):
     merge(store, kclock, real, source="jma")
     merge(store, kclock, fallback, source="jma")
     assert store.alert_status(real, kclock) == "active"
+
+
+def test_a_newer_jma_fallback_does_not_close_a_late_real_report(kclock):
+    real = jma_report("a", levels.WARNING, NOW)
+    fallback = replace(
+        jma.fallback_alert({"json": "b", "en_ttl": "Tsunami Warning", "rdt": "2026-10-10T04:00:00+09:00"}),
+        references=(real.id,),
+        issued=NOW + timedelta(minutes=30),
+    )
+    store = Store()
+    kclock.advance_to(fallback.issued)
+    merge(store, kclock, fallback, source="jma")
+    late = replace(real, references=(fallback.id,))
+    assert [type(e) for e in merge(store, kclock, late, source="jma")] == [TsunamiIssued]
+    assert store.alert_status(late, kclock) == "active" and late.areas == ("Ishikawa",)
