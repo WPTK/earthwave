@@ -1,5 +1,6 @@
 """Gauge strip: one row per selected DART buoy or tide gauge with a residual sparkline and the signed maximum."""
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,9 +27,15 @@ class GaugeRowData:
     threshold_m: float  # the anomaly threshold for this station's kind
 
 
+def shown_residuals(residuals: Sequence[float]) -> list[float]:
+    """The residuals the row draws and summarises: the newest MAX_POINTS, NaN dropped."""
+    return [r for r in residuals[-MAX_POINTS:] if not math.isnan(r)]
+
+
 def max_residual(residuals: Sequence[float]) -> float | None:
-    """The residual with the largest magnitude, sign kept; None for an empty series."""
-    return max(residuals, key=abs) if residuals else None
+    """The residual with the largest magnitude, sign kept; None when there is none (NaN is ignored)."""
+    finite = [r for r in residuals if not math.isnan(r)]
+    return max(finite, key=abs) if finite else None
 
 
 def sparkline_data(residuals: Sequence[float], threshold_m: float) -> list[float]:
@@ -37,7 +44,7 @@ def sparkline_data(residuals: Sequence[float], threshold_m: float) -> list[float
     Textual's Sparkline scales to the data it is given, so without the padding a +-2 cm tide wobble would draw as
     full-height noise. The two leading samples fix the scale at 0..threshold and read as a reference mark on the left.
     """
-    return [0.0, threshold_m, *(abs(r) for r in residuals[-MAX_POINTS:])]
+    return [0.0, threshold_m, *(abs(r) for r in shown_residuals(residuals))]
 
 
 def age_text(row: GaugeRowData, now: datetime) -> str:
@@ -60,7 +67,7 @@ def row_label(row: GaugeRowData, now: datetime) -> Text:
 
 
 def max_text(row: GaugeRowData) -> Text:
-    peak = max_residual(row.residuals)
+    peak = max_residual(shown_residuals(row.residuals))
     if peak is None:
         return Text("no residual", style="grey50", no_wrap=True)
     over = abs(peak) >= row.threshold_m
@@ -81,7 +88,7 @@ class GaugeRow(Horizontal):
         self._now = now
 
     def compose(self) -> ComposeResult:
-        over = any(abs(r) >= self.row.threshold_m for r in self.row.residuals)
+        over = any(abs(r) >= self.row.threshold_m for r in shown_residuals(self.row.residuals))
         yield Static(row_label(self.row, self._now), classes="gauge-label")
         yield Sparkline(
             sparkline_data(self.row.residuals, self.row.threshold_m),

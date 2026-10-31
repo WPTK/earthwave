@@ -142,6 +142,7 @@ def residuals(observed: list[GaugeReading], predictions: list[Prediction]) -> li
 STATIONS_TTL = 86400.0  # stations.json is cached for a day
 STATIONS_RETRY = 600.0
 HISTORY = timedelta(hours=6)  # observations requested per poll
+ONE_MINUTE_RETRY = timedelta(minutes=15)  # how long a gauge without 1-minute data is left alone during an alert
 PREDICTION_AHEAD = timedelta(hours=6)
 PREDICTION_TTL = timedelta(hours=3)  # predictions are refetched when older than this
 _DATE = "%Y%m%d %H:%M"
@@ -178,7 +179,8 @@ class CoopsSource:
     Cadence: 6-minute ``water_level`` every ``coops_seconds``; while ``set_alert_active(True)``,
     ``one_minute_water_level`` every ``alert_gauge_seconds`` (a gauge without 1-minute data falls back to 6-minute).
     Predictions for the residual are fetched per station at the matching interval and kept in the source; read them
-    with ``predictions()``.
+    with ``predictions()``. The batch cursor and ``since`` are not used by design: each poll asks NOAA for the last
+    ``HISTORY`` and the store merges duplicates.
     """
 
     name = "coops"
@@ -191,22 +193,28 @@ class CoopsSource:
         self._alert_active = False
         self._stations: list[models.Station] = []
         self._stations_due: float | None = None
-        self._predictions: dict[str, tuple[str, datetime, list[Prediction]]] = {}
+        self._predictions: dict[tuple[str, str], tuple[datetime, list[Prediction]]] = {}  # (station, interval)
+        self._last_interval: dict[str, str] = {}
+        self._no_one_minute: dict[str, datetime] = {}  # gauges that answered "no data" to the 1-minute product
+        self._unsent: tuple[models.Station, ...] = ()
 
     def set_selection(self, station_ids: Iterable[str]) -> None:
         self._selected = tuple(station_ids)
 
     def set_alert_active(self, active: bool) -> None:
         self._alert_active = active
+        if not active:
+            self._no_one_minute.clear()
 
     @property
     def stations(self) -> tuple[models.Station, ...]:
         """Empty until the first successful station fetch."""
         return tuple(self._stations)
 
-    def predictions(self, station_id: str) -> list[Prediction]:
-        """The cached predictions matching the interval last fetched for this station."""
-        return list(self._predictions.get(station_id, ("", self._clock.now(), []))[2])
+    def predictions(self, station_id: str, interval: str | None = None) -> list[Prediction]:
+        """Cached predictions for a station at `interval` ("1" or "6"); default: the interval fetched last."""
+        interval = interval or self._last_interval.get(station_id, "")
+        return list(self._predictions.get((station_id, interval), (None, []))[1])
 
     def interval(self, health: SourceHealth) -> float:
         return float(self._poll.alert_gauge_seconds if self._alert_active else self._poll.coops_seconds)
@@ -216,9 +224,10 @@ class CoopsSource:
         response.raise_for_status()
         return _load(response.content)
 
-    async def _refresh_stations(self, client: httpx.AsyncClient) -> tuple[models.Station, ...]:
+    async def _refresh_stations(self, client: httpx.AsyncClient) -> None:
+        """Refetch the list when due; the new list waits in `_unsent` until a batch carrying it is returned."""
         if self._stations_due is not None and self._clock.monotonic() < self._stations_due:
-            return ()
+            return
         try:
             response = await client.get(STATIONS_URL)
             response.raise_for_status()
@@ -230,14 +239,15 @@ class CoopsSource:
             fresh = []
         if not fresh:
             self._stations_due = self._clock.monotonic() + STATIONS_RETRY
-            return ()
+            return
         self._stations = fresh
+        self._unsent = tuple(fresh)
         self._stations_due = self._clock.monotonic() + STATIONS_TTL
-        return tuple(fresh)
 
     async def _predictions_for(self, client: httpx.AsyncClient, station_id: str, interval: str, now: datetime) -> None:
-        cached = self._predictions.get(station_id)
-        if cached and cached[0] == interval and now - cached[1] < PREDICTION_TTL:
+        cached = self._predictions.get((station_id, interval))
+        if cached and now - cached[0] < PREDICTION_TTL:
+            self._last_interval[station_id] = interval
             return
         params = _params("predictions", station_id, now - HISTORY, now + PREDICTION_AHEAD, interval)
         try:
@@ -245,23 +255,27 @@ class CoopsSource:
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("coops: no predictions for %s (%r)", station_id, exc)
             return
-        self._predictions[station_id] = (interval, now, preds)
+        self._predictions[(station_id, interval)] = (now, preds)
+        self._last_interval[station_id] = interval
 
     async def _observe(self, client: httpx.AsyncClient, station_id: str, now: datetime) -> list[GaugeReading]:
         begin = now - HISTORY
-        if self._alert_active:
+        probed = self._no_one_minute.get(station_id)
+        if probed is not None and now - probed >= ONE_MINUTE_RETRY:
+            del self._no_one_minute[station_id]
+        if self._alert_active and station_id not in self._no_one_minute:
             try:
                 data = await self._get(client, _params("one_minute_water_level", station_id, begin, now))
                 await self._predictions_for(client, station_id, "1", now)
                 return parse_one_minute_water_level(data, station_id)
             except CoopsError:
-                pass  # no 1-minute data at this gauge: use the 6-minute product
+                self._no_one_minute[station_id] = now  # no 1-minute data here: use 6-minute, re-probe much later
         data = await self._get(client, _params("water_level", station_id, begin, now))
         await self._predictions_for(client, station_id, "6", now)
         return parse_water_level(data, station_id)
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> models.Batch:
-        stations = await self._refresh_stations(client)
+        await self._refresh_stations(client)
         now = self._clock.now()
         readings: list[models.GaugeReading] = []
         failures: list[Exception] = []
@@ -276,4 +290,5 @@ class CoopsSource:
             readings.extend(to_reading(r) for r in rows)
         if failures and not ok:
             raise failures[-1]
+        stations, self._unsent = self._unsent, ()  # a fetch that raised above keeps them for the next batch
         return models.Batch(self.name, now, readings=tuple(readings), stations=stations)

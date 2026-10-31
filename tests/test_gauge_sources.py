@@ -43,7 +43,8 @@ def _dart_until(text: str, stamp: str) -> str:
 def test_geometry_chain_prefers_geometry_over_quake():
     quake = (10.0, 20.0)
     polygon = ("polygon", ((-124.0, 40.0), (-123.0, 41.0), (-122.0, 42.0)))
-    assert geometry_points(polygon, quake) == [(40.0, -124.0), (41.0, -123.0), (42.0, -122.0)]
+    pts = geometry_points(polygon, quake)
+    assert {(40.0, -124.0), (41.0, -123.0), (42.0, -122.0)} <= set(pts) and pts[0] == (40.0, -124.0)
     assert geometry_points(("circle", 51.5, 179.0, 300.0), quake) == [(51.5, 179.0)]
     assert geometry_points(None, quake) == [quake]
     assert geometry_points(("polygon", ()), quake) == [quake]
@@ -53,7 +54,7 @@ def test_geometry_chain_prefers_geometry_over_quake():
 def test_polygon_vertices_are_thinned():
     ring = tuple((float(i) / 100, 10.0) for i in range(1000))
     points = geometry_points(("polygon", ring))
-    assert 20 < len(points) <= 48 and points[0] == (10.0, 0.0)
+    assert 20 < len(points) <= 48 + 48 and points[0] == (10.0, 0.0)
 
 
 def test_epicentre_takes_first_known():
@@ -79,7 +80,7 @@ def test_select_dart_skips_excluded_and_other_kinds_and_crosses_the_dateline():
     assert second.id != first.id
     mixed = [*stations, Station("9414290", "coops", "SF", 50.0, 179.0)]
     assert all(s.kind == "dart" for _, s in select_dart(mixed, (50.0, 179.0)))
-    # a buoy at lon -179 is about 70 km from a quake at lon 179.5, not about 20,000 km
+    # a buoy at lon -179 is about 107 km from a quake at lon 179.5, not about 20,000 km
     wrap = [Station("x", "dart", "wrap", 50.0, -179.0)]
     assert select_dart(wrap, (50.0, 179.5))[0][0] < 150
 
@@ -199,10 +200,11 @@ async def test_dart_station_list_hourly_with_bundled_fallback(clock):
     answers = [(500, "down"), STATIONS_XML]
     server = Server({"activestations.xml": lambda _r: answers.pop(0) if len(answers) > 1 else answers[0]})
     source = ndbc.DartSource(clock)
-    assert len(source.stations) == 76  # bundled snapshot before any fetch
+    bundled = len(ndbc.load_bundled_stations())
+    assert len(source.stations) == bundled  # bundled snapshot before any fetch
     async with server.client() as client:
         first = await source.fetch(client, None)
-        assert first.stations == () and len(source.stations) == 76 and server.count("activestations") == 1
+        assert first.stations == () and len(source.stations) == bundled and server.count("activestations") == 1
         clock.advance(ndbc.STATIONS_RETRY - 1)
         await source.fetch(client, None)
         assert server.count("activestations") == 1  # not before the retry delay
@@ -303,7 +305,8 @@ async def test_coops_standard_poll_uses_six_minute_data(clock):
     assert len(server.products("predictions")) == 1 and server.products("predictions")[0].url.params["interval"] == "6"
     assert batch.source == "coops" and batch.readings and {r.mode for r in batch.readings} == {"6m"}
     assert all(isinstance(r, GaugeReading) and r.kind == "coops" for r in batch.readings)
-    assert len(batch.stations) == 302 and len(source.stations) == 302
+    expected = len(coops.parse_stations(COOPS_STATIONS))
+    assert len(batch.stations) == expected == len(source.stations)
     observed = [coops.GaugeReading(r.station_id, r.kind, r.ts, r.value_m, r.mode) for r in batch.readings]
     assert coops.residuals(observed, source.predictions("9414290"))
 
@@ -372,3 +375,108 @@ async def test_coops_station_failure_with_no_cache_raises(clock):
     async with Server({"mdapi": (500, "x")}).client() as client:
         with pytest.raises(httpx.HTTPStatusError):
             await source.fetch(client, None)
+
+
+# --- review fixes ------------------------------------------------------------------------------------------------
+
+
+def test_select_coops_ranks_by_polygon_edge_not_vertex():
+    # a coarse 4-corner box 1500 km on a side; the gauge sits mid-edge, 700+ km from every corner
+    corners = ((-130.0, 30.0), (-130.0, 45.0), (-115.0, 45.0), (-115.0, 30.0), (-130.0, 30.0))
+    mid_edge = Station("mid", "coops", "mid-edge", 37.5, -130.0)
+    far = Station("far", "coops", "far", 37.5, -150.0)
+    points = geometry_points(("polygon", corners))
+    assert len(points) > len(corners)
+    [(km, best)] = select_coops([far, mid_edge], points, n=1)
+    assert best.id == "mid" and km < 100
+    assert points[-1] == (30.0, -130.0)  # last vertex survives thinning
+    big = tuple((float(i) / 10, 10.0) for i in range(500))
+    assert geometry_points(("polygon", big))[-1] == (10.0, 49.9)
+
+
+def test_anomaly_rejects_unknown_kind_naive_since_and_ignores_nan():
+    class R:
+        def __init__(self, ts, residual_m):
+            self.ts, self.residual_m = ts, residual_m
+
+    alerts = AlertsConfig()
+    with pytest.raises(ValueError):
+        threshold_m("tide", alerts)
+    with pytest.raises(ValueError):
+        find_anomaly("s", "dart", [], alerts, since=datetime(2026, 1, 1))
+    nan = [R(T0, float("nan")), R(T0 + timedelta(minutes=1), 0.07)]
+    got = find_anomaly("s", "dart", nan, alerts)
+    assert got is not None and got.residual_m == 0.07
+    assert find_anomaly("s", "dart", nan[:1], alerts) is None
+
+
+async def test_coops_remembers_gauges_without_one_minute_data(clock):
+    server = coops_server(one_minute=False)
+    source = coops.CoopsSource(clock)
+    source.set_selection(["9414290"])
+    source.set_alert_active(True)
+    async with server.client() as client:
+        await source.fetch(client, None)
+        assert len(server.products("one_minute_water_level")) == 1
+        clock.advance(60)
+        await source.fetch(client, None)
+        assert len(server.products("one_minute_water_level")) == 1  # not probed again
+        clock.advance(coops.ONE_MINUTE_RETRY.total_seconds())
+        await source.fetch(client, None)
+        assert len(server.products("one_minute_water_level")) == 2
+        source.set_alert_active(False)
+        source.set_alert_active(True)
+        await source.fetch(client, None)
+        assert len(server.products("one_minute_water_level")) == 3  # a new alert re-probes
+
+
+async def test_coops_keeps_both_prediction_intervals(clock):
+    server = coops_server()
+    source = coops.CoopsSource(clock)
+    source.set_selection(["9414290"])
+    async with server.client() as client:
+        await source.fetch(client, None)
+        source.set_alert_active(True)
+        await source.fetch(client, None)
+    six, one = source.predictions("9414290", "6"), source.predictions("9414290", "1")
+    assert six and one and one[0].ts != six[0].ts
+    assert source.predictions("9414290") == one and source.predictions("9414290", "9") == []
+
+
+async def test_stations_survive_a_failed_gauge_poll(clock):
+    server = coops_server()
+    source = coops.CoopsSource(clock)
+    source.set_selection(["bad"])
+    server.routes["datagetter"] = lambda _r: (500, "x")
+    async with server.client() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await source.fetch(client, None)
+        server.routes["datagetter"] = lambda r: _fixture(
+            "water_level_9414290.json" if r.url.params["product"] == "water_level" else "predictions_9414290.json"
+        )
+        batch = await source.fetch(client, None)
+    assert batch.stations and server.count("mdapi") == 1
+    dart = ndbc.DartSource(clock)
+    dart.set_selection(["46402"])
+    dserver = Server({"activestations.xml": STATIONS_XML, "46402.dart": (503, "x")})
+    async with dserver.client() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await dart.fetch(client, None)
+        dserver.routes["46402.dart"] = DART_46402
+        batch = await dart.fetch(client, None)
+    assert batch.stations and dserver.count("activestations") == 1
+
+
+async def test_dart_event_cadence_survives_a_failed_buoy():
+    end = datetime(2026, 10, 9, 21, 59, tzinfo=UTC)
+    clock = ReplayClock(end + timedelta(minutes=5), real=lambda: 0.0)
+    server = Server({"32401.dart": _dart_until(DART_32401, "2026 10 09 21 59"), "46402.dart": DART_46402})
+    source = ndbc.DartSource(clock)
+    source.set_selection(["32401", "46402"])
+    async with server.client() as client:
+        await source.fetch(client, None)
+        assert source.interval(HEALTH) == 60
+        server.routes["32401.dart"] = (503, "x")
+        clock.advance(60)
+        await source.fetch(client, None)  # 46402 still answers, so the batch succeeds
+    assert source.interval(HEALTH) == 60  # the failed event buoy keeps its event state

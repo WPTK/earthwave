@@ -67,7 +67,13 @@ def fixture_rows() -> list[GaugeRowData]:
             DART_THRESHOLD,
         ),
         GaugeRowData(
-            "32401", "32401 event buoy", 640.0, "1m", event_rows[-1].ts, tuple(r.residual_m for r in event), DART_THRESHOLD
+            "32401",
+            "32401 event buoy",
+            640.0,
+            "1m",
+            event_rows[-1].ts,
+            tuple(r.residual_m for r in event),
+            DART_THRESHOLD,
         ),
         GaugeRowData(
             "9414290", "San Francisco", 95.0, "1m", gauge[-1].ts, tuple(r.residual_m for r in gauge), GAUGE_THRESHOLD
@@ -104,6 +110,16 @@ def test_sparkline_is_framed_by_zero_and_threshold():
     quiet = sparkline_data((0.02, -0.01), DART_THRESHOLD)
     assert max(quiet) == DART_THRESHOLD
     assert len(sparkline_data(tuple([0.01] * 1000), DART_THRESHOLD)) == 242
+
+
+def test_summary_and_colour_use_only_the_drawn_window():
+    from earthwave.ui.widgets.gauge_strip import MAX_POINTS
+
+    residuals = (0.9, *([0.001] * (MAX_POINTS + 59)))  # a spike 300 samples back, outside the drawn 240
+    row = _row(residuals=residuals)
+    assert max_text(row).plain == "+0.001 m" and "green" in str(max_text(row).style)
+    assert max(sparkline_data(residuals, DART_THRESHOLD)) == DART_THRESHOLD
+    assert max_residual((float("nan"), -0.02)) == -0.02 and max_residual((float("nan"),)) is None
 
 
 class StripApp(App):

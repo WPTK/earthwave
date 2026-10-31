@@ -200,7 +200,9 @@ class DartSource:
     """Polls ``.dart`` files for the selected stations only (see ``set_selection``).
 
     Cadence: ``dart_seconds`` normally, ``alert_gauge_seconds`` while ``set_alert_active(True)`` or while a selected
-    buoy's newest reading is 1-minute/15-second data no older than ``EVENT_WINDOW`` on the injected clock.
+    buoy's newest reading is 1-minute/15-second data no older than ``EVENT_WINDOW`` on the injected clock. A buoy
+    that fails to answer keeps its last event state. The batch cursor and ``since`` are not used by design: each
+    poll reads the whole file and the store merges duplicates.
     """
 
     name = "dart"
@@ -214,10 +216,12 @@ class DartSource:
         self._stations = load_bundled_stations()
         self._stations_due: float | None = None  # clock.monotonic() when activestations.xml is next refetched
         self._unavailable: set[str] = set()
-        self._event_until: datetime | None = None
+        self._event_until: dict[str, datetime] = {}  # per station; only a fresh answer from that station changes it
+        self._unsent: tuple[models.Station, ...] = ()
 
     def set_selection(self, station_ids: Iterable[str]) -> None:
         self._selected = tuple(station_ids)
+        self._event_until = {k: v for k, v in self._event_until.items() if k in self._selected}
 
     def set_alert_active(self, active: bool) -> None:
         """Hint from the alert store: a Warning, Advisory or Watch is active (poll at ``alert_gauge_seconds``)."""
@@ -234,15 +238,17 @@ class DartSource:
         return frozenset(self._unavailable)
 
     def event_mode(self) -> bool:
-        return self._event_until is not None and self._clock.now() < self._event_until
+        now = self._clock.now()
+        return any(now < until for until in self._event_until.values())
 
     def interval(self, health: SourceHealth) -> float:
         fast = self._alert_active or self.event_mode()
         return float(self._poll.alert_gauge_seconds if fast else self._poll.dart_seconds)
 
-    async def _refresh_stations(self, client: httpx.AsyncClient) -> tuple[models.Station, ...]:
+    async def _refresh_stations(self, client: httpx.AsyncClient) -> None:
+        """Refetch the list when due; the new list waits in `_unsent` until a batch carrying it is returned."""
         if self._stations_due is not None and self._clock.monotonic() < self._stations_due:
-            return ()
+            return
         try:
             response = await client.get(STATIONS_URL)
             response.raise_for_status()
@@ -252,22 +258,22 @@ class DartSource:
             fresh = []
         if not fresh:
             self._stations_due = self._clock.monotonic() + STATIONS_RETRY
-            return ()
+            return
         self._stations = fresh
+        self._unsent = tuple(fresh)
         self._stations_due = self._clock.monotonic() + STATIONS_TTL
-        return tuple(fresh)
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> models.Batch:
-        stations = await self._refresh_stations(client)
+        await self._refresh_stations(client)
         readings: list[models.GaugeReading] = []
         failures: list[Exception] = []
         ok = 0
-        newest_event: datetime | None = None
         for station_id in self._selected:
             try:
                 response = await client.get(DART_URL.format(station_id=station_id))
                 if response.status_code == 404:
                     self._unavailable.add(station_id)
+                    self._event_until.pop(station_id, None)
                     continue
                 response.raise_for_status()
             except httpx.HTTPError as exc:
@@ -276,13 +282,14 @@ class DartSource:
             ok += 1
             self._unavailable.discard(station_id)
             rows = parse_dart(response.text, station_id)
+            self._event_until.pop(station_id, None)
             if rows:
                 newest = rows[-1].ts
                 rows = [r for r in rows if r.ts >= newest - HISTORY]
                 if in_event_mode(rows):
-                    newest_event = max(newest_event or newest, newest)
+                    self._event_until[station_id] = newest + EVENT_WINDOW
             readings.extend(to_reading(r) for r in rows)
         if failures and not ok:
             raise failures[-1]
-        self._event_until = newest_event + EVENT_WINDOW if newest_event else None
+        stations, self._unsent = self._unsent, ()  # a fetch that raised above keeps them for the next batch
         return models.Batch(self.name, self._clock.now(), readings=tuple(readings), stations=stations)

@@ -1,5 +1,6 @@
 """Great-circle math, longitude wrapping and compass text."""
 
+import itertools
 import math
 from collections.abc import Callable, Collection, Iterable, Sequence
 
@@ -71,6 +72,8 @@ DART_MAX_KM = 3000.0
 COOPS_COUNT = 4
 MAX_GEOMETRY_POINTS = 48  # polygon vertices ranked against; enough to find the nearest coast without a slow scan
 
+EDGE_STEP_KM = 100.0  # polygon edges are sampled at least this densely
+MAX_EDGE_PARTS = 200
 Point = tuple[float, float]  # (lat, lon)
 
 
@@ -79,18 +82,37 @@ def epicentre(*candidates: Point | None) -> Point | None:
     return next((c for c in candidates if c is not None), None)
 
 
+def _densify(points: list[Point]) -> list[Point]:
+    """Sample edges every EDGE_STEP_KM so a mid-edge gauge ranks by the edge, not by a far vertex."""
+    out = [points[0]]
+    for (lat1, lon1), (lat2, lon2) in itertools.pairwise(points):
+        km = haversine_km(lat1, lon1, lat2, lon2)
+        parts = min(MAX_EDGE_PARTS, math.ceil(km / EDGE_STEP_KM))
+        dlon = lon_delta(lon1, lon2)
+        for i in range(1, parts):
+            f = i / parts
+            out.append((lat1 + (lat2 - lat1) * f, wrap_lon(lon1 + dlon * f)))
+        out.append((lat2, lon2))
+    return out
+
+
 def geometry_points(geometry: tuple | None, quake: Point | None = None) -> list[Point]:
     """Points that stand for an alert's footprint: NWS polygon vertices, else the CAP circle centre, else the quake.
 
-    `geometry` is `TsunamiAlert.geometry`; polygon vertices are (lon, lat) and are thinned to MAX_GEOMETRY_POINTS.
+    `geometry` is `TsunamiAlert.geometry`; polygon vertices are (lon, lat), thinned to MAX_GEOMETRY_POINTS
+    (keeping the last), with edges sampled every EDGE_STEP_KM so ranking by these points approximates the
+    distance to the boundary.
     """
     if geometry:
         if geometry[0] == "circle":
             return [(float(geometry[1]), float(geometry[2]))]
         if geometry[0] == "polygon" and geometry[1]:
-            ring = geometry[1]
+            ring = list(geometry[1])
             step = max(1, math.ceil(len(ring) / MAX_GEOMETRY_POINTS))
-            return [(float(lat), float(lon)) for lon, lat in ring[::step]]
+            thinned = ring[::step]
+            if thinned[-1] != ring[-1]:
+                thinned.append(ring[-1])
+            return _densify([(float(lat), float(lon)) for lon, lat in thinned])
     return [quake] if quake is not None else []
 
 
