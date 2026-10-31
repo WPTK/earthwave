@@ -22,6 +22,7 @@ STARTUP_FEEDS = ("4.5_week", "all_day", "significant_month")
 # (feed prefix, lowest magnitude it contains)
 TIERS = (("all", -10.0), ("1.0", 1.0), ("2.5", 2.5), ("4.5", 4.5))
 PERIOD_HOURS = {"hour": 1, "day": 24, "week": 168, "month": 720}
+STARTUP_ATTEMPTS = 2  # tries per optional startup feed before it is skipped so the steady feed can start
 DETAIL_CACHE_SIZE = 64
 FDSN_LIMIT = 5000
 
@@ -161,11 +162,15 @@ class UsgsSource:
     name = "usgs"
     min_interval = 60.0
 
-    def __init__(self, clock: Clock, interval_seconds: float = 60, min_magnitude: float = 2.5):
+    def __init__(
+        self, clock: Clock, interval_seconds: float = 60, min_magnitude: float = 2.5, alert_floor: float = math.inf
+    ):
         self._clock = clock
+        self._alert_floor = alert_floor
+        self._startup_failures = 0
         self._interval = max(self.min_interval, float(interval_seconds))
         self._startup = list(STARTUP_FEEDS)
-        self.steady = steady_feed(min_magnitude)
+        self.steady = steady_feed(min(min_magnitude, alert_floor))
         self._details: OrderedDict[str, tuple[datetime | None, QuakeDetail]] = OrderedDict()
 
     @property
@@ -173,8 +178,10 @@ class UsgsSource:
         return bool(self._startup)
 
     def set_min_magnitude(self, min_magnitude: float) -> None:
-        """Pick the steady feed for a new view filter (the next fetch is unconditional if the feed changed)."""
-        self.steady = steady_feed(min_magnitude)
+        """Pick the steady feed for a new view filter (the next fetch is unconditional if the feed changed).
+
+        The feed also has to hold every quake that can raise an alert, whatever the display filter hides."""
+        self.steady = steady_feed(min(min_magnitude, self._alert_floor))
 
     def interval(self, health: SourceHealth) -> float:
         return 0.0 if self._startup else self._interval
@@ -190,14 +197,22 @@ class UsgsSource:
         # failed backfill), so it merges silently instead of flashing them all as new.
         silent = not backfill and not same_feed
         started = self._clock.monotonic()
-        response = await client.get(f"{FEED_BASE}{feed}.geojson", headers=headers)
-        elapsed = self._clock.monotonic() - started
-        if response.status_code == 304:
-            self._done(feed, backfill)
-            log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
-            return Batch(self.name, self._clock.now(), not_modified=True, backfill=backfill, cursor=since)
-        response.raise_for_status()
-        quakes = parse_collection(response.json())
+        try:
+            response = await client.get(f"{FEED_BASE}{feed}.geojson", headers=headers)
+            elapsed = self._clock.monotonic() - started
+            if response.status_code == 304:
+                self._done(feed, backfill)
+                log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
+                return Batch(self.name, self._clock.now(), not_modified=True, backfill=backfill, cursor=since)
+            response.raise_for_status()
+            quakes = parse_collection(response.json())
+        except Exception:
+            if backfill:
+                self._startup_failures += 1
+                if self._startup_failures >= STARTUP_ATTEMPTS:
+                    log.warning("usgs: skipping startup feed %s after %d failures", feed, self._startup_failures)
+                    self._done(feed, backfill)
+            raise
         self._done(feed, backfill)
         log.debug(
             "usgs %s: %s, %d bytes, %d quakes (%.2fs)",
@@ -219,9 +234,10 @@ class UsgsSource:
         )
 
     def _done(self, feed: str, backfill: bool) -> None:
-        """A startup feed counts as loaded only once it fetched; failures retry the same feed."""
+        """A startup feed is finished once it fetched, or once it has failed STARTUP_ATTEMPTS times."""
         if backfill and self._startup and self._startup[0] == feed:
             self._startup.pop(0)
+            self._startup_failures = 0
 
     async def fetch_range(
         self, client: httpx.AsyncClient, start: datetime, end: datetime, min_magnitude: float

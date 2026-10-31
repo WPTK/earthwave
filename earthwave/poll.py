@@ -54,7 +54,7 @@ class PollResult:
 def backoff_delay(interval: float, failures: int, rng: random.Random) -> float:
     """interval x 2 per consecutive failure, capped at 10 minutes, with +-10% jitter."""
     base = max(interval, BACKOFF_FLOOR)
-    delay = min(base * 2**failures, BACKOFF_CAP)
+    delay = min(base * 2.0 ** min(failures, 32), BACKOFF_CAP)  # clamped: 2**1024 overflows a float
     return delay * (1 + rng.uniform(-JITTER, JITTER))
 
 

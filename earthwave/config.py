@@ -213,7 +213,10 @@ def parse_config(data: dict[str, Any]) -> Config:
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Read the config file, writing the commented template first if it does not exist."""
+    """Read the config file. The default path gets the commented template written first if it does not exist;
+    an explicit path that does not exist is an error, so a mistyped --config never runs on defaults."""
+    if path is not None and not path.exists():
+        raise ConfigError(f"{path}: config file not found")
     path = path or default_config_path()
     if not path.exists():
         try:

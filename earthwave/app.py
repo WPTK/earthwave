@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 from dataclasses import replace
 from datetime import timedelta
 
@@ -86,7 +87,11 @@ class EarthwaveApp(App):
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
-        self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude)
+        # The steady feed must hold every quake that can alert, whatever magnitude the display filter hides.
+        alert_floor = min(
+            config.alerts.major_magnitude, config.alerts.near_home_magnitude if config.home.enabled else math.inf
+        )
+        self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude, alert_floor=alert_floor)
         self.client = build_client(config.notify.contact, transport)
         self.rules = AlertRules(config.alerts)
         self.notifier = notifier
@@ -144,7 +149,10 @@ class EarthwaveApp(App):
             self._run_scheduler()
         if self.history is None and self.history_error:
             self.notify(
-                f"History unavailable, nothing will be saved: {self.history_error}", severity="warning", timeout=10
+                f"History unavailable, nothing will be saved: {self.history_error}",
+                severity="warning",
+                timeout=10,
+                markup=False,
             )
         if self.offline:
             if self.history is None:
@@ -236,17 +244,20 @@ class EarthwaveApp(App):
         for event in result.events:
             if isinstance(event, QuakeMajor):
                 q = event.quake
-                self.notify(f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10)
+                self.notify(
+                    f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10, markup=False
+                )
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
                 body = f"{event.name}: {event.residual_m:+.3f} m from the tide"
                 if event.late:
                     body += f" at {fmt_time(event.ts, self.config.view.time_zone)}"
-                self.notify(body, title="Gauge anomaly", severity="warning", timeout=10)
+                self.notify(body, title="Gauge anomaly", severity="warning", timeout=10, markup=False)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
-        if not self.usgs.starting and not self._coverage_checked:
-            self._coverage_checked = True
+        steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
+        if steady and not result.error and not self.usgs.starting and not self._coverage_checked:
+            self._coverage_checked = True  # the first good steady answer: the network is up, so the backfill can run
             self._backfill_if_needed(force=False)
         self.sync_tsunami()
         self.sync_gauges()
@@ -438,7 +449,9 @@ class EarthwaveApp(App):
 
     def open_history(self) -> None:
         if self.history is None:
-            self.notify(self.history_error or "No saved history is available", severity="warning", timeout=4)
+            self.notify(
+                self.history_error or "No saved history is available", severity="warning", timeout=4, markup=False
+            )
         elif not isinstance(self.screen, HistoryScreen):
             self.push_screen(HistoryScreen())
 

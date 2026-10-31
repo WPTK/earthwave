@@ -1,6 +1,6 @@
 """Alert rules: which events become a desktop toast (and bell), from the [alerts] config."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from earthwave.config import AlertsConfig
 from earthwave.models import Earthquake
@@ -41,18 +41,30 @@ class AlertRules:
         self._sent: dict[str, None] = {}
 
     def evaluate(self, events: list[Event] | tuple[Event, ...]) -> list[Notification]:
-        quakes: list[Notification] = []
+        quakes: list[tuple[int, Earthquake, Notification]] = []  # (urgency rank, quake, note); 0 is most urgent
         tsunamis: list[Notification] = []
+        home_km: dict[str, float] = {}
         for event in events:
             if isinstance(event, QuakeMajor):
-                quakes.append(self._quake("major", "Major earthquake", event.quake, "warning", bell=True))
+                quakes.append(
+                    (0, event.quake, self._quake("major", "Major earthquake", event.quake, "warning", bell=True))
+                )
             elif isinstance(event, QuakeNearHome):
+                home_km[event.quake.id] = event.distance_km
                 body = f"{_quake_line(event.quake)} ({event.distance_km:.0f} km from home)"
-                quakes.append(Notification(f"near:{event.quake.id}", "Earthquake near home", body, "warning"))
+                quakes.append(
+                    (1, event.quake, Notification(f"near:{event.quake.id}", "Earthquake near home", body, "warning"))
+                )
             elif isinstance(event, QuakeNew) or (isinstance(event, QuakeUpdated) and "pager" in event.changed):
                 if self._pager_qualifies(event.quake):
                     pager = event.quake.pager_alert
-                    quakes.append(self._quake(f"pager:{pager}", f"PAGER {pager} earthquake", event.quake, "warning"))
+                    quakes.append(
+                        (
+                            2,
+                            event.quake,
+                            self._quake(f"pager:{pager}", f"PAGER {pager} earthquake", event.quake, "warning"),
+                        )
+                    )
             elif (
                 isinstance(event, TsunamiIssued | TsunamiChanged)
                 and self._config.tsunami
@@ -62,14 +74,21 @@ class AlertRules:
             elif isinstance(event, GaugeAnomaly) and self._config.tsunami:
                 tsunamis.append(self._gauge(event))
         out = [n for n in tsunamis if self._first(n)]
-        fresh = [n for n in quakes if self._first(n)]
-        if len(fresh) >= BURST:
-            top = self._config.major_magnitude
+        # One quake can raise several notifications (major, near home, PAGER); it still counts, and toasts, once.
+        per_quake: dict[str, tuple[Earthquake, Notification]] = {}
+        for _, quake, note in sorted(quakes, key=lambda item: item[0]):
+            if self._first(note) and quake.id not in per_quake:
+                if note.key.startswith("major:") and quake.id in home_km:  # the near-home fact must not be lost
+                    note = replace(note, body=f"{note.body} ({home_km[quake.id]:.0f} km from home)")
+                per_quake[quake.id] = (quake, note)
+        fresh = [note for _, note in per_quake.values()]
+        if len(per_quake) >= BURST:
+            top = max((q for q, _ in per_quake.values()), key=lambda q: q.mag)
             fresh = [
                 Notification(
                     f"burst:{fresh[0].key}",
                     "Earthquakes",
-                    f"{len(fresh)} notable quakes (M{top:g}+ or near you) in the last minute",
+                    f"{len(fresh)} notable quakes in the last minute, largest {_quake_line(top)}",
                     "warning",
                     bell=True,
                 )
