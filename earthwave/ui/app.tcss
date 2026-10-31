@@ -26,8 +26,10 @@ Screen {
 #map {
     width: 45%;
     border: round $primary-darken-2;
-    content-align: center middle;
-    color: $text-muted;
+}
+
+#map:focus {
+    border: round $primary;
 }
 
 #search {
@@ -66,6 +68,15 @@ Screen.too-small #search {
 
 Screen.no-map #map {
     display: none;
+}
+
+Screen.map-full #left {
+    display: none;
+}
+
+Screen.map-full #map {
+    display: block;
+    width: 1fr;
 }
 
 FiltersScreen, HelpScreen {

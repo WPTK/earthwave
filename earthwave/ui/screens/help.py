@@ -13,7 +13,9 @@ HELP_TEXT = """\
   j / k, arrows   move          Enter   quake detail
   f   filters                   s       cycle sort (time, magnitude, distance)
   /   search place              m       show or hide the map
+  M   full-screen map           z       zoom map (world, region, home)
   a   acknowledge all           r       refresh now
+  Map focused (Tab): arrows pan
   ?   this help                 q       quit
   In detail:  b open USGS page, y copy URL, Esc back
 
