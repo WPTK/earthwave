@@ -1,13 +1,27 @@
 """Command line entry point."""
 
 import argparse
+import asyncio
 import importlib
 import json
+import logging
 import sys
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
+
 from earthwave import __version__
+from earthwave.app import EarthwaveApp
+from earthwave.clock import Clock, ReplayClock, SystemClock
+from earthwave.config import Config, ConfigError, load_config, parse_home, with_overrides
+from earthwave.logging_setup import setup_logging
+from earthwave.models import Batch, Earthquake
+from earthwave.net import RecordingTransport, ReplayTransport, recording_start
+from earthwave.sources.usgs import parse_collection
+from earthwave.state.store import Store
+from earthwave.ui.widgets.quake_list import QuakeList
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 MODULES = ("textual", "httpx", "platformdirs", "tomli_w")
@@ -51,32 +65,116 @@ def _parse_fixtures(root: Path) -> list[str]:
     return lines
 
 
+def _frame_quakes(root: Path) -> tuple[list[Earthquake], datetime]:
+    """Quakes for the headless frame: the captured all_hour feed when present, else two built-in samples."""
+    path = root / "usgs" / "all_hour.geojson"
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return list(parse_collection(data)), datetime.fromtimestamp(data["metadata"]["generated"] / 1000, tz=UTC)
+    now = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    return [
+        Earthquake("sample1", now - timedelta(minutes=5), 38.8, -122.8, 1.5, 1.5, place="7 km NW of The Geysers, CA"),
+        Earthquake("sample2", now - timedelta(minutes=40), -36.4, -98.0, 6.4, 10.0, place="southeast of Easter Island"),
+    ], now
+
+
+async def _headless_frame(root: Path) -> str:
+    quakes, now = _frame_quakes(root)
+    if not quakes:
+        raise ValueError("selftest: no quakes for the headless frame")
+    clock = ReplayClock(now, real=lambda: 0.0)
+    store = Store()
+    store.merge(Batch("usgs", now, quakes=tuple(quakes), backfill=True), clock)
+    config = with_overrides(Config(), min_magnitude=-2.0, hours=24, glyphs="ascii")
+    app = EarthwaveApp(config, store=store, clock=clock, run_scheduler=False)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        quake_list = app.dashboard.query_one(QuakeList)
+        newest = max(quakes, key=lambda q: q.time)
+        line = quake_list.render_line(0).text
+        if newest.place[:20] not in line:
+            raise ValueError(f"selftest: first row {line.strip()!r} does not show {newest.place!r}")
+        frame = app.export_screenshot()
+    return f"frame: {len(quake_list.rows)} rows, {len(frame)} bytes"
+
+
 def selftest(root: Path = FIXTURES) -> int:
     for name in MODULES:
         importlib.import_module(name)
     print("selftest: imports ok")
-    if not root.is_dir():
+    if root.is_dir():
+        try:
+            lines = _parse_fixtures(root)
+        except (OSError, ValueError, KeyError, ET.ParseError) as exc:
+            print(f"selftest: FAILED: {exc!r}", file=sys.stderr)
+            return 1
+        for line in lines:
+            print(line)
+    else:
         print("selftest: fixture parse SKIPPED (tests/fixtures not found)")
-        return 0
     try:
-        lines = _parse_fixtures(root)
-    except (OSError, ValueError, KeyError, ET.ParseError) as exc:
+        print(f"selftest: {asyncio.run(_headless_frame(root))}")
+    except Exception as exc:
         print(f"selftest: FAILED: {exc!r}", file=sys.stderr)
         return 1
-    print("\n".join(lines))
     print("selftest: ok")
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="earthwave", description="Earthquakes and tsunami alerts in your terminal.")
     parser.add_argument("--version", action="version", version=f"earthwave {__version__}")
-    parser.add_argument("--selftest", action="store_true", help="check imports and parse bundled fixtures, then exit")
+    parser.add_argument("--selftest", action="store_true", help="check imports, parse fixtures, render one frame, exit")
+    parser.add_argument("--config", metavar="PATH", help="config file (default: the user config dir)")
+    parser.add_argument("--no-config", action="store_true", help="ignore the config file and use defaults")
+    parser.add_argument("--min-mag", type=float, metavar="M", help="minimum magnitude shown")
+    parser.add_argument("--hours", type=float, metavar="N", help="show quakes from the last N hours")
+    parser.add_argument("--home", metavar="LAT,LON", help="home location for distances and near-home alerts")
+    parser.add_argument("--glyphs", choices=("auto", "unicode", "ascii"), help="glyph set")
+    parser.add_argument("--record", metavar="PATH", help="append every HTTP exchange to a JSONL recording")
+    parser.add_argument("--replay", metavar="PATH", help="serve a recording instead of the network")
+    parser.add_argument("--speed", type=float, default=1.0, metavar="N", help="replay speed multiplier (default 1)")
+    parser.add_argument("--log", metavar="PATH", help="write a rotating log file (default level WARNING)")
+    parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file")
+    return parser
+
+
+def run(args: argparse.Namespace) -> int:
+    if args.record and args.replay:
+        print("earthwave: --record and --replay cannot be combined", file=sys.stderr)
+        return 2
+    try:
+        config = Config() if args.no_config else load_config(Path(args.config) if args.config else None)
+        home = parse_home(args.home) if args.home else None
+        config = with_overrides(config, args.min_mag, args.hours, home, args.glyphs)
+    except ConfigError as exc:
+        print(f"earthwave: {exc}", file=sys.stderr)
+        return 2
+    log_path = setup_logging(Path(args.log) if args.log else None, args.debug)
+    clock: Clock = SystemClock()
+    transport: httpx.AsyncBaseTransport | None = None
+    try:
+        if args.replay:
+            replay_path = Path(args.replay)
+            clock = ReplayClock(recording_start(replay_path), args.speed)
+            transport = ReplayTransport(replay_path, clock)
+        elif args.record:
+            transport = RecordingTransport(httpx.AsyncHTTPTransport(), Path(args.record), clock)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"earthwave: {exc}", file=sys.stderr)
+        return 2
+    if log_path:
+        logging.getLogger(__name__).info("logging to %s", log_path)
+    EarthwaveApp(config, clock=clock, transport=transport).run()
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
-    parser.print_help()
-    return 0
+    return run(args)
 
 
 if __name__ == "__main__":
