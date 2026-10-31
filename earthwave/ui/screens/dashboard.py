@@ -1,5 +1,6 @@
 """Main screen: ticker, quake list, map panel, status bar, search box and the too-small overlay."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from rich.text import Text
@@ -97,7 +98,8 @@ class DashboardScreen(Screen):
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
-        app.tracker.retain({q.id for q in app.store.all()})  # search and filters are reversible: keep what is hidden
+        # A search only hides rows; quakes the magnitude and hours filter excludes can never be seen, so they drop out.
+        app.tracker.retain({q.id for q in app.store.visible(replace(app.view, query=""), app.clock)})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet

@@ -1,6 +1,6 @@
 """Alert rules: which events become a desktop toast (and bell), from the [alerts] config."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from earthwave.config import AlertsConfig
 from earthwave.models import Earthquake
@@ -43,12 +43,14 @@ class AlertRules:
     def evaluate(self, events: list[Event] | tuple[Event, ...]) -> list[Notification]:
         quakes: list[tuple[int, Earthquake, Notification]] = []  # (urgency rank, quake, note); 0 is most urgent
         tsunamis: list[Notification] = []
+        home_km: dict[str, float] = {}
         for event in events:
             if isinstance(event, QuakeMajor):
                 quakes.append(
                     (0, event.quake, self._quake("major", "Major earthquake", event.quake, "warning", bell=True))
                 )
             elif isinstance(event, QuakeNearHome):
+                home_km[event.quake.id] = event.distance_km
                 body = f"{_quake_line(event.quake)} ({event.distance_km:.0f} km from home)"
                 quakes.append(
                     (1, event.quake, Notification(f"near:{event.quake.id}", "Earthquake near home", body, "warning"))
@@ -76,6 +78,8 @@ class AlertRules:
         per_quake: dict[str, tuple[Earthquake, Notification]] = {}
         for _, quake, note in sorted(quakes, key=lambda item: item[0]):
             if self._first(note) and quake.id not in per_quake:
+                if note.key.startswith("major:") and quake.id in home_km:  # the near-home fact must not be lost
+                    note = replace(note, body=f"{note.body} ({home_km[quake.id]:.0f} km from home)")
                 per_quake[quake.id] = (quake, note)
         fresh = [note for _, note in per_quake.values()]
         if len(per_quake) >= BURST:

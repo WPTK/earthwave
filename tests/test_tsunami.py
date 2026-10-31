@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from conftest import FIXTURES, make_quake
+from rich.text import Text
 from test_ui import wait_for
 
 from earthwave.app import EarthwaveApp
@@ -18,10 +19,11 @@ from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import ReplayTransport, recording_start
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
-from earthwave.poll import Freshness, Scheduler
+from earthwave.poll import Freshness, PollResult, Scheduler
 from earthwave.sources import jma, levels, nws, tsunamigov
 from earthwave.sources.base import SourceHealth
 from earthwave.state.events import (
+    GaugeAnomaly,
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
@@ -919,24 +921,42 @@ async def test_tick_leaves_the_tsunami_screen_table_alone():
         app._tick()
         app._tick()
         assert calls == []
-        app.on_poll_done(type("M", (), {"result": type("R", (), {"events": ()})()})())
+        app.on_poll_done(type("M", (), {"result": PollResult("usgs", 0)})())
         assert calls == [1]  # refreshed on a poll
 
 
-async def test_feed_text_that_looks_like_markup_cannot_crash_the_tsunami_screen_or_a_toast():
+async def test_feed_text_that_looks_like_markup_cannot_crash_the_tsunami_screen():
     app = kam_app()
-    app.store.merge(
-        Batch("tsunamigov", app.clock.now(), alerts=(replace(kam(1), id="x", areas=("[/x] Coast [Foo]",)),)), app.clock
-    )
+    hostile = replace(nws_alert(), id="hostile", dedupe_key="hostile", areas=("[/x] Coast [Foo]",), quake_ref=None)
+    app.store.merge(Batch("nws", NOW, alerts=(hostile,)), app.clock)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("t")
         await pilot.pause()
         assert isinstance(app.screen, TsunamiScreen)
-        await pilot.press("escape")
-        app.on_poll_done(
-            type("M", (), {"result": type("R", (), {"events": (QuakeMajor(kam_quake(place="[/x] Alaska")),)})()})()
-        )
+        row = app.screen.query_one("DataTable").get_row("hostile")
+        areas = next(c for c in row if "[/x]" in str(c))
+        assert isinstance(areas, Text) and areas.plain == "[/x] Coast [Foo]"
+
+
+async def test_feed_text_that_looks_like_markup_cannot_crash_a_toast():
+    app = kam_app()
+    anomaly = GaugeAnomaly("s1", 0.3, NOW, name="[/x] Station [Foo]")
+    events = (QuakeMajor(kam_quake(place="[/x] Alaska")), anomaly)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.on_poll_done(type("M", (), {"result": PollResult("usgs", 0, events)})())
         await pilot.pause()
+        notices = list(app._notifications)
+        assert len(notices) == 2 and all(n.markup is False for n in notices)
+        assert "[/x] Alaska" in notices[0].message and "[/x] Station [Foo]" in notices[1].message
+        for toast in app.query("Toast"):
+            toast.render()  # would raise MarkupError on feed text parsed as markup
+
+
+def test_a_major_quake_near_home_keeps_its_distance_in_the_one_toast():
+    rules = AlertRules(AlertsConfig(major_magnitude=6.0))
+    quake = make_quake("big", 7.2, place="Somewhere, Chile")
+    (only,) = rules.evaluate([QuakeNew(quake), QuakeMajor(quake), QuakeNearHome(quake, 12.0)])
+    assert only.title == "Major earthquake" and only.body == "M7.2 Somewhere, Chile (12 km from home)"
 
 
 async def test_tsunami_screen_ack_only_acknowledges_tsunami_attention():

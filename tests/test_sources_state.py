@@ -582,13 +582,6 @@ def test_the_steady_feed_also_covers_quakes_that_can_alert():
     assert source.steady == "2.5_day"
 
 
-async def test_attention_survives_a_search_that_hides_the_quake(clock):
-    tracker = AttentionTracker(clock)
-    tracker.observe([QuakeNew(make_quake("hidden"))])
-    tracker.retain({"hidden"})  # the store still holds it, whatever the view shows
-    assert tracker.unseen() == 1
-
-
 @respx.mock
 async def test_first_batch_of_a_new_feed_is_silent_then_normal(clock):
     source = UsgsSource(clock)
