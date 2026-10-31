@@ -113,7 +113,8 @@ class HistoryScreen(Screen):
         )
         self.query_one("#history_stats", Static).update(stats)
         quake_list = self.query_one(QuakeList)
-        self.query_one("#history_header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
+        width = quake_list.scrollable_content_region.width
+        self.query_one("#history_header", Static).update(header_text(width, app.config.home.enabled))
         quake_list.set_rows(quakes)
 
     def action_day(self, step: int) -> None:

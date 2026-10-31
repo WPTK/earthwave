@@ -112,7 +112,7 @@ class QuakeList(ScrollView, can_focus=True):
 
     def render_line(self, y: int) -> Strip:
         scroll_x, scroll_y = self.scroll_offset
-        width = self.size.width
+        width = self.scrollable_content_region.width  # size.width includes the scrollbar column
         index = scroll_y + y
         if index >= len(self.rows):
             return Strip.blank(width, Style())

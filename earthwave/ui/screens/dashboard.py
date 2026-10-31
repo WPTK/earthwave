@@ -51,6 +51,11 @@ class DashboardScreen(Screen):
     def earthwave(self) -> "EarthwaveApp":
         return self.app  # type: ignore[return-value]
 
+    @property
+    def list_shown(self) -> bool:
+        """The quake list is on screen: not under the too-small overlay, not behind the full-screen map."""
+        return not (self.has_class("too-small") or self.has_class("map-full"))
+
     def compose(self) -> ComposeResult:
         app = self.earthwave
         yield Ticker(id="ticker")
@@ -84,8 +89,8 @@ class DashboardScreen(Screen):
         self.set_class(small, "too-small")
         if small:
             self.query_one(TooSmall).show(width, height)
-        elif was_small:  # hiding the widgets dropped focus; give it back once they are shown again
-            self.call_after_refresh(self._focus_main)
+        else:  # hiding the widgets (too small, or the map on resize) drops focus; give it back once they are shown
+            self.call_after_refresh(self._restore_focus, was_small)
         self.set_class(not self.show_map or width < MAP_MIN_WIDTH, "no-map")
         self.set_class(width < MAP_MIN_WIDTH, "narrow")
 
@@ -100,7 +105,8 @@ class DashboardScreen(Screen):
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
         # A search only hides rows; quakes the magnitude and hours filter excludes can never be seen, so they drop out.
         app.tracker.retain({q.id for q in app.store.visible(replace(app.view, query=""), app.clock)})
-        self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
+        width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
+        self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
         empty.update(Text(f"No quakes match {filter_summary(app.view)}. Press f to change filters."))
@@ -113,7 +119,7 @@ class DashboardScreen(Screen):
         major = [q for q in app.store.all() if q.mag >= app.config.alerts.major_magnitude]
         latest = max(major, key=lambda q: q.time, default=None)
         age = (app.clock.now() - latest.time).total_seconds() if latest else 0.0
-        self.query_one(Ticker).show(latest, age, app.gauge_ticker())
+        self.query_one(Ticker).show(latest, age, app.gauge_ticker(), app.store.warm)
 
     def tsunami_state(self) -> tuple[list, list, int, str]:
         """(alerts in force, actionable ones, unacknowledged count, status bar state) from the store and tracker."""
@@ -194,7 +200,15 @@ class DashboardScreen(Screen):
         self._layout(self.size.width, self.size.height)
         self.call_after_refresh(self.refresh_view)
 
+    def _restore_focus(self, force: bool = False) -> None:
+        if force or self.focused is None:
+            self._focus_main()
+
     def _focus_main(self) -> None:
+        box = self.query_one("#search", Input)
+        if box.display:  # an open search box keeps the keys; typing must not fall through to bindings
+            box.focus()
+            return
         (self.query_one(MapPanel) if self.has_class("map-full") else self.query_one(QuakeList)).focus()
 
     def action_fullscreen_map(self) -> None:
@@ -244,7 +258,7 @@ class DashboardScreen(Screen):
         box.display = False
         app = self.earthwave
         app.set_query(query)
-        self.query_one(QuakeList).focus()
+        self._focus_main()
 
     def on_quake_list_highlighted(self, event: QuakeList.Highlighted) -> None:
         self.query_one(MapPanel).select(event.quake)

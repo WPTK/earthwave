@@ -222,7 +222,7 @@ class EarthwaveApp(App):
             return
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
-            visible = quake_list.visible_ids()
+            visible = quake_list.visible_ids() if self.dashboard.list_shown else set()  # a hidden list is not seen
             self.tracker.mark_seen(visible & self._previous_visible)
             self._previous_visible = visible
             quake_list.refresh()
@@ -353,6 +353,9 @@ class EarthwaveApp(App):
         for km, station in (*self.gauge_selection.dart, *self.gauge_selection.coops):
             readings = self.store.gauge_readings(station.id)
             newest = readings[-1] if readings else None
+            residuals = self.store.gauge_residuals(station.id)
+            limit = threshold_m(station.kind, self.config.alerts)
+            exceeded = [r.ts for r in residuals if abs(r.residual_m) >= limit]  # NaN compares false
             rows.append(
                 GaugeRowData(
                     station_id=station.id,
@@ -360,9 +363,10 @@ class EarthwaveApp(App):
                     distance_km=km,
                     mode=newest.mode if newest else "",
                     newest=newest.ts if newest else None,
-                    residuals=tuple(r.residual_m for r in self.store.gauge_residuals(station.id)),
-                    threshold_m=threshold_m(station.kind, self.config.alerts),
+                    residuals=tuple(r.residual_m for r in residuals),
+                    threshold_m=limit,
                     kind=station.kind,
+                    exceeded_at=exceeded[-1] if exceeded else None,
                 )
             )
         return rows

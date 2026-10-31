@@ -84,7 +84,7 @@ def world_view(pan_lon: int = 0) -> Viewport:
     """Whole-world viewport, optionally scrolled sideways (the map wraps at the antimeridian)."""
     if not pan_lon % 360:
         return WORLD
-    lon0 = (pan_lon + 180) % 360 - 180
+    lon0 = pan_lon % 360 - 180  # the left edge is WORLD's -180 shifted east by pan_lon
     return Viewport(float(lon0), WORLD.lat0, float(lon0 + 360), WORLD.lat1)
 
 
