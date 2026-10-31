@@ -133,7 +133,7 @@ class QuakeList(ScrollView, can_focus=True):
         place = quake.place or "unknown"
         if len(place) > place_w:
             place = place[: max(place_w - 1, 0)] + self._glyphs.ellipsis
-        pager = self._glyphs.dot if quake.pager_alert in PAGER_COLORS else " "
+        pager = quake.pager_alert[0].upper() if quake.pager_alert in PAGER_COLORS else " "  # G/Y/O/R: not colour alone
         segments = [
             field(marker, "cyan"),
             field(age, "grey62"),
