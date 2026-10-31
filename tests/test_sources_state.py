@@ -605,17 +605,18 @@ class TickSource(FakeSource):
 
 
 async def test_slow_source_does_not_delay_a_fast_one():
-    from earthwave.clock import SystemClock
+    from test_observations import drive
+
+    from earthwave.clock import ReplayClock
 
     release = asyncio.Event()
     slow, fast = SlowSource(release), TickSource([])
-    sched = Scheduler([slow, fast], Store(), SystemClock(), lambda result: None)
+    # moves only with `drive`, so the 0.05 s interval is not a wall-clock race
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    sched = Scheduler([slow, fast], Store(), clock, lambda result: None)
     async with build_client() as client:
         task = asyncio.create_task(sched.run(client))
-        for _ in range(100):
-            if fast.calls >= 3:
-                break
-            await asyncio.sleep(0.02)
+        await drive(clock, lambda: fast.calls >= 3, step=1.0)
         assert fast.calls >= 3 and slow.calls == 1  # the fast source kept polling while the slow one hung
         release.set()
         task.cancel()

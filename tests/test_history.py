@@ -185,6 +185,22 @@ async def test_relaunch_offline_keeps_yesterday_and_acks_but_never_alerts(tmp_pa
         assert app2.screen is app2.dashboard
 
 
+async def settled(pilot, app, predicate, reload=None, attempts=200) -> None:
+    """Let the app run until `predicate()` holds: each round drains the message queue and any history read worker.
+
+    There is no wall-clock wait, so a loaded runner changes how many rounds it takes, never the outcome; `reload`
+    asks a history screen to read again each round (the writer task may not have committed yet).
+    """
+    for _ in range(attempts):
+        if reload is not None:
+            reload.refresh_day()
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        if predicate():
+            return
+    raise AssertionError("condition never held")
+
+
 async def test_history_screen_enter_opens_detail_and_back(tmp_path):
     clock = ReplayClock(T0, real=lambda: 0.0)
     app = _app(tmp_path / "h.sqlite", clock, offline=True)
@@ -197,12 +213,8 @@ async def test_history_screen_enter_opens_detail_and_back(tmp_path):
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, HistoryScreen)
-        for _ in range(50):  # the writer task commits in a thread
-            screen.refresh_day()
-            await app.workers.wait_for_complete()
-            if screen.query_one(QuakeList).rows:
-                break
-            await pilot.pause(0.05)
+        # the writer commits in a thread, so ask for the day again until the row shows
+        await settled(pilot, app, lambda: screen.query_one(QuakeList).rows, reload=screen)
         assert screen.query_one(QuakeList).selected.id == "q1"
         await pilot.press("enter")
         await pilot.pause()
@@ -270,14 +282,14 @@ async def test_changing_the_day_resets_cursor_and_scroll(tmp_path, clock):
         await app.history.close()
         app.history.start()
         await pilot.press("h")
-        await app.workers.wait_for_complete()
         quake_list = app.screen.query_one(QuakeList)
+        await settled(pilot, app, lambda: len(quake_list.rows) == 40)
         for _ in range(35):
             quake_list.action_cursor_down()
         await pilot.pause()
         assert quake_list.cursor == 35 and quake_list.scroll_offset.y > 0
         await pilot.press("left")
-        await app.workers.wait_for_complete()
+        await settled(pilot, app, lambda: [q.id for q in quake_list.rows] == ["old"])
         assert [q.id for q in quake_list.rows] == ["old"]
         assert quake_list.cursor == 0 and quake_list.scroll_offset.y == 0
 

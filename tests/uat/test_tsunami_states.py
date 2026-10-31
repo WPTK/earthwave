@@ -4,8 +4,8 @@ from dataclasses import replace
 
 import pytest
 from conftest import FIXTURES, wait_until
+from test_observations import drive
 from test_tsunami import kam
-from test_ui import wait_for
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -144,15 +144,15 @@ async def test_tsunami_screen_lists_alerts_at_each_size(size):
 @pytest.mark.parametrize("terminal", [(120, 30), (200, 50)])
 async def test_replay_drives_banner_up_and_back_down(terminal):
     path = FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl"
-    clock = ReplayClock(recording_start(path), speed=900)
+    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive` and the recording
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock), notifier=RecordingNotifier())
     async with app.run_test(size=terminal) as pilot:
         banner = app.dashboard.query_one("#banner")
-        await wait_for(lambda: banner.display and "TSUNAMI" in str(banner.render()), timeout=20)
+        await drive(clock, lambda: banner.display and "TSUNAMI" in str(banner.render()), step=30)
         assert "TSUNAMI" in screen_text(app).splitlines()[1]  # the banner sits under the ticker
-        await wait_for(lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()), timeout=20)
-        await wait_for(lambda: not banner.display, timeout=20)
+        await drive(clock, lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()), step=30)
+        await drive(clock, lambda: not banner.display, step=30)
         await pilot.pause()
         assert "t details, a acknowledge" not in screen_text(app)
         assert app.store.active_alerts(clock) == []
