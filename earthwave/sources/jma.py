@@ -81,11 +81,11 @@ def parse_detail(detail: dict, entry: dict) -> TsunamiAlert:
     origin_time = parse_time(quake.get("OriginTime"))
     if coord and origin_time:
         origin = (origin_time, coord[0], coord[1])
-    # Only the areas at the report's own level: a lifted or forecast-only area is not covered by the warning. A
-    # report with nothing at that level (a lift, an all-forecast report) keeps every coded area.
+    # Only the areas under an actionable level: a lifted or forecast-only area is not covered by the warning. A
+    # report with none (a lift, an all-forecast report) keeps every coded area.
     coded = [i for i in items if i["Category"]["Kind"]["Code"] in KIND_LEVELS]
-    same = [i for i in coded if KIND_LEVELS[i["Category"]["Kind"]["Code"]] == level]
-    areas = tuple(i["Area"].get("enName") or i["Area"].get("Name", "") for i in same or coded)
+    live = [i for i in coded if KIND_LEVELS[i["Category"]["Kind"]["Code"]] in levels.ACTIONABLE]
+    areas = tuple(i["Area"].get("enName") or i["Area"].get("Name", "") for i in live or coded)
     comment = (body.get("Comments") or {}).get("WarningComment") or {}
     title = entry.get("en_ttl") or head.get("enTitle") or "Tsunami report"
     place = entry.get("en_anm") or ""

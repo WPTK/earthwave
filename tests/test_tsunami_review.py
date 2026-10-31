@@ -135,7 +135,9 @@ def test_a_withdrawn_nws_alert_relisted_raises_an_issued_event(kclock):
     alert = nws_alert()
     kclock.advance_to(alert.updated)
     assert [type(e) for e in store.merge(listed(kclock, alert), kclock)] == [TsunamiIssued]
-    assert store.merge(listed(kclock), kclock) == []  # omitted once: withdrawn
+    assert store.merge(listed(kclock), kclock) == []
+    assert store.merge(listed(kclock), kclock) == []  # omitted twice in a row: withdrawn
+    assert store.active_alerts(kclock) == []
     events = store.merge(listed(kclock, alert), kclock)
     assert [type(e) for e in events] == [TsunamiIssued] and events[0].alert.id == alert.id
     assert store.merge(listed(kclock, alert), kclock) == []  # and only once
@@ -186,11 +188,13 @@ def test_jma_lists_only_the_areas_at_the_reports_level():
     detail = json.loads(read(FIXTURES / "jma" / "detail.json"))
     entry = json.loads(read(FIXTURES / "jma" / "list.json"))[0]
     items = detail["Body"]["Tsunami"]["Forecast"]["Item"]
-    for item, (code, name) in zip(items, [("51", "Ishikawa"), ("62", "Niigata"), ("50", "Toyama")], strict=False):
+    for item, (code, name) in zip(
+        items, [("51", "Ishikawa"), ("62", "Niigata"), ("50", "Toyama"), ("71", "Hokkaido")], strict=False
+    ):
         item["Category"]["Kind"]["Code"] = code
         item["Area"]["enName"] = name
     alert = jma.parse_detail(detail, entry)
-    assert alert.level == levels.WARNING and alert.areas == ("Ishikawa",)
+    assert alert.level == levels.WARNING and alert.areas == ("Ishikawa", "Niigata")  # warning and advisory areas
     for item in items:  # nothing but a lift and forecasts: the report keeps every coded area
         item["Category"]["Kind"]["Code"] = "50"
     assert len(jma.parse_detail(detail, entry).areas) == len(items)
@@ -218,3 +222,104 @@ async def test_unknown_status_is_readable_below_120_columns():
         panel = app.dashboard.query_one("#tsunami")
         assert app.dashboard.has_class("narrow") and panel.display and panel.size.height > 0
         assert "UNKNOWN" in str(panel.render())
+
+
+# --- review round 2 ---------------------------------------------------------------------------------------------
+
+
+def test_one_nws_listing_blip_does_not_touch_an_alert_and_alternating_listings_never_re_alarm(kclock):
+    store = Store()
+    alert = nws_alert()
+    kclock.advance_to(alert.updated)
+    assert [type(e) for e in store.merge(listed(kclock, alert), kclock)] == [TsunamiIssued]
+    for _ in range(3):  # omitted, listed, omitted, listed ...: never two omissions in a row
+        assert store.merge(listed(kclock), kclock) == []
+        assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
+        assert store.merge(listed(kclock, alert), kclock) == []
+
+
+def test_a_withdrawn_nws_alert_replaced_in_the_relisting_batch_is_not_revived(kclock):
+    store = Store()
+    n1 = nws_alert()
+    n2 = replace(n1, id="n2", dedupe_key="n2", level=levels.ADVISORY, references=(n1.id,), updated=n1.updated)
+    kclock.advance_to(n1.updated)
+    store.merge(listed(kclock, n1), kclock)
+    store.merge(listed(kclock), kclock)
+    store.merge(listed(kclock), kclock)
+    assert store.alert_status(n1, kclock) == "withdrawn"
+    events = store.merge(listed(kclock, n1, n2), kclock)
+    assert [type(e).__name__ for e in events] == ["TsunamiChanged"]  # one event, not Issued as well
+    assert store.alert_status(n1, kclock) == "superseded"
+    assert [a.id for a in store.active_alerts(kclock)] == ["n2"]
+
+
+def test_a_relisted_alert_whose_level_changed_emits_one_event(kclock):
+    store = Store()
+    n1 = nws_alert()
+    kclock.advance_to(n1.updated)
+    store.merge(listed(kclock, n1), kclock)
+    store.merge(listed(kclock), kclock)
+    store.merge(listed(kclock), kclock)
+    downgraded = replace(n1, level=levels.ADVISORY, updated=n1.updated + timedelta(minutes=1))
+    kclock.advance_to(downgraded.updated)
+    events = store.merge(listed(kclock, downgraded), kclock)
+    assert [type(e).__name__ for e in events] == ["TsunamiIssued"]  # its attention was gone: one fresh event, not two
+
+
+def jma_report(rid, level, issued, areas=("Ishikawa",), references=()):
+    return replace(
+        kam(1),
+        id=f"jma:{rid}",
+        dedupe_key=f"jma:{rid}",
+        source="jma",
+        level=level,
+        areas=areas,
+        issued=issued,
+        updated=issued,
+        references=references,
+        expires=None,
+    )
+
+
+def test_a_jma_warning_retried_after_a_downgrade_is_not_issued(kclock):
+    a = jma_report("a", levels.WARNING, NOW)
+    b = jma_report("b", levels.ADVISORY, NOW + timedelta(minutes=30), references=(a.id,))
+    late = replace(a, references=(b.id,))
+    store = Store()
+    kclock.advance_to(b.issued)
+    merge(store, kclock, b, source="jma")  # a timed out, so b merged first
+    assert merge(store, kclock, late, source="jma") == []
+    assert [x.id for x in store.active_alerts(kclock)] == [b.id]
+
+
+def test_an_observation_only_report_does_not_close_a_late_warning(kclock):
+    a = jma_report("a", levels.WARNING, NOW)
+    obs = jma_report("b", levels.INFORMATION, NOW + timedelta(minutes=30), areas=(), references=(a.id,))
+    store = Store()
+    kclock.advance_to(obs.issued)
+    merge(store, kclock, obs, source="jma")
+    assert [type(e) for e in merge(store, kclock, replace(a, references=(obs.id,)), source="jma")] == [TsunamiIssued]
+
+
+def test_a_missing_time_never_closes_a_late_product(kclock):
+    warning = kam(1)
+    cancel = replace(
+        warning, id="cancel-b", dedupe_key="cancel-b", level=levels.CANCELLATION, references=(warning.id,), issued=None
+    )
+    store = Store()
+    merge(store, kclock, cancel)
+    assert [type(e) for e in merge(store, kclock, warning)] == [TsunamiIssued]
+
+
+def test_a_jma_fallback_alert_replaces_nothing(kclock):
+    real = jma_report("a", levels.WARNING, NOW)
+    fallback = replace(
+        jma.fallback_alert({"json": "b", "en_ttl": "Tsunami Advisory", "rdt": "2026-10-10T04:00:00+09:00"}),
+        references=(real.id,),
+        issued=NOW + timedelta(minutes=30),
+    )
+    store = Store()
+    kclock.advance_to(fallback.issued)
+    merge(store, kclock, real, source="jma")
+    merge(store, kclock, fallback, source="jma")
+    assert store.alert_status(real, kclock) == "active"

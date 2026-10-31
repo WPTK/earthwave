@@ -1447,7 +1447,7 @@ async def test_jma_advisory_retried_late_does_not_end_the_newer_warning():
     assert retried.alerts[0].level == levels.ADVISORY and retried.alerts[0].references == (first.alerts[0].id,)
     store.merge(retried, clock)
     assert store.alert_status(first.alerts[0], clock) == "active"
-    assert store.alert_status(retried.alerts[0], clock) == "active"
+    assert store.alert_status(retried.alerts[0], clock) == "superseded"  # older than the warning it names
 
 
 def test_panel_checks_before_it_clears():

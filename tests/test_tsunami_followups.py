@@ -42,6 +42,8 @@ def test_an_nws_alert_missing_from_a_complete_listing_is_withdrawn(kclock):
     assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
     store.merge(nws_batch(kclock, incomplete=True), kclock)  # a partial answer proves nothing
     assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
+    store.merge(nws_batch(kclock), kclock)  # one omission is a blip
+    assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
     store.merge(nws_batch(kclock), kclock)
     assert store.active_alerts(kclock) == [] and store.alert_status(alert, kclock) == "withdrawn"
 
@@ -137,6 +139,7 @@ def test_a_withdrawn_nws_alert_comes_back_when_it_is_listed_again(kclock):
     alert = nws_alert()
     kclock.advance_to(alert.updated)
     store.merge(listed(kclock, alert), kclock)
+    store.merge(listed(kclock), kclock)
     store.merge(listed(kclock), kclock)
     assert store.active_alerts(kclock) == []
     store.merge(listed(kclock, alert), kclock)
