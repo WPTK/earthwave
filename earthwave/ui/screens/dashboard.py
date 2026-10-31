@@ -134,6 +134,7 @@ class DashboardScreen(Screen):
             down=down,
             unknown=none_fresh and bool(down),
             checking=none_fresh and not down,
+            expiry=app.store.expiry,
         )
 
     def refresh_status(self, shown: int | None = None) -> None:

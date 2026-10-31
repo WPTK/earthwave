@@ -45,6 +45,10 @@ ALERT_HINT = frozenset({levels.WARNING, levels.ADVISORY, levels.WATCH})  # level
 QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
 OVERDUE_MAX = timedelta(hours=6)  # a feed that never completes a poll cannot hold an alert open longer
 IN_FORCE = ("active", "overdue")  # alert statuses that count as in force
+ALERT_SOURCES = frozenset(
+    {"tsunamigov", "nws", "jma"}
+)  # their batches carry alerts only and never warm the quake store
+LISTING_SOURCES = frozenset({"nws"})  # each complete batch lists every alert in force, so a missing one has ended
 SNAPSHOT_SOURCES = frozenset({"jma"})  # each report restates the whole event, so a later one replaces its predecessors
 
 
@@ -94,7 +98,7 @@ class Store:
         self._first_seen: dict[str, datetime] = {}
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
-        self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded"
+        self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded" | "withdrawn"
         self._gauge_stations: dict[str, Station] = {}
         self._readings: dict[str, dict[datetime, GaugeReading]] = {}
         self._residuals: dict[str, dict[datetime, ndbc.Residual | coops.Residual]] = {}
@@ -171,7 +175,7 @@ class Store:
                 events.extend(self._threshold_events(old, quake))
         if batch.coverage and batch.coverage not in self._coverage:
             self._coverage.append(batch.coverage)
-        if not batch.backfill and batch.source not in GAUGE_SOURCES and not (batch.alerts and not batch.quakes):
+        if not batch.backfill and batch.source not in GAUGE_SOURCES | ALERT_SOURCES:
             self.warm = True
         events.extend(self._merge_alerts(batch, clock))
         events.extend(self._merge_gauges(batch, clock, silent=batch.backfill or bool(batch.meta.get("silent"))))
@@ -395,11 +399,20 @@ class Store:
                 events.append(TsunamiIssued(record))
             elif record.level != old.level:
                 events.append(TsunamiChanged(record, old.level))
+        if batch.source in LISTING_SOURCES and answering and not batch.backfill:
+            self._withdraw_unlisted(batch)
         return [
             e
             for e in events
             if not isinstance(e, TsunamiIssued | TsunamiChanged) or self._in_force(e.alert, clock, answering)
         ]
+
+    def _withdraw_unlisted(self, batch: Batch) -> None:
+        """A complete listing no longer names an alert the source held: the source has ended it, quietly."""
+        listed = {self._alias.get(a.id, a.id) for a in batch.alerts}
+        for held in self._tsunamis.values():
+            if held.source == batch.source and held.id not in listed and held.level != levels.CANCELLATION:
+                self._closed.setdefault(held.id, "withdrawn")
 
     def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
         current = self.get_alert(alert.id)

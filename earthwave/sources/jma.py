@@ -11,7 +11,7 @@ from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.sources import levels
 from earthwave.sources.base import SourceHealth
-from earthwave.sources.tsunamigov import parse_time
+from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent
 
 log = logging.getLogger(__name__)
 
@@ -98,9 +98,15 @@ class JmaSource:
         self._interval = max(self.min_interval, float(interval_seconds))
         self._seen: dict[str, None] = {}
         self._ids_by_event: dict[str, list[str]] = {}
+        self._failures: dict[str, int] = {}
 
     def interval(self, health: SourceHealth) -> float:
         return self._interval
+
+    def _remember(self, name: str) -> None:
+        self._seen[name] = None
+        while len(self._seen) > SEEN_LIMIT:
+            del self._seen[next(iter(self._seen))]
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         response = await client.get(f"{BASE}list.json")
@@ -125,15 +131,21 @@ class JmaSource:
                     raise ValueError("detail is not an object")
                 alert = parse_detail(payload, entry)
             except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
-                log.warning("jma: skipping %s: %r", name, exc)
-                skipped = skipped or isinstance(exc, httpx.HTTPError)
+                if permanent(exc):
+                    count = self._failures[name] = self._failures.get(name, 0) + 1
+                    if count >= MAX_ENTRY_FAILURES:
+                        log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
+                        self._failures.pop(name)
+                        self._remember(name)
+                        continue
+                log.debug("jma: skipping %s: %r", name, exc)
+                skipped = True
                 continue
             earlier = self._ids_by_event.setdefault(str(entry.get("eid") or name), [])
             alert = replace(alert, references=tuple(earlier))
             earlier.append(alert.id)
-            self._seen[name] = None
-            while len(self._seen) > SEEN_LIMIT:
-                del self._seen[next(iter(self._seen))]
+            self._failures.pop(name, None)
+            self._remember(name)
             alerts.append(alert)
         log.debug("jma: %d new reports", len(alerts))
         return Batch(self.name, now, alerts=tuple(alerts), meta={"incomplete": skipped})

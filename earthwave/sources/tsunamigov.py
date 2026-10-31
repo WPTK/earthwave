@@ -3,7 +3,7 @@
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -135,7 +135,7 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert:
     )
     return TsunamiAlert(
         id=ident,
-        dedupe_key=f"{header}|{sent:%Y-%m}",
+        dedupe_key=dedupe_key(header, sent),
         source="tsunamigov",
         level=level,
         headline=headline,
@@ -150,7 +150,41 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert:
     )
 
 
-def _permanent(exc: Exception) -> bool:
+def dedupe_key(header: str, sent: datetime) -> str:
+    """The WMO header plus the month the product was issued in (the header's DDHHMM repeats every month).
+
+    The month comes from the header's day against `sent`, not from `sent` alone: two feeds stamp the same product a
+    few seconds apart, and across a month boundary that would otherwise give two keys.
+    """
+    match = re.search(r"(\d{2})\d{4}$", header)
+    anchor = sent.replace(day=1)
+    if match:
+        day = int(match[1])
+        if day > sent.day:  # issued late last month, stamped just after midnight
+            anchor = anchor - timedelta(days=1)
+        elif sent.day - day > 20:  # stamped just before midnight, issued early next month
+            anchor = anchor + timedelta(days=31)
+    return f"{header}|{anchor:%Y-%m}"
+
+
+def fallback_alert(entry: dict, now: datetime) -> TsunamiAlert:
+    """An alert built from an Atom entry alone, for a product whose CAP can never be read: better a headline than
+    a Warning nobody sees."""
+    when = entry["updated"] or now
+    title = entry["title"] or "Tsunami product"
+    return TsunamiAlert(
+        id=entry["id"],
+        dedupe_key=f"{entry['id']}|atom",
+        source="tsunamigov",
+        level=levels.level_from_text(title) or levels.INFORMATION,
+        headline=title,
+        issued=when,
+        updated=when,
+        text=f"Details unavailable: the product could not be read. {entry['bulletin_url']}".strip(),
+    )
+
+
+def permanent(exc: Exception) -> bool:
     """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse."""
     if isinstance(exc, httpx.HTTPStatusError):
         return 400 <= exc.response.status_code < 500
@@ -201,7 +235,7 @@ class TsunamiGovSource:
                             log.warning("tsunamigov: bulletin %s unavailable: %r", entry["bulletin_url"], exc)
                     alerts.append(parse_cap(cap, bulletin, entry["cap_url"]))
                 except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
-                    if not _permanent(exc):
+                    if not permanent(exc):
                         # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
                         log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], exc)
                         skipped = True
@@ -213,6 +247,7 @@ class TsunamiGovSource:
                         skipped = True
                         continue
                     log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
+                    alerts.append(fallback_alert(entry, self._clock.now()))
                 self._failures.pop(entry["id"], None)
                 self._seen[entry["id"]] = None
                 while len(self._seen) > SEEN_LIMIT:

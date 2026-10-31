@@ -10,7 +10,7 @@ from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.sources import levels
 from earthwave.sources.base import SourceHealth
-from earthwave.sources.tsunamigov import parse_time
+from earthwave.sources.tsunamigov import dedupe_key, parse_time
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def parse_feature(feature: dict) -> TsunamiAlert | None:
     text = "\n\n".join(filter(None, (props.get("description"), props.get("instruction"))))
     return TsunamiAlert(
         id=ident,
-        dedupe_key=f"{header}|{sent:%Y-%m}" if sent else header,
+        dedupe_key=dedupe_key(header, sent) if sent else header,
         source="nws",
         level=level,
         headline=props.get("headline") or event,

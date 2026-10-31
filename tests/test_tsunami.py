@@ -960,28 +960,42 @@ async def test_tsunami_screen_lists_alerts_and_shows_text():
 
 
 async def test_replay_walks_watch_warning_cancellation():
+    """Drives the recording poll by poll on a clock that only the recording moves: no real time, no speed factor."""
     path = FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl"
-    clock = ReplayClock(recording_start(path), speed=900)
+    clock = ReplayClock(recording_start(path), real=lambda: 0.0)
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     fake = RecordingNotifier()
-    app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock), notifier=fake)
+    app = EarthwaveApp(
+        config, clock=clock, transport=ReplayTransport(path, clock), notifier=fake, run_scheduler=False, ticks=False
+    )
     async with app.run_test(size=(120, 40)) as pilot:
-        await wait_for(lambda: any(a.level == levels.WARNING for a in app.store.alerts()))
-        await wait_for(
-            lambda: all(a.quake_ref == "us6000qw60" for a in app.store.alerts() if a.level == levels.WARNING)
-        )
-        await pilot.pause()
+
+        async def poll(*names):
+            for name in names:
+                await app.scheduler.poll_source(name, app.client)
+            await pilot.pause()
+            await app._outbox.join()
+
+        def titles():
+            return [n.title for n in fake.sent]
+
+        await poll("usgs", "usgs", "usgs", "usgs")  # the three startup backfills, then 2.5_day at 23:28
+        await poll("usgs")  # 23:33
+        assert clock.now() == datetime(2025, 7, 29, 23, 33, 10, tzinfo=UTC) and titles() == ["Major earthquake"]
+        await poll("tsunamigov", "nws", "jma")  # 23:36 Watch
+        assert titles() == ["Major earthquake", "Tsunami Watch"]
+        assert [a.level for a in app.store.active_alerts(clock)] == [levels.WATCH]
+        await poll("usgs")  # 23:50
+        await poll("tsunamigov", "nws")  # 23:51:30 Warning, 23:52 the NWS repeat of it
+        assert titles().index("Tsunami Watch") < titles().index("Tsunami Warning (was Watch)")
+        assert "Major earthquake" in titles()
         warning = next(a for a in app.store.alerts() if a.level == levels.WARNING)
-        assert app.store.alert_status(warning, clock) in ("active", "cancelled")  # live, not expired
-        await wait_for(lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()))
-        await pilot.pause()
-        wanted = {"Tsunami Watch", "Tsunami Warning (was Watch)", "Major earthquake"}
-        await wait_for(lambda: wanted <= {n.title for n in fake.sent})
-        await app._outbox.join()
-        titles = [n.title for n in fake.sent]
-        assert "Tsunami Watch" in titles and "Tsunami Warning (was Watch)" in titles
-        assert "Major earthquake" in titles
-        assert titles.index("Tsunami Watch") < titles.index("Tsunami Warning (was Watch)")
+        assert warning.quake_ref == "us6000qw60"
+        assert app.store.alert_status(warning, clock) == "active"
+        assert [a.level for a in app.store.active_alerts(clock)] == [levels.WARNING]
+        await poll("tsunamigov", "nws")  # 01:41 Cancel
+        assert any(a.level == levels.CANCELLATION for a in app.store.alerts())
+        assert app.store.alert_status(warning, clock) == "cancelled"
         assert len(app.store.alerts()) == 3  # NWS repeated the CAP warning: merged, not duplicated
         assert not app.dashboard.query_one("#banner").display
         assert app.store.active_alerts(clock) == []
@@ -1000,7 +1014,7 @@ def test_replay_fixture_covers_every_url_once_per_step():
     stamps = [r["ts"] for r in rows]
     assert stamps == sorted(stamps) and all(r["status"] == 200 for r in rows)
     assert sum(r["url"] == tsunamigov.FEEDS[0] for r in rows) == 3
-    assert T0.year == 2026  # fixtures replay as 2025 events on the replay clock, not the test clock
+    assert {r["ts"][:7] for r in rows} == {"2025-07"}  # replays as 2025 events, whatever the test clock says
 
 
 # --- alert correctness: lift reports, downgrades, restarts, silent feeds ------------------------------------------
