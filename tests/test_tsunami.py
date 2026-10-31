@@ -1478,3 +1478,19 @@ def test_restart_replay_of_an_alert_first_merged_inside_the_grace_raises_nothing
     kclock.advance((store.expiry(kam(1)) - kclock.now()).total_seconds() + 300)  # replay lands 5 min past expiry
     assert merge(store, kclock, kam(1)) == []
     assert store.alert_status(kam(1), kclock) == "expired"
+
+
+async def test_panel_says_awaiting_follow_up_during_the_grace_with_a_fresh_feed(kclock):
+    store = Store()
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),)), Batch("tsunamigov", NOW)])
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        kclock.advance((store.expiry(kam(1)) - kclock.now()).total_seconds() + 300)
+        await sched.poll_source("tsunamigov", client)
+    assert sched.freshness("tsunamigov") is Freshness.FRESH
+    alert = kam(1)
+    overdue = frozenset(a.id for a in store.active_alerts(kclock) if store.alert_status(a, kclock) == "overdue")
+    panel = build_panel([alert], kclock.now(), overdue=overdue, expiry=store.expiry).plain
+    assert "OVERDUE, awaiting follow-up" in panel and "not confirmed" not in panel

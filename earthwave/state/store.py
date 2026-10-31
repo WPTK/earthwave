@@ -306,7 +306,7 @@ class Store:
         seen = self._first_seen.get(alert.id)
         if alert.level not in levels.ACTIONABLE or seen is None or seen >= expiry or not expiry <= now:
             return False
-        if now < expiry + LATE_GRACE:
+        if now < expiry + LATE_GRACE:  # keep LATE_GRACE below OVERDUE_MAX
             return True
         return (
             now < expiry + OVERDUE_MAX and alert.source != answering and not self.answered_since(alert.source, expiry)
