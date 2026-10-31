@@ -1,5 +1,7 @@
 """UAT: the dashboard, the too-small message and live resizing, driven through Pilot at real terminal sizes."""
 
+from conftest import wait_until
+
 from earthwave.ui.widgets.quake_list import QuakeList
 from uat.harness import screen_text, week_app
 
@@ -20,7 +22,7 @@ async def test_dashboard_shows_list_status_and_ticker(size):
 async def test_status_bar_shows_counts_and_filter(size):
     app = week_app()
     async with app.run_test(size=size) as pilot:
-        await pilot.pause()
+        await wait_until(pilot, lambda: "Quit" in screen_text(app).splitlines()[-1], what="the footer row")
         rows = [line for line in screen_text(app).splitlines() if line.strip()]
         last = rows[-2]  # the status bar sits just above the footer
         assert "Quit" in rows[-1]

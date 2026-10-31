@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 
-from conftest import T0, make_quake
+from conftest import T0, footer_keys, make_quake
 
 from earthwave.app import EarthwaveApp, PollDone
 from earthwave.clock import ReplayClock
@@ -166,9 +166,7 @@ async def test_relaunch_offline_keeps_yesterday_and_acks_but_never_alerts(tmp_pa
         screen = app2.screen
         assert isinstance(screen, HistoryScreen)
         await app2.workers.wait_for_complete()
-        from textual.widgets._footer import FooterKey
-
-        assert [k.description for k in screen.query(FooterKey)] == [
+        assert [k.description for k in await footer_keys(pilot)] == [
             "Previous day",
             "Next day",
             "Detail",
