@@ -38,17 +38,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
     if info.alert_state == "alarm":
         text.append(" TSUNAMI ", "bold white on #7f1d1d")
-    unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
-    if info.sources and not unhealthy:
-        text.append(f" {glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
-        text.append(" feeds ok", "grey70")
-    for line in unhealthy:
-        age = f", last ok {fmt_age(line.age)}" if line.age is not None else ""
-        text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
-        word = FRESHNESS_WORDS.get(line.freshness, "incomplete")
-        text.append(f" {line.name} {word}{age}", "grey70")
-    text.append(f" {glyphs.bar} ", "grey42")
-    text.append(f"{info.shown} shown of {info.total}", "white")
+    text.append(f" {info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")
     text.append(info.filter_text, "cyan")
     text.append(f" sort:{info.sort}", "grey62")
@@ -58,6 +48,17 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.unseen:
         text.append(f" {glyphs.bar} ", "grey42")
         text.append(f" {info.unseen} unseen ", "bold black on cyan")
+    unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
+    if info.sources and not unhealthy:
+        text.append(f" {glyphs.bar} ", "grey42")
+        text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
+        text.append(" feeds ok", "grey70")
+    for index, line in enumerate(unhealthy):
+        age = f", last ok {fmt_age(line.age)}" if line.age is not None else ""
+        text.append(f" {glyphs.bar} " if index == 0 else "  ", "grey42")
+        text.append(f"{glyphs.dot}", FRESHNESS_COLORS[line.freshness])
+        word = FRESHNESS_WORDS.get(line.freshness, "incomplete")
+        text.append(f" {line.name} {word}{age}", "grey70")
     return text
 
 

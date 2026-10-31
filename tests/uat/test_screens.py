@@ -103,15 +103,7 @@ async def test_filters_modal_opens_validates_applies_and_cancels(size):
         assert app.screen is app.dashboard and app.view.min_magnitude == 6.0
 
 
-async def test_help_screen_lists_keys_and_closes_with_both_keys(size, request):
-    if size[1] <= 30:
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason="BUG: the help box (about 31 rows with border and padding) is clipped at 30 rows without "
-                "scrolling, so the 'Esc or ? to close' hint is cut off at 120x30 and 100x30",
-            )
-        )
+async def test_help_screen_lists_keys_and_closes_with_both_keys(size):
     app = week_app()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
