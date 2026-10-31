@@ -25,8 +25,12 @@ def fmt_countdown(seconds: float) -> str:
 
 
 def fmt_time(dt: datetime, time_zone: str = "local") -> str:
+    """The one timestamp format, 2026-10-31 08:00:00 EDT; Windows spells the zone out, so long names become initials."""
     shown = dt.astimezone() if time_zone == "local" else dt
-    return shown.strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+    zone = shown.tzname() or ""
+    if " " in zone:
+        zone = "".join(word[0] for word in zone.split()).upper()
+    return f"{shown:%Y-%m-%d %H:%M:%S} {zone}".strip()
 
 
 def fmt_distance(quake: Earthquake, lat: float, lon: float) -> str:

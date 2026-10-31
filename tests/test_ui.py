@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import re
 import time
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 from conftest import FIXTURES, T0, load_json, make_quake
+from rich.text import Text
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -21,9 +23,11 @@ from earthwave.state.events import QuakeNew
 from earthwave.state.store import SortKey, Store
 from earthwave.ui.glyphs import ASCII, UNICODE, resolve_glyphs
 from earthwave.ui.labels import filter_summary, fmt_age, fmt_countdown, fmt_distance, fmt_hours, fmt_time
+from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen, parse_filters
-from earthwave.ui.screens.help import HelpScreen
+from earthwave.ui.screens.help import HELP_TEXT, HelpScreen
+from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import mag_color
 from earthwave.ui.widgets.quake_list import QuakeList
 from earthwave.ui.widgets.status_bar import SourceLine, StatusInfo, build_status
@@ -311,7 +315,7 @@ async def test_live_replay_session_runs_through_the_app():
         await pilot.pause()
         assert app.tracker.kind_of("replay_new1") == "major"
         assert app.scheduler.freshness("usgs") is Freshness.FRESH
-        assert "usgs" in str(app.dashboard.query_one("#status").render())
+        assert "tsunamigov failed" in str(app.dashboard.query_one("#status").render())
         assert "Replay Test Region" in str(app.dashboard.query_one("Ticker").render())
 
 
@@ -339,7 +343,7 @@ def test_label_helpers():
         filter_summary(__import__("earthwave.state.store", fromlist=["ViewFilter"]).ViewFilter(2.5, 24, "chile"))
         == 'M2.5+ 24h "chile"'
     )
-    assert fmt_time(T0, "UTC").startswith("2026-10-31 12:00:00")
+    assert fmt_time(T0, "UTC") == "2026-10-31 12:00:00 UTC"
     assert fmt_distance(make_quake(lat=1.0, lon=0.0), 0.0, 0.0) == "111km N"
     assert mag_color(2.9) == "grey62" and mag_color(4.5) == "green" and mag_color(7.0) == "bold red"
 
@@ -361,9 +365,44 @@ def test_status_bar_text():
         unseen=3,
     )
     plain = build_status(info, UNICODE).plain
-    assert "usgs 12s" in plain and "nws" in plain and "10 shown of 40" in plain
+    assert "usgs" not in plain and "nws failed" in plain and "10 shown of 40" in plain
     assert "next 0:47" in plain and "3 unseen" in plain and "M2.5+ 24h" in plain
     assert "unseen" not in build_status(StatusInfo((), 0, 0, None, "x", 0), ASCII).plain
+
+
+def test_status_bar_healthy_feeds_are_one_indicator():
+    fresh = tuple(SourceLine(n, Freshness.FRESH, 5) for n in ("usgs", "nws", "jma"))
+    plain = build_status(StatusInfo(fresh, 1, 1, None, "x", 0), UNICODE).plain
+    assert "feeds ok" in plain and "usgs" not in plain
+    stale = (fresh[0], SourceLine("nws", Freshness.STALE, 900))
+    plain = build_status(StatusInfo(stale, 1, 1, None, "x", 0), ASCII).plain
+    assert "nws stale 15m" in plain and "feeds ok" not in plain and "usgs" not in plain
+
+
+async def test_empty_list_says_what_to_do():
+    app = week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        empty = app.dashboard.query_one("#empty")
+        assert not empty.display
+        app.set_query("zzzz-no-such-place")
+        await pilot.pause()
+        assert empty.display and "No quakes match" in str(empty.render()) and "Press f" in str(empty.render())
+
+
+async def test_help_lists_every_visible_binding_on_one_line_each():
+    names = {"slash": "/", "question_mark": "?", "escape": "Esc"}
+    keys = {
+        names.get(key, key)
+        for screen in (DashboardScreen, TsunamiScreen, DetailScreen, EarthwaveApp)
+        for binding in screen.BINDINGS
+        if binding.show
+        for key in binding.key.split(",")
+    }
+    assert keys
+    for key in keys:
+        assert re.search(rf"(?<!\w){re.escape(key)}(?!\w)", HELP_TEXT), key
+    assert all(len(Text.from_markup(line).plain) <= 74 for line in HELP_TEXT.splitlines())
 
 
 # --- snapshot ---------------------------------------------------------------------------------------------------

@@ -2,6 +2,17 @@ Screen {
     background: $surface;
 }
 
+* {
+    scrollbar-background: $surface;
+    scrollbar-background-hover: $surface;
+    scrollbar-background-active: $surface;
+    scrollbar-color: $primary-darken-2;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+}
+
 #ticker {
     height: 1;
     background: $panel;
@@ -21,6 +32,14 @@ Screen {
 
 #quakes {
     height: 1fr;
+    overflow-x: hidden;
+}
+
+#empty {
+    display: none;
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
 }
 
 #right {

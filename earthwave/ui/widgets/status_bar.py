@@ -1,4 +1,4 @@
-"""One-line status bar: per-source freshness dots, counts, next-poll countdown, filter summary, unseen badge."""
+"""One-line status bar: feed health, counts, next-poll countdown, filter summary, unseen badge."""
 
 from dataclasses import dataclass
 
@@ -11,6 +11,7 @@ from earthwave.ui.labels import fmt_age, fmt_countdown
 from earthwave.ui.theme import FRESHNESS_COLORS
 
 ALERT_STATES = ("info", "active", "alarm")
+FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +37,14 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
     if info.alert_state == "alarm":
         text.append(" TSUNAMI ", "bold white on #7f1d1d")
-    for line in info.sources:
-        text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
+    unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH]
+    if info.sources and not unhealthy:
+        text.append(f" {glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
+        text.append(" feeds ok", "grey70")
+    for line in unhealthy:
         age = f" {fmt_age(line.age)}" if line.age is not None else ""
-        text.append(f" {line.name}{age}", "grey70")
+        text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
+        text.append(f" {line.name} {FRESHNESS_WORDS[line.freshness]}{age}", "grey70")
     text.append(f" {glyphs.bar} ", "grey42")
     text.append(f"{info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")
