@@ -114,6 +114,17 @@ class Scheduler:
                 earliest = max(now, status.last_poll + self._sources[name].min_interval)
                 status.next_due = min(status.next_due, earliest)
 
+    def reschedule(self, name: str, immediate: bool = False) -> None:
+        """A source's cadence or selection changed: poll it again as soon as its new interval (or `immediate`) allows.
+
+        Only ever moves the next poll earlier, never into a backoff, and never below the source's minimum interval.
+        """
+        status, source = self.statuses[name], self._sources[name]
+        if status.last_poll is None or status.health.failures:
+            return
+        target = self._clock.monotonic() if immediate else status.last_poll + source.interval(status.health)
+        status.next_due = min(status.next_due, max(target, status.last_poll + source.min_interval))
+
     def due(self) -> list[str]:
         now = self._clock.monotonic()
         return [name for name, status in self.statuses.items() if status.next_due <= now]

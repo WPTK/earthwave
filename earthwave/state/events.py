@@ -78,10 +78,12 @@ class GaugeAnomaly:
     station_id: str
     residual_m: float
     ts: datetime
+    name: str = ""
+    threshold_m: float = 0.0
     kind: ClassVar[str] = "gauge_anomaly"
 
     def __str__(self) -> str:
-        return f"gauge anomaly {self.station_id}: {self.residual_m:+.3f} m"
+        return f"gauge anomaly {self.name or self.station_id}: {self.residual_m:+.3f} m"
 
 
 @dataclass(frozen=True, slots=True)
