@@ -111,7 +111,7 @@ class QuakeList(ScrollView, can_focus=True):
         width = self.size.width
         index = scroll_y + y
         if index >= len(self.rows):
-            return Strip.blank(width)
+            return Strip.blank(width, Style())
         return self._row_strip(self.rows[index], index == self.cursor, width).crop_extend(
             scroll_x, scroll_x + width, Style()
         )

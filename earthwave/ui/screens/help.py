@@ -7,8 +7,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 HELP_TEXT = """\
-[b]earthwave[/b]  earthquakes worldwide
-
 [b]Keys[/b]
   j/k, arrows  move          Enter  quake detail
   f  filters                 s      cycle sort

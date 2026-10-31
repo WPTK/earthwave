@@ -77,9 +77,12 @@ class DashboardScreen(Screen):
 
     def _layout(self, width: int, height: int) -> None:
         small = is_too_small(width, height)
+        was_small = self.has_class("too-small")
         self.set_class(small, "too-small")
         if small:
             self.query_one(TooSmall).show(width, height)
+        elif was_small:  # hiding the widgets dropped focus; give it back once they are shown again
+            self.call_after_refresh(self._focus_main)
         self.set_class(not self.show_map or width < MAP_MIN_WIDTH, "no-map")
         self.set_class(width < MAP_MIN_WIDTH, "narrow")
 
@@ -186,10 +189,12 @@ class DashboardScreen(Screen):
         self._layout(self.size.width, self.size.height)
         self.call_after_refresh(self.refresh_view)
 
+    def _focus_main(self) -> None:
+        (self.query_one(MapPanel) if self.has_class("map-full") else self.query_one(QuakeList)).focus()
+
     def action_fullscreen_map(self) -> None:
-        full = not self.has_class("map-full")
-        self.set_class(full, "map-full")
-        (self.query_one(MapPanel) if full else self.query_one(QuakeList)).focus()
+        self.set_class(not self.has_class("map-full"), "map-full")
+        self._focus_main()
         self.call_after_refresh(self.refresh_view)
 
     def action_zoom_map(self) -> None:
