@@ -15,7 +15,7 @@ HELP_TEXT = """\
   t  tsunami alerts          a      acknowledge alerts, new rows
   r  refresh now             ?      this help
   o  tide gauges near quake  Tab    focus map; arrows pan
-  q  quit
+  h  history by day          q      quit
   Detail: b open page, y copy URL, Esc back
 
 [b]Colors[/b]

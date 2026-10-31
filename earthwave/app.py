@@ -13,7 +13,7 @@ from textual.message import Message
 
 from earthwave.clock import Clock, SystemClock
 from earthwave.config import Config
-from earthwave.models import Earthquake
+from earthwave.models import Batch, Earthquake
 from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
@@ -26,15 +26,17 @@ from earthwave.sources.ndbc import DartSource
 from earthwave.sources.nws import NwsSource
 from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
-from earthwave.state.events import GaugeAnomaly, QuakeMajor, SourceDegraded, SourceRecovered
+from earthwave.state.events import GaugeAnomaly, QuakeMajor, QuakeNew, SourceDegraded, SourceRecovered
 from earthwave.state.gauges import GaugeSelection, choose_stations
+from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification
-from earthwave.state.store import SortKey, Store, ViewFilter
+from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
 from earthwave.ui.screens.help import HelpScreen
+from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
@@ -71,6 +73,9 @@ class EarthwaveApp(App):
         transport: httpx.AsyncBaseTransport | None = None,
         notifier: Notifier | None = None,
         bell: bool = False,
+        history: History | None = None,
+        offline: bool = False,
+        history_error: str | None = None,
     ):
         super().__init__()
         self.config = config
@@ -96,7 +101,10 @@ class EarthwaveApp(App):
         self._last_anomaly: GaugeAnomaly | None = None
         self._ticks = 0
         self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
-        self.scheduler_running = run_scheduler
+        self.offline = offline
+        self.history = history
+        self.history_error = history_error  # why there is no history, when it was wanted
+        self.scheduler_running = run_scheduler and not offline
         self.ticking = ticks
         self.dashboard = DashboardScreen()
         self._previous_visible: set[str] = set()
@@ -125,6 +133,7 @@ class EarthwaveApp(App):
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
     def on_mount(self) -> None:
+        self._restore_history()
         self.push_screen(self.dashboard)
         if self.notifier is not None:
             self._sender = asyncio.get_running_loop().create_task(self._send_loop(self.notifier))
@@ -132,6 +141,32 @@ class EarthwaveApp(App):
             self.set_interval(TICK_SECONDS, self._tick)
         if self.scheduler_running:
             self._run_scheduler()
+        if self.history is None and self.history_error:
+            self.notify(
+                f"History unavailable, nothing will be saved: {self.history_error}", severity="warning", timeout=10
+            )
+        if self.offline:
+            if self.history is None:
+                self.notify("Offline, and there is no saved history to show", severity="warning", timeout=10)
+            else:
+                self.notify("Offline: showing saved history, no data is fetched", timeout=8)
+
+    def _restore_history(self) -> None:
+        """Refill the store from saved quakes, silently (no events, so no flash storm and no stale alert: only quakes
+        are loaded), and bring back the highlight of quakes that were announced but never seen."""
+        if self.history is None:
+            return
+        try:
+            quakes, unseen = self.history.load_since(self.clock.now() - RETAIN)
+        except Exception as exc:
+            log.exception("history could not be read; continuing without it")
+            self.history.close_now()
+            self.history, self.history_error = None, f"{type(exc).__name__}: {exc}"
+            return
+        self.history.start()
+        self.store.merge(Batch("history", self.clock.now(), quakes=tuple(quakes), backfill=True), self.clock)
+        major = {q.id for q in quakes if q.id in unseen and q.mag >= self.config.alerts.major_magnitude}
+        self.tracker.restore(unseen - major, major)
 
     @work(exclusive=True, exit_on_error=False)
     async def _run_scheduler(self) -> None:
@@ -159,11 +194,16 @@ class EarthwaveApp(App):
     async def on_unmount(self) -> None:
         if self._sender is not None:
             self._sender.cancel()
+        if self.history is not None:
+            self.history.mark_seen(self.tracker.take_seen())
+            await self.history.close()
         await self.client.aclose()
 
     def _tick(self) -> None:
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
         self.tracker.prune()
+        if self.history is not None:
+            self.history.mark_seen(self.tracker.take_seen())
         self.sync_tsunami()
         self.sync_gauges()
         self._ticks += 1
@@ -191,6 +231,7 @@ class EarthwaveApp(App):
         result = message.result
         self.tracker.observe(list(result.events))
         self._notify_desktop(list(result.events))
+        self._record_history(result)
         for event in result.events:
             if isinstance(event, QuakeMajor):
                 q = event.quake
@@ -215,6 +256,18 @@ class EarthwaveApp(App):
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
         self.refresh_gauges()
+
+    def _record_history(self, result: PollResult) -> None:
+        """Save what the store now holds for the batch's quakes (not the raw batch: an older revision never wins)."""
+        if self.history is None:
+            return
+        batch = result.batch
+        if batch is None or batch.not_modified or not (batch.quakes or batch.alerts):
+            return
+        unseen = {e.quake.id for e in result.events if isinstance(e, QuakeNew | QuakeMajor)}
+        current = (q for b in batch.quakes if (q := self.store.get(b.id)) is not None)
+        merged = {a.id: a for b in batch.alerts if (a := self.store.get_alert(b.id)) is not None}  # one per product
+        self.history.record(current, unseen, merged.values(), batch.fetched_at)
 
     def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
         """(tsunami feeds late or failing, whether no tsunami feed is fresh). A feed not polled yet is not an outage,
@@ -322,7 +375,7 @@ class EarthwaveApp(App):
     # --- view changes -------------------------------------------------------------------------------------------
 
     def _backfill_if_needed(self, force: bool) -> None:
-        if not self.config.sources.usgs:
+        if not self.config.sources.usgs or self.offline:
             return
         if force or not self.store.is_covered(self.view.hours, self.view.min_magnitude):
             end = self.clock.now()
@@ -378,6 +431,12 @@ class EarthwaveApp(App):
             self.sync_gauges()
         if not isinstance(self.screen, ObservationsScreen):
             self.push_screen(ObservationsScreen(quake))
+
+    def open_history(self) -> None:
+        if self.history is None:
+            self.notify(self.history_error or "No saved history is available", severity="warning", timeout=4)
+        elif not isinstance(self.screen, HistoryScreen):
+            self.push_screen(HistoryScreen())
 
     def open_detail(self, quake: Earthquake) -> None:
         self.push_screen(DetailScreen(quake))

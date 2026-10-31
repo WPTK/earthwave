@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import json
 import logging
+import sqlite3
 import sys
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ from earthwave.models import Batch, Earthquake
 from earthwave.net import RecordingTransport, ReplayTransport, recording_start
 from earthwave.notify.desktop import default_notifier
 from earthwave.sources.usgs import parse_collection
+from earthwave.state.history import History, default_path
 from earthwave.state.store import Store
 from earthwave.ui.widgets.quake_list import QuakeList
 
@@ -135,15 +137,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record", metavar="PATH", help="append every HTTP exchange to a JSONL recording")
     parser.add_argument("--replay", metavar="PATH", help="serve a recording instead of the network")
     parser.add_argument("--speed", type=float, default=1.0, metavar="N", help="replay speed multiplier (default 1)")
+    parser.add_argument("--offline", action="store_true", help="fetch nothing; browse the saved history")
     parser.add_argument("--notify", action="store_true", help="force toasts and bell on (off under replay)")
     parser.add_argument("--log", metavar="PATH", help="write a rotating log file (default level WARNING)")
     parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file")
     return parser
 
 
+def open_history(config: Config, clock: Clock) -> tuple[History | None, str | None]:
+    """The saved-history database and None, or None and the reason it could not be opened (the app still runs)."""
+    history = History(default_path(), config.history.retain_days, clock)
+    try:
+        history.open()
+    except (sqlite3.Error, OSError) as exc:
+        logging.getLogger(__name__).warning("history unavailable (%s): %r", history.path, exc)
+        return None, f"{type(exc).__name__}: {exc}"
+    return history, None
+
+
 def run(args: argparse.Namespace) -> int:
     if args.record and args.replay:
         print("earthwave: --record and --replay cannot be combined", file=sys.stderr)
+        return 2
+    if args.offline and (args.record or args.replay):
+        print("earthwave: --offline cannot be combined with --record or --replay", file=sys.stderr)
         return 2
     try:
         config = Config() if args.no_config else load_config(Path(args.config) if args.config else None)
@@ -171,7 +188,18 @@ def run(args: argparse.Namespace) -> int:
     notifying = args.notify or (config.notify.desktop and not args.replay)
     bell = args.notify or (config.notify.bell and not args.replay)
     notifier = default_notifier() if notifying else None
-    EarthwaveApp(config, clock=clock, transport=transport, notifier=notifier, bell=bell).run()
+    # a replayed past must not enter the real history
+    history, history_error = (None, None) if args.replay else open_history(config, clock)
+    EarthwaveApp(
+        config,
+        clock=clock,
+        transport=transport,
+        notifier=notifier,
+        bell=bell,
+        history=history,
+        offline=args.offline,
+        history_error=history_error,
+    ).run()
     return 0
 
 

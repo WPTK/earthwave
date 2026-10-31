@@ -35,6 +35,7 @@ class DashboardScreen(Screen):
         Binding("z", "zoom_map", "Zoom", show=False),
         Binding("t", "tsunami", "Tsunami"),
         Binding("o", "observations", "Gauges"),
+        Binding("h", "history", "History"),
         Binding("a", "ack_all", "Ack all"),
         Binding("r", "refresh_now", "Refresh"),
         Binding("question_mark", "help", "Help"),
@@ -207,6 +208,9 @@ class DashboardScreen(Screen):
         quake = self.query_one(QuakeList).selected
         if quake is not None:
             self.earthwave.open_observations(quake)
+
+    def action_history(self) -> None:
+        self.earthwave.open_history()
 
     def action_tsunami(self) -> None:
         self.earthwave.open_tsunami()

@@ -75,19 +75,26 @@ class QuakeList(ScrollView, can_focus=True):
     # --- data ---------------------------------------------------------------------------------------------------
 
     def set_rows(self, rows: list[Earthquake]) -> None:
-        """Replace the rows, keeping the cursor on the same quake if it is still listed."""
-        selected = self.selected
+        """Replace the rows. The cursor stays on its quake and, if it was on screen, on the same screen line (kept
+        visible after a reorder); a list scrolled to the top stays at the top. A cursor scrolled out of sight leaves
+        the view anchored on its top row."""
+        selected, height, scroll = self.selected, max(self.size.height, 1), self.scroll_offset.y
+        line = self.cursor - scroll if selected is not None and 0 <= self.cursor - scroll < height else None
+        top = self.rows[scroll].id if 0 < scroll < len(self.rows) else None
         self.rows = rows
-        if selected is not None:
-            for i, quake in enumerate(rows):
-                if quake.id == selected.id:
-                    self.cursor = i
-                    break
-            else:
-                self.cursor = min(self.cursor, max(len(rows) - 1, 0))
+        found = selected is not None and any(q.id == selected.id for q in rows)
+        if found:
+            self.cursor = next(i for i, q in enumerate(rows) if q.id == selected.id)
         else:
-            self.cursor = 0
+            self.cursor = 0 if selected is None else min(self.cursor, max(len(rows) - 1, 0))
         self.virtual_size = Size(max(self.size.width, 1), len(rows))
+        target = None
+        if found and line is not None:
+            target = 0 if scroll == 0 and self.cursor < height else max(self.cursor - line, 0)
+        elif top is not None:
+            target = next((i for i, q in enumerate(rows) if q.id == top), None)
+        if target is not None:
+            self.scroll_to(y=target, animate=False, immediate=True)
         self.refresh()
 
     @property
