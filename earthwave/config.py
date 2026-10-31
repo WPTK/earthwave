@@ -199,9 +199,10 @@ def parse_config(data: dict[str, Any]) -> Config:
         if not isinstance(raw, dict):
             raise ConfigError(f"[{fld.name}] must be a table")
         defaults = cls()
+        known = {f.name for f in dataclasses.fields(cls)}
         values = {}
         for key, value in raw.items():
-            if not hasattr(defaults, key) or isinstance(getattr(cls, key, None), property):
+            if key not in known:
                 raise ConfigError(f"unknown key [{fld.name}] {key}")
             values[key] = _coerce(fld.name, key, value, getattr(defaults, key))
         sections[fld.name] = cls(**values)

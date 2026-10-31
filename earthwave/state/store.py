@@ -98,6 +98,7 @@ class Store:
         self._first_seen: dict[str, datetime] = {}
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
+        self._sources: dict[str, set[str]] = {}  # alert id -> every source that has confirmed it
         self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded" | "withdrawn"
         self._gauge_stations: dict[str, Station] = {}
         self._readings: dict[str, dict[datetime, GaugeReading]] = {}
@@ -376,10 +377,12 @@ class Store:
                 record = self._merge_duplicate(old, alert)
                 self._tsunamis[old.id] = record
                 self._alias[alert.id] = old.id
+                self._sources[old.id].add(alert.source)
             else:
                 record = alert
                 self._tsunamis[alert.id] = alert
                 self._first_seen[alert.id] = clock.now()
+                self._sources[alert.id] = {alert.source}
             self._by_key[alert.dedupe_key] = record.id
             closed = self._close_referenced(record)
             if silent:
@@ -410,8 +413,16 @@ class Store:
     def _withdraw_unlisted(self, batch: Batch) -> None:
         """A complete listing no longer names an alert the source held: the source has ended it, quietly."""
         listed = {self._alias.get(a.id, a.id) for a in batch.alerts}
+        for rid in listed:
+            if self._closed.get(rid) == "withdrawn":  # listed again: it never ended
+                del self._closed[rid]
         for held in self._tsunamis.values():
-            if held.source == batch.source and held.id not in listed and held.level != levels.CANCELLATION:
+            # Only a record this source alone vouches for: one a second source also carries is not its to end.
+            if (
+                held.id not in listed
+                and held.level != levels.CANCELLATION
+                and self._sources.get(held.id) == {batch.source}
+            ):
                 self._closed.setdefault(held.id, "withdrawn")
 
     def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
@@ -497,6 +508,7 @@ class Store:
             del self._tsunamis[alert.id]
             self._closed.pop(alert.id, None)
             self._first_seen.pop(alert.id, None)
+            self._sources.pop(alert.id, None)
             self._by_key = {k: v for k, v in self._by_key.items() if v != alert.id}
             self._alias = {k: v for k, v in self._alias.items() if v != alert.id}
 

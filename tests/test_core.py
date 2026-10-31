@@ -277,6 +277,7 @@ def test_home_at_null_island_counts_as_unset():
         "[alerts]\nmajor_magnitde = 5.0",
         "[home]\nradius = 200",
         "[extra]\nx = 1",
+        '[view]\n__init__ = "x"',
     ],
 )
 def test_non_finite_huge_and_unknown_config_values_raise(toml):
@@ -316,6 +317,7 @@ def test_a_crashed_app_exits_non_zero(monkeypatch):
             pass
 
     monkeypatch.setattr(cli, "EarthwaveApp", Crashed)
+    monkeypatch.setattr(cli, "open_history", lambda config, clock: (None, None))
     assert cli.main(["--no-config"]) == 1
 
 

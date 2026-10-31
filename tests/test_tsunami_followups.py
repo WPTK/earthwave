@@ -1,15 +1,17 @@
 """Leftovers of the tsunami alert review: fallback alerts, shown expiry, delisted NWS alerts, warm-up, dedupe month."""
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
 import pytest
-from test_tsunami import NOW, JmaFeed, kam, merge, nws_alert
+from conftest import FIXTURES
+from test_tsunami import NOW, TG, JmaFeed, kam, merge, nws_alert, read
 
 from earthwave.clock import ReplayClock
 from earthwave.models import Batch
-from earthwave.sources import jma, levels, tsunamigov
+from earthwave.sources import jma, levels, nws, tsunamigov
 from earthwave.state.store import Store
 from earthwave.ui.widgets.tsunami_panel import build_panel
 
@@ -17,40 +19,6 @@ from earthwave.ui.widgets.tsunami_panel import build_panel
 @pytest.fixture
 def kclock() -> ReplayClock:
     return ReplayClock(NOW, real=lambda: 0.0)
-
-
-def atom_with(title: str, updated: str = "2026-10-25T02:26:53Z") -> str:
-    return (
-        "<feed xmlns='http://www.w3.org/2005/Atom'><entry><id>urn:uuid:bad-1</id>"
-        f"<title>{title}</title><updated>{updated}</updated>"
-        "<link rel='alternate' href='https://www.tsunami.gov/events/PAAQ/x/WEAK53.txt'/>"
-        "<link type='application/cap+xml' href='https://www.tsunami.gov/events/PAAQ/x/PAAQCAP.xml'/>"
-        "</entry></feed>"
-    )
-
-
-async def test_an_unreadable_cap_still_raises_an_alert_from_its_atom_entry(clock):
-    def handler(request):
-        url = str(request.url)
-        if url == tsunamigov.FEEDS[0]:
-            return httpx.Response(200, text=atom_with("Tsunami Warning Number 2"))
-        if url == tsunamigov.FEEDS[1]:
-            return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
-        return httpx.Response(200, text="<not-cap/>")  # parses as XML, is not a CAP product
-
-    source = tsunamigov.TsunamiGovSource(clock)
-    seen = []
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        for _ in range(tsunamigov.MAX_ENTRY_FAILURES):
-            seen.append((await source.fetch(client, None)).alerts)
-        later = await source.fetch(client, None)
-    assert all(alerts == () for alerts in seen[:-1])
-    (alert,) = seen[-1]
-    assert alert.id == "urn:uuid:bad-1" and alert.level == levels.WARNING
-    assert alert.headline == "Tsunami Warning Number 2" and alert.issued == datetime(
-        2026, 10, 25, 2, 26, 53, tzinfo=UTC
-    )
-    assert later.alerts == ()  # given up on, then left alone
 
 
 def test_panel_shows_the_store_expiry_for_an_alert_without_one(kclock):
@@ -122,3 +90,97 @@ async def test_jma_keeps_retrying_through_an_outage():
         assert (await feed.poll()).meta["incomplete"]
     feed.fail = set()
     assert len((await feed.poll()).alerts) == 1
+
+
+async def fallback_for(clock, category: str):
+    atom = read(TG / "PAAQAtom.xml").replace("</strong> Information<br/>", f"</strong> {category}<br/>")
+
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=atom)
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
+        return httpx.Response(200, text="<not-cap/>")  # parses as XML, is not a CAP product
+
+    source = tsunamigov.TsunamiGovSource(clock)
+    batches = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(tsunamigov.MAX_ENTRY_FAILURES + 1):
+            batches.append(await source.fetch(client, None))
+    return batches
+
+
+async def test_an_unreadable_cap_still_raises_an_alert_from_its_atom_entry(clock):
+    batches = await fallback_for(clock, "Information")
+    assert all(b.alerts == () for b in batches[: tsunamigov.MAX_ENTRY_FAILURES - 1])
+    (alert,) = batches[tsunamigov.MAX_ENTRY_FAILURES - 1].alerts
+    assert batches[-1].alerts == ()  # given up on, then left alone
+    assert alert.level == levels.INFORMATION  # the title is a region name; the level is the Category line
+    assert "Bonin Islands" in alert.headline
+    assert alert.issued == alert.updated == datetime(2026, 10, 25, 2, 26, 53, tzinfo=UTC)
+    assert alert.dedupe_key == "WEAK53 PAAQ 250226|2026-10"  # what a CAP-built alert without a bulletin gets
+
+
+async def test_the_fallback_alert_takes_its_level_from_the_category_line(clock):
+    (alert,) = (await fallback_for(clock, "Warning"))[tsunamigov.MAX_ENTRY_FAILURES - 1].alerts
+    assert alert.level == levels.WARNING
+
+
+def listed(clock, *alerts, **meta):
+    return Batch("nws", clock.now(), alerts=tuple(alerts), meta=meta)
+
+
+def test_a_withdrawn_nws_alert_comes_back_when_it_is_listed_again(kclock):
+    store = Store()
+    alert = nws_alert()
+    kclock.advance_to(alert.updated)
+    store.merge(listed(kclock, alert), kclock)
+    store.merge(listed(kclock), kclock)
+    assert store.active_alerts(kclock) == []
+    store.merge(listed(kclock, alert), kclock)
+    assert [a.id for a in store.active_alerts(kclock)] == [alert.id]
+
+
+def test_relisting_never_reopens_a_cancelled_alert(kclock):
+    store = Store()
+    alert = nws_alert()
+    kclock.advance_to(alert.updated)
+    store.merge(listed(kclock, alert), kclock)
+    store._closed[alert.id] = "cancelled"
+    store.merge(listed(kclock, alert), kclock)
+    assert store.alert_status(alert, kclock) == "cancelled"
+
+
+def test_a_record_another_source_confirmed_is_not_withdrawn_by_nws(kclock):
+    store = Store()
+    alert = nws_alert()
+    kclock.advance_to(alert.updated)
+    store.merge(listed(kclock, alert), kclock)
+    store.merge(Batch("tsunamigov", kclock.now(), alerts=(replace(alert, id="cap-1", source="tsunamigov"),)), kclock)
+    store.merge(listed(kclock), kclock)
+    assert len(store.active_alerts(kclock)) == 1
+
+
+def nws_reply(clock, payload):
+    return nws.NwsSource(clock), httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+
+
+async def test_an_nws_reply_without_a_features_list_is_an_error_not_an_empty_listing(clock):
+    for payload in ({}, {"features": None}, [], {"features": {}}):
+        source, transport = nws_reply(clock, payload)
+        async with httpx.AsyncClient(transport=transport) as client:
+            with pytest.raises(ValueError):
+                await source.fetch(client, None)
+
+
+async def test_an_nws_reply_with_a_skipped_feature_is_incomplete(clock):
+    good = json.loads(read(FIXTURES / "nws" / "tsunami_warning.geojson"))
+    good["features"].append({"properties": None})
+    source, transport = nws_reply(clock, good)
+    async with httpx.AsyncClient(transport=transport) as client:
+        batch = await source.fetch(client, None)
+    assert batch.meta["incomplete"] and len(batch.alerts) == 1
+    source, transport = nws_reply(clock, json.loads(read(FIXTURES / "nws" / "tsunami_warning.geojson")))
+    async with httpx.AsyncClient(transport=transport) as client:
+        assert not (await source.fetch(client, None)).meta["incomplete"]

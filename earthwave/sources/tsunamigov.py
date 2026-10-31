@@ -37,6 +37,13 @@ def _text(node: ET.Element | None) -> str:
     return " ".join((node.text or "").split()) if node is not None else ""
 
 
+def category(entry: ET.Element) -> str:
+    """The 'Category:' line of an entry's summary (Information, Watch, Advisory, Warning ...); titles are regions."""
+    summary = entry.find(f"{ATOM}summary")
+    match = re.search(r"Category:\s*([A-Za-z]+)", " ".join(summary.itertext())) if summary is not None else None
+    return match[1] if match else ""
+
+
 def parse_atom(xml: str) -> list[dict]:
     """Entries of an Atom feed as dicts: id, title, updated, cap_url, bulletin_url."""
     root = ET.fromstring(xml)
@@ -55,6 +62,7 @@ def parse_atom(xml: str) -> list[dict]:
                 "updated": parse_time(_text(entry.find(f"{ATOM}updated"))),
                 "cap_url": cap_url,
                 "bulletin_url": bulletin_url,
+                "category": category(entry),
             }
         )
     return entries
@@ -167,17 +175,22 @@ def dedupe_key(header: str, sent: datetime) -> str:
     return f"{header}|{anchor:%Y-%m}"
 
 
-def fallback_alert(entry: dict, now: datetime) -> TsunamiAlert:
+def fallback_alert(entry: dict) -> TsunamiAlert:
     """An alert built from an Atom entry alone, for a product whose CAP can never be read: better a headline than
-    a Warning nobody sees."""
-    when = entry["updated"] or now
-    title = entry["title"] or "Tsunami product"
+    a Warning nobody sees. The level is the summary's Category line (INFORMATION when it names none) and the time
+    is the entry's `updated`. The key is the one a CAP-built alert without a bulletin gets, so the same product
+    from another feed still merges. It carries no quake link: the entry has the epicentre but not the origin time."""
+    when = entry["updated"]
+    region = entry["title"] or "Tsunami product"
+    kind = entry["category"]
+    match = PRODUCT_URL.search(entry["cap_url"])
+    center, product = (match.group(1), match.group(2)) if match else ("TSUN", "XXXX")
     return TsunamiAlert(
         id=entry["id"],
-        dedupe_key=f"{entry['id']}|atom",
+        dedupe_key=dedupe_key(f"{product} {center} {when:%d%H%M}", when) if when else f"{entry['id']}|atom",
         source="tsunamigov",
-        level=levels.level_from_text(title) or levels.INFORMATION,
-        headline=title,
+        level=levels.level_from_text(kind) or levels.INFORMATION,
+        headline=f"Tsunami {kind.lower()} {region}" if kind else f"Tsunami product {region}",
         issued=when,
         updated=when,
         text=f"Details unavailable: the product could not be read. {entry['bulletin_url']}".strip(),
@@ -247,7 +260,7 @@ class TsunamiGovSource:
                         skipped = True
                         continue
                     log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
-                    alerts.append(fallback_alert(entry, self._clock.now()))
+                    alerts.append(fallback_alert(entry))
                 self._failures.pop(entry["id"], None)
                 self._seen[entry["id"]] = None
                 while len(self._seen) > SEEN_LIMIT:

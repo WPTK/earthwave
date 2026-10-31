@@ -748,18 +748,51 @@ async def test_osascript_escapes_quotes_and_backslashes(monkeypatch):
 HOSTILE = 'Quake $(Start-Process calc) `whoami` "quoted" \'single\' ]]> <b>x</b>\n"@\nStart-Process calc\x00'
 
 
+def fake_run(calls, returncode=0, stderr=""):
+    import types
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        return types.SimpleNamespace(returncode=returncode, stderr=stderr)
+
+    return run
+
+
 async def test_windows_toast_keeps_feed_text_out_of_the_script(monkeypatch):
     from earthwave.notify.desktop import TOAST_SCRIPT
 
     calls = []
-    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls))
     await WindowsToast().send(note(title=HOSTILE, body=HOSTILE))
     ((cmd, kw),) = calls
-    assert cmd[0] == "powershell.exe" and cmd[-1] == TOAST_SCRIPT  # the script is the fixed constant
+    assert cmd[-1] == TOAST_SCRIPT  # the script is the fixed constant
     assert "Start-Process" not in " ".join(cmd) and "whoami" not in " ".join(cmd)
     assert kw["env"]["EARTHWAVE_TOAST_TITLE"].startswith("Quake $(Start-Process calc)")  # the text rides in env
     assert "\x00" not in kw["env"]["EARTHWAVE_TOAST_BODY"]
     assert kw["timeout"] > 0
+
+
+async def test_windows_toast_uses_the_system_powershell_and_never_touches_the_console(monkeypatch):
+    calls = []
+    monkeypatch.setenv("SYSTEMROOT", "C:\\Windows")
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run(calls))
+    await WindowsToast().send(note())
+    ((cmd, kw),) = calls
+    assert cmd[0].replace("\\", "/").lower() == "c:/windows/system32/windowspowershell/v1.0/powershell.exe"
+    assert "-WindowStyle" not in cmd  # it hides the user's shared console
+    assert kw["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+async def test_windows_toast_logs_a_failing_powershell(monkeypatch, caplog):
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", fake_run([], returncode=1, stderr="blocked"))
+    await WindowsToast().send(note())
+    assert "blocked" in caplog.text
+
+
+def test_toast_text_keeps_unicode_spaces():
+    from earthwave.notify.desktop import _plain
+
+    assert _plain("M7.0\u00a0Kuril\u3000Islands\x00\x07") == "M7.0 Kuril Islands"
 
 
 async def test_windows_toast_times_out(monkeypatch, caplog):

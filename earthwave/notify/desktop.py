@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Protocol
 
 from earthwave.state.rules import Notification
@@ -58,24 +59,34 @@ TOAST_TIMEOUT = 10  # seconds before a stuck PowerShell is killed
 
 
 def _plain(text: str) -> str:
-    """Drop control characters (a NUL cannot go in an environment variable; the rest cannot show in a toast)."""
-    return "".join(ch for ch in text if ch.isprintable() or ch in "\n\t")
+    """Spaces of any kind become one plain space; other control characters go (a NUL cannot be in an environment)."""
+    return "".join(" " if ch.isspace() and ch != "\n" else ch for ch in text if ch.isprintable() or ch.isspace())
+
+
+def powershell_path() -> str:
+    """The system's own PowerShell, not whatever `powershell.exe` the search path finds first."""
+    root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return str(Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
 class WindowsToast(_ThreadedNotifier):
-    """One hidden PowerShell per toast, running a fixed script; slow, and it may be blocked by policy."""
+    """One PowerShell per toast, running a fixed script; slow, and it may be blocked by policy."""
 
     def _show(self, note: Notification) -> None:
         env = {**os.environ, "EARTHWAVE_TOAST_TITLE": _plain(note.title), "EARTHWAVE_TOAST_BODY": _plain(note.body)}
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", TOAST_SCRIPT],
+        result = subprocess.run(
+            [powershell_path(), "-NoProfile", "-NonInteractive", "-Command", TOAST_SCRIPT],
             check=False,
             timeout=TOAST_TIMEOUT,
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # no console of its own; ours stays visible
         )
+        if result.returncode:
+            log.warning("toast PowerShell exited %s: %s", result.returncode, (result.stderr or "").strip()[:300])
 
 
 class NotifySend(_ThreadedNotifier):

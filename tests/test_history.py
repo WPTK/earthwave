@@ -370,7 +370,8 @@ async def test_sort_change_keeps_the_cursor_quake_on_screen():
 def _run_cli(monkeypatch, tmp_path, argv):
     from earthwave import __main__ as cli
 
-    seen = {}
+    class FakeApp:
+        return_code = None
 
     class FakeApp:
         def __init__(self, config, **kwargs):

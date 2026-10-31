@@ -77,18 +77,27 @@ def parse_feature(feature: dict) -> TsunamiAlert | None:
     )
 
 
-def parse_alerts(data: dict) -> tuple[TsunamiAlert, ...]:
-    alerts = []
-    for feature in data.get("features", []):
+def parse_features(data: dict) -> tuple[tuple[TsunamiAlert, ...], int]:
+    """The alerts of a /alerts/active reply and how many features could not be read. Raises when there is no list."""
+    features = data.get("features") if isinstance(data, dict) else None
+    if not isinstance(features, list):
+        raise ValueError("nws: reply has no features list")
+    alerts, skipped = [], 0
+    for feature in features:
         try:
             alert = parse_feature(feature)
-        except (KeyError, TypeError, ValueError, IndexError) as exc:
+        except (KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
             log.warning("nws: skipping malformed alert: %r", exc)
+            skipped += 1
             continue
         if alert is not None:
             alerts.append(alert)
     alerts.sort(key=lambda a: a.updated or a.issued or datetime.min.replace(tzinfo=UTC))
-    return tuple(alerts)
+    return tuple(alerts), skipped
+
+
+def parse_alerts(data: dict) -> tuple[TsunamiAlert, ...]:
+    return parse_features(data)[0]
 
 
 class NwsSource:
@@ -112,6 +121,7 @@ class NwsSource:
             await self._clock.sleep(wait)
             response = await client.get(URL, params=params, headers=headers)
         response.raise_for_status()
-        alerts = parse_alerts(response.json())
-        log.debug("nws: %d alerts", len(alerts))
-        return Batch(self.name, self._clock.now(), alerts=alerts)
+        alerts, skipped = parse_features(response.json())
+        log.debug("nws: %d alerts, %d unreadable", len(alerts), skipped)
+        # A listing with unreadable entries is not a full answer: an alert missing from it may only be unreadable.
+        return Batch(self.name, self._clock.now(), alerts=alerts, meta={"incomplete": bool(skipped)})
