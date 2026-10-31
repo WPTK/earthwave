@@ -7,7 +7,6 @@ the result; `render_ascii` is the 1x1 cell fallback for terminals without braill
 
 from __future__ import annotations
 
-import itertools
 import json
 from collections.abc import Iterable, Sequence
 from functools import cache, lru_cache
@@ -190,31 +189,68 @@ def _unwrap(points: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
     return out
 
 
-def draw_polyline(canvas: BrailleCanvas, points: Sequence[tuple[float, float]], view: Viewport) -> None:
-    """Draw a lon/lat polyline, handling the antimeridian by drawing the unwrapped line at +-360 shifts."""
-    pts = _unwrap(points)
-    if len(pts) < 2:
-        return
-    lo = min(p[0] for p in pts)
-    hi = max(p[0] for p in pts)
-    if max(p[1] for p in pts) < view.lat0 or min(p[1] for p in pts) > view.lat1:
+def _draw_unwrapped(
+    canvas: BrailleCanvas, pts: Sequence[tuple[float, float]], bounds: tuple[float, float, float, float], view: Viewport
+) -> None:
+    """Draw continuous-longitude points (bounds: lon lo, lon hi, lat lo, lat hi) at each +-360 shift in view."""
+    lo, hi, lat_lo, lat_hi = bounds
+    if lat_hi < view.lat0 or lat_lo > view.lat1:
         return
     k_min = int((view.lon0 - hi) // 360) - 1
     k_max = int((view.lon1 - lo) // 360) + 1
+    width, height = canvas.width, canvas.height
+    lon_span = view.lon1 - view.lon0
+    lat_span = view.lat1 - view.lat0
+    wm, hm = width - 1, height - 1
     for k in range(k_min, k_max + 1):
         shift = 360.0 * k
         if hi + shift < view.lon0 or lo + shift > view.lon1:
             continue
-        xy = [project(lon + shift, lat, view, canvas.width, canvas.height) for lon, lat in pts]
-        for (xa, ya), (xb, yb) in itertools.pairwise(xy):
-            canvas.line(round(xa), round(ya), round(xb), round(yb))
+        prev: tuple[int, int] | None = None
+        for lon, lat in pts:
+            cur = (round((lon + shift - view.lon0) / lon_span * wm), round((view.lat1 - lat) / lat_span * hm))
+            if cur != prev:
+                if prev is None:
+                    canvas.set(cur[0], cur[1])  # a polyline collapsing to one dot still leaves that dot
+                else:
+                    canvas.line(prev[0], prev[1], cur[0], cur[1])
+                prev = cur
+
+
+def _bounds(pts: Sequence[tuple[float, float]]) -> tuple[float, float, float, float]:
+    lons = [p[0] for p in pts]
+    lats = [p[1] for p in pts]
+    return min(lons), max(lons), min(lats), max(lats)
+
+
+def draw_polyline(canvas: BrailleCanvas, points: Sequence[tuple[float, float]], view: Viewport) -> None:
+    """Draw a lon/lat polyline, handling the antimeridian by drawing the unwrapped line at +-360 shifts."""
+    pts = _unwrap(points)
+    if len(pts) >= 2:
+        _draw_unwrapped(canvas, pts, _bounds(pts), view)
+
+
+@cache
+def _prepared_coastline() -> tuple[tuple[list[tuple[float, float]], tuple[float, float, float, float]], ...]:
+    """Coastline polylines unwrapped once, with their bounding boxes, so a view can reject most of them cheaply."""
+    out = []
+    for line in load_coastline():
+        pts = _unwrap(line)
+        if len(pts) >= 2:
+            out.append((pts, _bounds(pts)))
+    return tuple(out)
+
+
+def warm_coastline() -> None:
+    """Load and prepare the coastline data (call off the UI thread to avoid a first-draw stall)."""
+    _prepared_coastline()
 
 
 @lru_cache(maxsize=16)
 def _coastline_cached(cols: int, rows: int, view: Viewport) -> BrailleCanvas:
     canvas = BrailleCanvas(cols, rows)
-    for line in load_coastline():
-        draw_polyline(canvas, line, view)
+    for pts, bounds in _prepared_coastline():
+        _draw_unwrapped(canvas, pts, bounds, view)
     return canvas
 
 

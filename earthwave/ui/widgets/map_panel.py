@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import lru_cache
+from functools import lru_cache, partial
 
 from rich.segment import Segment
 from rich.style import Style
@@ -23,13 +23,22 @@ from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.theme import mag_color
-from earthwave.ui.widgets.braille import WORLD, Viewport, coastline_canvas, project_cell, render_ascii
+from earthwave.ui.widgets.braille import (
+    WORLD,
+    Viewport,
+    coastline_canvas,
+    project_cell,
+    render_ascii,
+    warm_coastline,
+)
 
 COAST_STYLE = Style(color="#5c7a99")
 HOME_STYLE = Style(color="bright_white", bold=True)
 REGION_LAT_SPAN = 40  # degrees of latitude shown around the selected quake
 HOME_LAT_SPAN = 16  # degrees of latitude shown around home
 WORLD_PAN_STEP = 30  # degrees of longitude per arrow press at world zoom
+PAN_GRID = 5  # panned view centres snap to this many degrees so rasters are reused from the cache
+TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
 
 # Magnitude band -> marker. Bands: <4.5, 4.5-5.4, 5.5-6.4, 6.5+.
 UNICODE_MARKERS = ("·", "•", "●", "◉")
@@ -83,6 +92,13 @@ def base_lines(cols: int, rows: int, view: Viewport, ascii_mode: bool) -> tuple[
     return tuple(render_ascii(canvas) if ascii_mode else canvas.render())
 
 
+def warm_world(cols: int, rows: int, ascii_mode: bool) -> None:
+    """Load the coastline and rasterise the world view for this size, so the first draw is a cache hit."""
+    warm_coastline()
+    if cols > 0 and rows > 0:
+        base_lines(cols, rows, WORLD, ascii_mode)
+
+
 @dataclass(frozen=True, slots=True)
 class Marker:
     col: int
@@ -102,6 +118,7 @@ class Frame:
 
 
 def _marker_style(quake: Earthquake, selected: bool, tracker: AttentionTracker | None) -> tuple[Style, bool]:
+    """Marker style. A selected quake that is also flashing shows the selected style (reverse video, no flash)."""
     style = Style.parse(mag_color(quake.mag))
     attended = False
     if tracker is not None and tracker.kind_of(quake.id) is not None:
@@ -158,8 +175,16 @@ def row_segments(base: str, markers: Sequence[Marker]) -> list[Segment]:
     return segments
 
 
+def _wrap180(lon: float) -> float:
+    return (lon + 180) % 360 - 180
+
+
 class MapModel:
-    """Zoom, pan and frame composition without any widget machinery."""
+    """Zoom, pan and frame composition without any widget machinery.
+
+    `set_quakes` follows the data (the list cursor may land on another quake after a refresh) and keeps the pan;
+    `select` is the user moving the cursor and recentres.
+    """
 
     def __init__(
         self, home: HomeConfig | None = None, ascii_mode: bool = False, tracker: AttentionTracker | None = None
@@ -182,7 +207,7 @@ class MapModel:
 
     def set_quakes(self, quakes: Sequence[Earthquake], selected: Earthquake | None) -> None:
         self.quakes = quakes
-        self.select(selected)
+        self.selected = selected
 
     def select(self, quake: Earthquake | None) -> None:
         if (quake.id if quake else None) != (self.selected.id if self.selected else None):
@@ -203,26 +228,46 @@ class MapModel:
         self.pan_lon = self.pan_lat = 0
         return self.mode
 
+    def _anchor(self) -> tuple[float, float, int] | None:
+        """Centre (lon, lat) and latitude span of the zoomed view, or None for the world view."""
+        if self.mode is ZoomMode.REGION and self.selected is not None:
+            return self.selected.lon, self.selected.lat, REGION_LAT_SPAN
+        if self.mode is ZoomMode.HOME and self.home is not None:
+            return self.home.lon, self.home.lat, HOME_LAT_SPAN
+        return None
+
     def pan(self, dx: int, dy: int) -> None:
-        """Move the view by `dx`/`dy` quarter-steps (east and north positive)."""
-        view = self.view()
-        if self.mode is ZoomMode.WORLD:
-            self.pan_lon += dx * WORLD_PAN_STEP
+        """Move the view by `dx`/`dy` quarter-steps (east and north positive).
+
+        Longitude wraps modulo 360 and latitude stops at the poles, so reversing direction always moves at once.
+        """
+        anchor = self._anchor()
+        if anchor is None:
+            self.pan_lon = _wrap180(self.pan_lon + dx * WORLD_PAN_STEP)
             return
-        self.pan_lon += dx * max(1, round((view.lon1 - view.lon0) / 4))
-        self.pan_lat += dy * max(1, round((view.lat1 - view.lat0) / 4))
+        _, lat, span = anchor
+        view = self.view()
+        step_lon = max(PAN_GRID, round((view.lon1 - view.lon0) / 4 / PAN_GRID) * PAN_GRID)
+        step_lat = max(PAN_GRID, round(span / 4 / PAN_GRID) * PAN_GRID)
+        self.pan_lon = _wrap180(self.pan_lon + dx * step_lon)
+        lo, hi = -90 + span // 2, 90 - span + span // 2
+        self.pan_lat = min(max(lat + self.pan_lat + dy * step_lat, lo), hi) - lat
 
     # --- geometry -----------------------------------------------------------------------------------------------
 
+    def has_attention(self) -> bool:
+        return self.tracker is not None and any(self.tracker.kind_of(q.id) is not None for q in self.quakes)
+
     def view(self) -> Viewport:
         cols, rows = max(self.cols, 1), max(self.rows, 1)
-        if self.mode is ZoomMode.REGION and self.selected is not None:
-            return zoom_view(
-                self.selected.lon + self.pan_lon, self.selected.lat + self.pan_lat, REGION_LAT_SPAN, cols, rows
-            )
-        if self.mode is ZoomMode.HOME and self.home is not None:
-            return zoom_view(self.home.lon + self.pan_lon, self.home.lat + self.pan_lat, HOME_LAT_SPAN, cols, rows)
-        return world_view(self.pan_lon)
+        anchor = self._anchor()
+        if anchor is None:
+            return world_view(self.pan_lon)
+        lon, lat, span = anchor
+        if self.pan_lon or self.pan_lat:
+            lon = round((lon + self.pan_lon) / PAN_GRID) * PAN_GRID
+            lat = round((lat + self.pan_lat) / PAN_GRID) * PAN_GRID
+        return zoom_view(lon, lat, span, cols, rows)
 
     def frame(self) -> Frame:
         view = self.view()
@@ -274,10 +319,22 @@ class MapPanel(Widget, can_focus=True):
         self.model.resize(self.size.width, self.size.height)
         self._update_title()
         if self._ticks:
-            self.set_interval(0.5, self.refresh)
+            self.set_interval(TICK_SECONDS, self._tick)
+
+    def _tick(self) -> None:
+        if self.model.has_attention():
+            self.refresh()
 
     def on_resize(self, event: Resize) -> None:
-        self.model.resize(event.size.width, event.size.height)
+        cols, rows = self.size.width, self.size.height  # content size: event.size still includes the border
+        self.model.resize(cols, rows)
+        self.run_worker(
+            partial(warm_world, cols, rows, self.model.ascii_mode),
+            thread=True,
+            group="warm",
+            exclusive=True,
+            exit_on_error=False,
+        )
         self.refresh()
 
     # --- data and keys --------------------------------------------------------------------------------------------
@@ -315,7 +372,6 @@ class MapPanel(Widget, can_focus=True):
 
     def render_line(self, y: int) -> Strip:
         if self._frame is None:
-            self.model.resize(self.size.width, self.size.height)
             self._frame = self.model.frame()
             self._by_row = {}
             for marker in self._frame.markers.values():

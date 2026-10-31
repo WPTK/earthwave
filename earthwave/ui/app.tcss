@@ -74,6 +74,8 @@ Screen.map-full #left {
     display: none;
 }
 
+/* Same specificity as the no-map rule above and placed after it, so the full-screen map shows even when the
+   terminal is narrower than the auto-hide width. */
 Screen.map-full #map {
     display: block;
     width: 1fr;

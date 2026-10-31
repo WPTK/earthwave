@@ -16,9 +16,10 @@ from earthwave.notify.inapp import FLASH_NEW, AttentionTracker
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.events import QuakeNew
 from earthwave.ui.glyphs import ASCII, UNICODE
-from earthwave.ui.widgets.braille import WORLD, Viewport, coastline_canvas, project_cell
+from earthwave.ui.widgets.braille import WORLD, Viewport, coastline_canvas, project_cell, warm_coastline
 from earthwave.ui.widgets.map_panel import (
     ASCII_MARKERS,
+    TICK_SECONDS,
     UNICODE_MARKERS,
     MapModel,
     MapPanel,
@@ -27,6 +28,7 @@ from earthwave.ui.widgets.map_panel import (
     marker_band,
     place_markers,
     row_segments,
+    warm_world,
     world_view,
     zoom_view,
 )
@@ -59,6 +61,8 @@ def model(cols, rows, home=None, ascii_mode=False, tracker=None, selected=BONIN)
 
 @pytest.mark.parametrize(("cols", "rows"), SIZES)
 def test_bonin_islands_marker_lands_on_the_right_cell(cols, rows):
+    literal = {(80, 24): (70, 8), (160, 40): (141, 13), (240, 60): (212, 20)}
+    assert list(place_markers([BONIN], None, None, WORLD, cols, rows, False)) == [literal[(cols, rows)]]
     markers = place_markers([BONIN], None, None, WORLD, cols, rows, False)
     assert list(markers) == [expected_world_cell(139.6184, 27.7953, cols, rows)]
     marker = markers[next(iter(markers))]
@@ -72,16 +76,11 @@ def test_ptwc_epicenter_is_within_a_cell_of_the_usgs_one():
 
 
 def test_markers_share_the_projection_of_the_raster():
-    # Tokyo Bay is on the 10m coastline: the marker cell (same projection function) must hold or touch raster dots.
+    # Tokyo Bay is on the 10m coastline: its marker cell, from the same projection function, holds raster dots.
     cols, rows = 160, 40
-    canvas = coastline_canvas(cols, rows)
-    col, row = project_cell(139.77, 35.65, WORLD, cols, rows)
-    assert any(
-        canvas.cell_bits(c, r)
-        for c in range(col - 1, col + 2)
-        for r in range(row - 1, row + 2)
-        if 0 <= c < cols and 0 <= r < rows
-    )
+    cell = project_cell(139.77, 35.65, WORLD, cols, rows)
+    assert cell == (141, 12)
+    assert coastline_canvas(cols, rows).cell_bits(*cell) != 0
 
 
 def test_marker_bands_and_glyph_sets():
@@ -196,18 +195,78 @@ def test_pan_math():
     m.pan(-1, 0)
     assert m.view() == WORLD
     m.cycle_zoom()
+    m.pan(1, 0)  # the first pan snaps the centre to the 5 degree grid
     before = m.view()
     m.pan(1, 0)
     after = m.view()
     assert after.lon0 - before.lon0 == 20 and after.lat0 == before.lat0  # a quarter of the 80 degree span
     m.pan(0, -1)
     assert m.view().lat0 == before.lat0 - 10
-    m.pan(0, 99)
-    assert m.view().lat1 == 90.0  # clamped at the pole
     m.select(make_quake("other", 5.0))
     assert m.pan_lon == m.pan_lat == 0  # a new selection recentres
     m.cycle_zoom()
     assert (m.pan_lon, m.pan_lat) == (0, 0)
+
+
+def test_pan_stops_at_the_pole_and_reverses_at_once():
+    m = model(160, 40)
+    m.cycle_zoom()
+    for _ in range(30):  # hold Up
+        m.pan(0, 1)
+    top = m.view()
+    assert top.lat1 == 90.0
+    pinned = m.pan_lat
+    m.pan(0, 1)
+    assert m.pan_lat == pinned  # the offset does not keep growing
+    m.pan(0, -1)
+    assert m.view().lat1 < top.lat1  # one Down press moves immediately
+    for _ in range(30):
+        m.pan(0, -1)
+    assert m.view().lat0 == -90.0
+    m.pan(0, 1)
+    assert m.view().lat0 > -90.0
+
+
+def test_pan_longitude_wraps_around_the_globe():
+    m = model(160, 40)
+    for _ in range(40):  # far more than one trip around the world
+        m.pan(1, 0)
+    assert -180 <= m.pan_lon < 180
+    before = m.view()
+    m.pan(-1, 0)
+    assert m.view().lon0 != before.lon0  # panning back is never dead
+    m.cycle_zoom()
+    for _ in range(100):
+        m.pan(-1, 0)
+    assert -180 <= m.pan_lon < 180
+
+
+def test_data_refresh_keeps_the_pan_but_user_selection_recentres():
+    m = model(160, 40)
+    m.cycle_zoom()
+    m.pan(1, 1)
+    panned = (m.pan_lon, m.pan_lat)
+    other = QUAKES[0] if QUAKES[0].id != BONIN.id else QUAKES[1]
+    m.set_quakes(QUAKES, other)  # a refresh moved a different quake under the cursor
+    assert (m.pan_lon, m.pan_lat) == panned and m.mode is ZoomMode.REGION and m.selected is other
+    m.select(BONIN)  # the user moved the cursor
+    assert (m.pan_lon, m.pan_lat) == (0, 0)
+
+
+async def test_dashboard_refresh_does_not_reset_the_map_pan():
+    app = week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        panel = app.dashboard.query_one(MapPanel)
+        await pilot.press("z")
+        panel.focus()
+        await pilot.press("right")
+        panned = (panel.model.pan_lon, panel.model.pan_lat)
+        app.dashboard.refresh_view()
+        assert (panel.model.pan_lon, panel.model.pan_lat) == panned
+        app.dashboard.query_one(QuakeList).focus()
+        await pilot.press("j")
+        assert (panel.model.pan_lon, panel.model.pan_lat) == (0, 0)
 
 
 def test_world_view_wraps_and_pan_views_are_cache_friendly():
@@ -254,10 +313,12 @@ def test_region_golden(ascii_mode):
 
 def test_performance_budget_at_240x60():
     m = model(240, 60, home=NEW_YORK)
+    warm_coastline()  # loading the data is done once, off the UI thread, by the panel's pre-warm
+    base_lines.cache_clear()
     start = time.perf_counter()
     m.frame()
     cold = time.perf_counter() - start
-    assert cold < 5.0  # rasterising 148k coastline points once
+    assert cold < 1.0  # rasterising the full-resolution coastline for a new viewport blocks the UI for this long
     start = time.perf_counter()
     for _ in range(20):
         m.frame()
@@ -354,3 +415,59 @@ async def test_dashboard_keys_zoom_fullscreen_and_selection_follow():
         await pilot.press("M", "m")
         await pilot.pause()
         assert not app.dashboard.has_class("map-full") and app.dashboard.has_class("no-map")
+
+
+# --- blink and pre-warm -------------------------------------------------------------------------------------------
+
+
+def test_blink_tick_is_finer_than_the_phase_flips():
+    assert TICK_SECONDS <= 0.25
+
+
+def test_both_blink_phases_render_with_uneven_clock_steps():
+    clock = ReplayClock(datetime(2026, 10, 31, 12, tzinfo=UTC), real=lambda: 0.0)
+    tracker = AttentionTracker(clock)
+    quake = make_quake("new1", 5.0, lat=0.0, lon=0.0)
+    m = MapModel(None, False, tracker)
+    m.resize(80, 24)
+    m.set_quakes([quake], None)
+    assert not m.has_attention()
+    tracker.observe([QuakeNew(quake)])
+    assert m.has_attention()
+    seen = set()
+    elapsed = 0.0
+    # Ticks arrive at 0.25 s plus jitter; within any 1 s window both the flash and the plain phase must be sampled.
+    for jitter in (0.0, 0.05, -0.04, 0.1, -0.08, 0.02, 0.0, 0.07, -0.06, 0.03, 0.0, 0.09):
+        clock.advance(TICK_SECONDS + jitter)
+        elapsed += TICK_SECONDS + jitter
+        if elapsed < 3.0:
+            marker = next(iter(m.frame().markers.values()))
+            seen.add(marker.style.bgcolor is not None)
+    assert seen == {True, False}
+
+
+def test_unattended_markers_do_not_force_refreshes():
+    tracker = AttentionTracker(ReplayClock(datetime(2026, 10, 31, 12, tzinfo=UTC), real=lambda: 0.0))
+    m = MapModel(None, False, tracker)
+    m.set_quakes([make_quake("q", 5.0)], None)
+    assert not m.has_attention()
+
+
+async def test_panel_prewarms_the_world_raster_on_resize(monkeypatch):
+    calls = []
+    monkeypatch.setattr(MapPanel, "run_worker", lambda self, work, **kwargs: calls.append((work, kwargs)))
+    app = Harness()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.resize_terminal(100, 28)
+        await pilot.pause()
+    work, kwargs = calls[-1]
+    assert work.func is warm_world and work.args == (100, 28, False) and kwargs["thread"] is True
+
+
+def test_warm_world_fills_the_cache():
+    base_lines.cache_clear()
+    warm_world(80, 24, True)
+    assert base_lines.cache_info().currsize == 1
+    warm_world(0, 0, False)  # a not-yet-sized panel is ignored
+    assert base_lines.cache_info().currsize == 1
