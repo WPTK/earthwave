@@ -79,9 +79,15 @@ Only on the maintainer's word.
    ```
 
 3. `.github/workflows/release.yml` runs. It fails at once if the tag is not `v0.y.z`, does not equal `__version__`,
-   or has no dated changelog section. Otherwise it builds Windows, Linux (x86-64) and macOS (arm64) binaries, runs
+   has no dated changelog section, or is not on `main`. Otherwise it builds Windows (`.exe`), Linux (x86-64, `.tar.gz`) and macOS (arm64, `.tar.gz`) binaries, runs
    `--version` and `--selftest` on each, and creates the GitHub Release with the binaries, `SHA256SUMS` and the
    changelog section as notes.
 4. Run through [`smoke-test.md`](smoke-test.md) on a machine without Python.
 
-If the workflow fails, delete the tag (`git push origin :refs/tags/v0.y.z`), fix on a branch and tag again.
+If a run publishes a bad release, remove the release and its tag together, fix on a branch and tag again:
+
+```powershell
+gh release delete v0.y.z --cleanup-tag --yes
+```
+
+If the workflow fails before publishing, only the tag needs deleting (`git push origin :refs/tags/v0.y.z`).

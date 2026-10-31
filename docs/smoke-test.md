@@ -9,9 +9,10 @@ on its own. Use a terminal at least 120 columns by 30 rows (Windows Terminal is 
 2. Check the hash matches the line for your file:
    - Windows: `Get-FileHash .\earthwave-v0.1.0-windows-x86_64.exe -Algorithm SHA256`
    - Linux: `sha256sum -c SHA256SUMS --ignore-missing`
-   - macOS: `shasum -a 256 earthwave-v0.1.0-macos-arm64`
-3. The binaries are unsigned. Allow it once: SmartScreen "More info" then "Run anyway" on Windows; on macOS run
-   `xattr -d com.apple.quarantine <file>` and `chmod +x <file>` (Linux needs `chmod +x` too).
+   - macOS: `shasum -a 256 earthwave-v0.1.0-macos-arm64.tar.gz`
+3. On Linux and macOS, unpack with `tar -xzf earthwave-v0.1.0-<os>.tar.gz` (the archive keeps the executable bit).
+4. The binaries are unsigned. Allow it once: SmartScreen "More info" then "Run anyway" on Windows; on macOS run
+   `xattr -d com.apple.quarantine earthwave` on the unpacked file.
 
 ## 2. Command line
 

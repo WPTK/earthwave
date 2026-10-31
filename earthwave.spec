@@ -8,7 +8,7 @@ datas = [
 ]
 # Textual loads widget CSS and other resources by path and imports screens and widgets lazily.
 datas += collect_data_files("textual")
-hiddenimports = collect_submodules("textual") + collect_submodules("earthwave") + ["sqlite3", "httpx", "platformdirs"]
+hiddenimports = collect_submodules("textual") + collect_submodules("earthwave") + collect_submodules("anyio") + collect_submodules("rich._unicode_data") + ["sqlite3", "httpx", "platformdirs"]
 
 a = Analysis(
     ["earthwave/__main__.py"],

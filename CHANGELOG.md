@@ -16,6 +16,7 @@ _First release._
 - Add a SQLite history of quakes and acknowledgements, a day-by-day history screen and `--offline` to browse it without network ([#37](https://github.com/WPTK/earthwave/pull/37))
 - Add `--record` and `--replay` to capture and replay HTTP sessions on a replay clock ([#18](https://github.com/WPTK/earthwave/pull/18))
 - Add a commented first-run config file and `--config`, `--no-config`, `--min-mag`, `--hours`, `--home`, `--glyphs`, `--log` and `--debug` ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add `--version` and `--selftest`, and one-file binaries for Windows, Linux and macOS built from `earthwave.spec` ([#1](https://github.com/WPTK/earthwave/pull/1))
+- Add one-file binaries for Windows, Linux and macOS, built from `earthwave.spec` and attached to each release ([#41](https://github.com/WPTK/earthwave/pull/41))
+- Add `--version` and `--selftest` ([#1](https://github.com/WPTK/earthwave/pull/1))
 
 [0.1.0]: https://github.com/WPTK/earthwave/releases/tag/v0.1.0
