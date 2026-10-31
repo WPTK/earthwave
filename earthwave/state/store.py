@@ -258,9 +258,9 @@ class Store:
                 events.extend(TsunamiCancelled(c) for c in closed if self._live(c, clock))
             elif not self._live(alert, clock):
                 continue
-            elif closed:
-                # Every replacement carries the attention over, even at the same level and areas.
-                events.append(TsunamiChanged(alert, max(closed, key=lambda c: levels.RANK[c.level]).level))
+            elif live := [c for c in closed if self._live(c, clock)]:
+                # A replacement of a live alert carries the attention over, even at the same level and areas.
+                events.append(TsunamiChanged(alert, max(live, key=lambda c: levels.RANK[c.level]).level))
             else:
                 events.append(TsunamiIssued(alert))
         return events
@@ -273,7 +273,7 @@ class Store:
         """Close the open alerts this product cancels or supersedes; returns those that were still open.
 
         An INFORMATION statement closes nothing. A cancel that names no known alert closes only the open,
-        actionable alerts of its own quake and source whose areas overlap its own.
+        actionable alerts of its own quake and source, narrowed to overlapping areas when it states any.
         """
         if alert.level == levels.INFORMATION:
             return []
@@ -287,7 +287,7 @@ class Store:
                 and a.source == alert.source
                 and a.id != alert.id
                 and a.level not in QUIET
-                and wanted & {x.lower() for x in a.areas}
+                and (not wanted or wanted & {x.lower() for x in a.areas})
             ]
         status = "cancelled" if alert.level == levels.CANCELLATION else "superseded"
         closed = []

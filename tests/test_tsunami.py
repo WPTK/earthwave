@@ -257,7 +257,7 @@ async def test_nws_source_sends_event_filter_and_retries_a_429_once(clock):
             await nws.NwsSource(clock).fetch(client, None)
 
 
-async def test_tsunamigov_gives_up_on_a_cap_that_keeps_failing(clock, caplog):
+async def test_tsunamigov_gives_up_on_a_cap_that_keeps_answering_4xx(clock, caplog):
     cap_calls = []
 
     def handler(request):
@@ -267,7 +267,7 @@ async def test_tsunamigov_gives_up_on_a_cap_that_keeps_failing(clock, caplog):
         if url == tsunamigov.FEEDS[1]:
             return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
         cap_calls.append(url)
-        return httpx.Response(500)
+        return httpx.Response(404)
 
     source = tsunamigov.TsunamiGovSource(clock)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -275,6 +275,32 @@ async def test_tsunamigov_gives_up_on_a_cap_that_keeps_failing(clock, caplog):
             await source.fetch(client, None)
     assert len(cap_calls) == tsunamigov.MAX_ENTRY_FAILURES  # then the entry is marked seen and left alone
     assert caplog.text.count("giving up") == 1
+
+
+async def test_tsunamigov_keeps_retrying_through_a_cap_outage(clock):
+    attempts = []
+
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
+        if url.endswith("CAP.xml"):
+            attempts.append(url)
+            if len(attempts) <= tsunamigov.MAX_ENTRY_FAILURES * 2:
+                if len(attempts) % 2:
+                    raise httpx.ConnectError("host down", request=request)
+                return httpx.Response(503)
+            return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
+        return httpx.Response(404)
+
+    source = tsunamigov.TsunamiGovSource(clock)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(tsunamigov.MAX_ENTRY_FAILURES * 2):
+            assert (await source.fetch(client, None)).alerts == ()
+        batch = await source.fetch(client, None)
+    assert [a.id for a in batch.alerts] == ["PAAQ-1-tnfxzn"]  # the outage outlasted the give-up count, still delivered
 
 
 def test_nws_retry_after_accepts_seconds_and_http_dates():
@@ -462,6 +488,34 @@ def test_bare_cancel_closes_only_matching_open_alerts_of_its_quake(kclock):
     assert [type(e) for e in events] == [TsunamiCancelled]
     assert store.active_alerts(kclock) == []
     assert store.alert_status(kam(1), kclock) == "cancelled"
+
+
+def test_bare_cancel_without_areas_still_ends_the_warning(kclock):
+    store = Store()
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    merge(store, kclock, kam(1))
+    cancel = replace(kam(2), references=(), areas=())  # empty areaDesc
+    assert [type(e) for e in merge(store, kclock, cancel)] == [TsunamiCancelled]
+    assert store.active_alerts(kclock) == []
+
+
+def test_replacing_an_expired_alert_is_issued_not_changed(kclock):
+    store = Store()
+    merge(store, kclock, kam(1))
+    kclock.advance(5 * 3600)  # the Warning expired at 03:51Z
+    later = replace(
+        kam(1), id="late", dedupe_key="late", references=(kam(1).id,), expires=kclock.now() + timedelta(hours=2)
+    )
+    assert [type(e) for e in merge(store, kclock, later)] == [TsunamiIssued]
+
+
+def test_same_level_follow_up_toasts_without_was_or_bell():
+    rules = AlertRules(AlertsConfig())
+    follow = replace(kam(1), id="w3")
+    plain = rules.evaluate([TsunamiChanged(follow, levels.WARNING)])[0]
+    assert plain.title == "Tsunami Warning (update)" and not plain.bell and plain.urgency == "critical"
+    raised = rules.evaluate([TsunamiChanged(replace(kam(1), id="w4"), levels.WATCH)])[0]
+    assert raised.title == "Tsunami Warning (was Watch)" and raised.bell
 
 
 def test_bare_cancel_leaves_information_alone(kclock):
@@ -838,6 +892,26 @@ async def test_desktop_notifications_go_out_one_at_a_time_in_order():
     assert peak == 1 and order == [f"tsunami:t{n}:WATCH" for n in range(4)]
 
 
+async def test_a_hung_or_raising_notifier_does_not_block_later_toasts(monkeypatch):
+    monkeypatch.setattr("earthwave.app.SEND_TIMEOUT", 0.05)
+    sent = []
+
+    class Flaky:
+        async def send(self, note):
+            if note.key.endswith("t0:WATCH"):
+                await asyncio.sleep(60)  # hung
+            if note.key.endswith("t1:WATCH"):
+                raise RuntimeError("blocked")
+            sent.append(note.key)
+
+    app = kam_app(notifier=Flaky())
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._notify_desktop([TsunamiIssued(replace(kam(0), id=f"t{n}")) for n in range(3)])
+        await asyncio.wait_for(app._outbox.join(), 5)
+        await pilot.pause()
+    assert sent == ["tsunami:t2:WATCH"]
+
+
 async def test_tsunami_screen_lists_alerts_and_shows_text():
     app = kam_app()
     async with app.run_test(size=(120, 40)) as pilot:
@@ -874,7 +948,9 @@ async def test_replay_walks_watch_warning_cancellation():
         assert app.store.alert_status(warning, clock) in ("active", "cancelled")  # live, not expired
         await wait_for(lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()))
         await pilot.pause()
-        await asyncio.sleep(0.05)
+        wanted = {"Tsunami Watch", "Tsunami Warning (was Watch)", "Major earthquake"}
+        await wait_for(lambda: wanted <= {n.title for n in fake.sent})
+        await app._outbox.join()
         titles = [n.title for n in fake.sent]
         assert "Tsunami Watch" in titles and "Tsunami Warning (was Watch)" in titles
         assert "Major earthquake" in titles

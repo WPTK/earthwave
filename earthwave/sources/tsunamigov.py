@@ -19,7 +19,7 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 CAP = "{urn:oasis:names:tc:emergency:cap:1.2}"
 WMO_HEADER = re.compile(r"^\s*([A-Z]{4}\d{2} [A-Z]{4} \d{6})\b", re.MULTILINE)
 PRODUCT_URL = re.compile(r"/events/(PAAQ|PHEB)/\d{4}/\d{2}/\d{2}/[^/]+/\d+/([A-Z0-9]+)/")
-MAX_ENTRY_FAILURES = 5  # a CAP link that fails this many polls in a row is given up on
+MAX_ENTRY_FAILURES = 5  # a CAP link answering 4xx or unparseable this many polls in a row is given up on
 SEEN_LIMIT = 500
 
 
@@ -150,6 +150,13 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert:
     )
 
 
+def _permanent(exc: Exception) -> bool:
+    """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return 400 <= exc.response.status_code < 500
+    return not isinstance(exc, httpx.HTTPError)
+
+
 class TsunamiGovSource:
     name = "tsunamigov"
     min_interval = 60.0
@@ -192,6 +199,10 @@ class TsunamiGovSource:
                             log.warning("tsunamigov: bulletin %s unavailable: %r", entry["bulletin_url"], exc)
                     alerts.append(parse_cap(cap, bulletin, entry["cap_url"]))
                 except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
+                    if not _permanent(exc):
+                        # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
+                        log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], exc)
+                        continue
                     count = self._failures.get(entry["id"], 0) + 1
                     self._failures[entry["id"]] = count
                     if count < MAX_ENTRY_FAILURES:

@@ -37,6 +37,7 @@ from earthwave.ui.widgets.quake_list import QuakeList
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
 
 
 class PollDone(Message):
@@ -120,7 +121,13 @@ class EarthwaveApp(App):
     async def _send_loop(self, notifier: Notifier) -> None:
         """Desktop notifications go out one at a time, in order, so a burst cannot pile up threads."""
         while True:
-            await notifier.send(await self._outbox.get())
+            note = await self._outbox.get()
+            try:
+                await asyncio.wait_for(notifier.send(note), SEND_TIMEOUT)
+            except Exception as exc:  # a raising or hung notifier must not stall the toasts behind it
+                log.warning("desktop notification %s dropped: %r", note.key, exc)
+            finally:
+                self._outbox.task_done()
 
     async def on_unmount(self) -> None:
         if self._sender is not None:
@@ -131,6 +138,8 @@ class EarthwaveApp(App):
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
         self.tracker.prune()
         self.sync_tsunami()
+        if not self.screen_stack or not self.dashboard.query(QuakeList):  # shutting down, or not yet composed
+            return
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
             visible = quake_list.visible_ids()
@@ -161,7 +170,11 @@ class EarthwaveApp(App):
             self._coverage_checked = True
             self._backfill_if_needed(force=False)
         self.sync_tsunami()
-        if self.dashboard.is_mounted:  # a fast replay can deliver a poll before the dashboard has composed
+        if not self.screen_stack:  # a poll that lands while the app is shutting down
+            return
+        if self.dashboard.is_mounted and self.dashboard.query(
+            QuakeList
+        ):  # not before it composed or after it unmounted
             self.dashboard.refresh_view()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()

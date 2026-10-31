@@ -90,7 +90,12 @@ class AlertRules:
     def _tsunami(self, event: TsunamiIssued | TsunamiChanged) -> Notification:
         alert = event.alert
         title = f"Tsunami {alert.level.title()}"
+        bell = True
         if isinstance(event, TsunamiChanged):
-            title += f" (was {event.previous_level.title()})"
+            if event.previous_level == alert.level:
+                title += " (update)"  # a follow-up at the same level: toast, but no repeated bell
+                bell = False
+            else:
+                title += f" (was {event.previous_level.title()})"
         urgency = "critical" if alert.level in (levels.WARNING, levels.ADVISORY) else "warning"
-        return Notification(f"tsunami:{alert.id}:{alert.level}", title, alert.headline, urgency, bell=True)
+        return Notification(f"tsunami:{alert.id}:{alert.level}", title, alert.headline, urgency, bell=bell)
