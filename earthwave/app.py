@@ -18,12 +18,16 @@ from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import PollResult, Scheduler
+from earthwave.sources.anomaly import threshold_m
 from earthwave.sources.base import Source
+from earthwave.sources.coops import CoopsSource
 from earthwave.sources.jma import JmaSource
+from earthwave.sources.ndbc import DartSource
 from earthwave.sources.nws import NwsSource
 from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
-from earthwave.state.events import QuakeMajor, SourceDegraded, SourceRecovered
+from earthwave.state.events import GaugeAnomaly, QuakeMajor, SourceDegraded, SourceRecovered
+from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
@@ -31,13 +35,16 @@ from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
 from earthwave.ui.screens.help import HelpScreen
+from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
+from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
 from earthwave.ui.widgets.quake_list import QuakeList
 
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
 SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
+GAUGE_REFRESH_TICKS = 20  # the open gauge strip redraws every 10 s (ages and 'last batch' text move with the clock)
 
 
 class PollDone(Message):
@@ -67,7 +74,7 @@ class EarthwaveApp(App):
         super().__init__()
         self.config = config
         self.clock: Clock = clock or SystemClock()
-        self.store = store or Store(config.alerts, config.home)
+        self.store = store if store is not None else Store(config.alerts, config.home)
         self.tracker = AttentionTracker(self.clock)
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
@@ -79,6 +86,14 @@ class EarthwaveApp(App):
         self.bell_enabled = bell
         self._outbox: asyncio.Queue[Notification] = asyncio.Queue()
         self._sender: asyncio.Task | None = None
+        self.dart: DartSource | None = None
+        self.coops: CoopsSource | None = None
+        self.gauge_selection = GaugeSelection()
+        self._gauge_key: tuple | None = None  # what the selection was computed from; recomputed only when it changes
+        self._gauge_alert = False
+        self._gauge_quake: Earthquake | None = None  # the flagged quake `o` was last pressed on
+        self._last_anomaly: GaugeAnomaly | None = None
+        self._ticks = 0
         self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
         self.scheduler_running = run_scheduler
         self.ticking = ticks
@@ -93,7 +108,18 @@ class EarthwaveApp(App):
             *([TsunamiGovSource(self.clock, poll.tsunami_seconds)] if enabled.tsunamigov else []),
             *([NwsSource(self.clock, poll.tsunami_seconds)] if enabled.nws else []),
             *([JmaSource(self.clock, poll.tsunami_seconds)] if enabled.jma else []),
+            *self._gauge_sources(config),
         ]
+
+    def _gauge_sources(self, config: Config) -> list[Source]:
+        """DART and CO-OPS follow the tsunami switches: on when tsunami alerting is on and a feed can name a quake."""
+        enabled = config.sources
+        if not (config.alerts.tsunami and (enabled.usgs or enabled.tsunamigov or enabled.nws or enabled.jma)):
+            return []
+        self.dart = DartSource(self.clock, config.poll)
+        self.coops = CoopsSource(self.clock, config.poll)
+        self.store.predictions_for = self.coops.predictions
+        return [self.dart, self.coops]
 
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
@@ -138,6 +164,10 @@ class EarthwaveApp(App):
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
         self.tracker.prune()
         self.sync_tsunami()
+        self.sync_gauges()
+        self._ticks += 1
+        if self._ticks % GAUGE_REFRESH_TICKS == 0:
+            self.refresh_gauges()
         if not self.screen_stack or not self.dashboard.query(QuakeList):  # shutting down, or not yet composed
             return
         if self.screen is self.dashboard:
@@ -164,12 +194,17 @@ class EarthwaveApp(App):
             if isinstance(event, QuakeMajor):
                 q = event.quake
                 self.notify(f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10)
+            elif isinstance(event, GaugeAnomaly):
+                self._last_anomaly = event
+                body = f"{event.name}: {event.residual_m:+.3f} m from the tide"
+                self.notify(body, title="Gauge anomaly", severity="warning", timeout=10)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
         if not self.usgs.starting and not self._coverage_checked:
             self._coverage_checked = True
             self._backfill_if_needed(force=False)
         self.sync_tsunami()
+        self.sync_gauges()
         if not self.screen_stack:  # a poll that lands while the app is shutting down
             return
         if self.dashboard.is_mounted and self.dashboard.query(
@@ -178,11 +213,91 @@ class EarthwaveApp(App):
             self.dashboard.refresh_view()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
+        self.refresh_gauges()
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""
         active = self.store.active_alerts(self.clock, actionable_only=True)
         self.tracker.tsunami_sync({a.id for a in active})
+
+    # --- gauges -------------------------------------------------------------------------------------------------
+
+    def sync_gauges(self) -> None:
+        """Tell the gauge sources the alert cadence and which stations to poll, from the alerts in force.
+
+        The cadence hint follows Warning/Advisory/Watch alerts on the injected clock. The selection (nearest DART
+        buoys and tide gauges to every alert in force, plus the quake `o` was pressed on) is recomputed only when the
+        alerts, that quake or the usable station list changed, and the new stations are polled right away.
+        """
+        if self.dart is None or self.coops is None:
+            return
+        hint = self.store.gauge_alert_active(self.clock)
+        if hint != self._gauge_alert:
+            self._gauge_alert = hint
+            for source in (self.dart, self.coops):
+                source.set_alert_active(hint)
+                self.scheduler.reschedule(source.name)
+        key = (
+            tuple(
+                sorted(
+                    (a.id, a.origin, a.geometry, a.quake_ref, self._linked_position(a))
+                    for a in self.store.active_alerts(self.clock)
+                )
+            ),
+            self._gauge_quake.id if self._gauge_quake else None,
+            self.dart.unavailable,
+            len(self.dart.stations),
+            len(self.coops.stations),
+        )
+        if key == self._gauge_key:
+            return
+        self._gauge_key = key
+        chosen = choose_stations(
+            self.store, self.clock, self.dart.stations, self.coops.stations, self.dart.unavailable, self._gauge_quake
+        )
+        old, self.gauge_selection = self.gauge_selection, chosen
+        if chosen.dart_ids != old.dart_ids:
+            self.dart.set_selection(chosen.dart_ids)
+            self.scheduler.reschedule(self.dart.name, immediate=True)
+        if chosen.coops_ids != old.coops_ids:
+            self.coops.set_selection(chosen.coops_ids)
+            self.scheduler.reschedule(self.coops.name, immediate=True)
+
+    def _linked_position(self, alert) -> tuple[float, float] | None:
+        """Where the linked quake is now; it can move when a later USGS revision relocates it."""
+        quake = self.store.quake_for(alert)
+        return (quake.lat, quake.lon) if quake else None
+
+    def gauge_rows(self) -> list[GaugeRowData]:
+        """One strip row per selected station, DART first; a station with no readings yet shows 'no data'."""
+        rows = []
+        for km, station in (*self.gauge_selection.dart, *self.gauge_selection.coops):
+            readings = self.store.gauge_readings(station.id)
+            newest = readings[-1] if readings else None
+            rows.append(
+                GaugeRowData(
+                    station_id=station.id,
+                    name=station.name.strip(),
+                    distance_km=km,
+                    mode=newest.mode if newest else "",
+                    newest=newest.ts if newest else None,
+                    residuals=tuple(r.residual_m for r in self.store.gauge_residuals(station.id)),
+                    threshold_m=threshold_m(station.kind, self.config.alerts),
+                )
+            )
+        return rows
+
+    def refresh_gauges(self) -> None:
+        screen = self.screen if self.screen_stack else None
+        if isinstance(screen, TsunamiScreen | ObservationsScreen) and screen.query(GaugeStrip):  # composed
+            screen.refresh_gauges()
+
+    def gauge_ticker(self) -> str:
+        """Ticker text for an anomaly still in progress (not acknowledged, under five minutes old)."""
+        last = self._last_anomaly
+        if last is None or last.station_id not in self.tracker.gauge_active():
+            return ""
+        return f"{last.name} {last.residual_m:+.2f} m"
 
     def _notify_desktop(self, events: list) -> None:
         """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
@@ -242,6 +357,15 @@ class EarthwaveApp(App):
         self.dashboard.refresh_status()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
+
+    def open_observations(self, quake: Earthquake) -> None:
+        """`o`: select the stations nearest a USGS-flagged quake and show their gauges."""
+        new = self._gauge_quake is None or quake.id != self._gauge_quake.id
+        if self.dart is not None and quake.tsunami_flag and new:
+            self._gauge_quake = quake
+            self.sync_gauges()
+        if not isinstance(self.screen, ObservationsScreen):
+            self.push_screen(ObservationsScreen(quake))
 
     def open_detail(self, quake: Earthquake) -> None:
         self.push_screen(DetailScreen(quake))

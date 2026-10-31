@@ -16,6 +16,7 @@ HELP_TEXT = """\
   /   search place              m       show or hide the map
   M   full-screen map           z       zoom map (world, region, home)
   r   refresh now               ?       this help
+  o   DART buoys and tide gauges near the quake (needs the USGS tsunami flag)
   q   quit                      Map focused (Tab): arrows pan
   In detail:  b open USGS page, y copy URL, Esc back
 

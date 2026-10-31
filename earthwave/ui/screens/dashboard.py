@@ -34,6 +34,7 @@ class DashboardScreen(Screen):
         Binding("M", "fullscreen_map", "Full map", show=False),
         Binding("z", "zoom_map", "Zoom", show=False),
         Binding("t", "tsunami", "Tsunami"),
+        Binding("o", "observations", "Gauges"),
         Binding("a", "ack_all", "Ack all"),
         Binding("r", "refresh_now", "Refresh"),
         Binding("question_mark", "help", "Help"),
@@ -100,7 +101,7 @@ class DashboardScreen(Screen):
         major = [q for q in app.store.all() if q.mag >= app.config.alerts.major_magnitude]
         latest = max(major, key=lambda q: q.time, default=None)
         age = (app.clock.now() - latest.time).total_seconds() if latest else 0.0
-        self.query_one(Ticker).show(latest, age)
+        self.query_one(Ticker).show(latest, age, app.gauge_ticker())
 
     def tsunami_state(self) -> tuple[list, list, int, str]:
         """(alerts in force, actionable ones, unacknowledged count, status bar state) from the store and tracker."""
@@ -177,6 +178,11 @@ class DashboardScreen(Screen):
     def action_ack_all(self) -> None:
         self.earthwave.tracker.ack_all()
         self.refresh_view()
+
+    def action_observations(self) -> None:
+        quake = self.query_one(QuakeList).selected
+        if quake is not None:
+            self.earthwave.open_observations(quake)
 
     def action_tsunami(self) -> None:
         self.earthwave.open_tsunami()

@@ -38,6 +38,8 @@ class SourceStatus:
     interval: float = 0.0  # last scheduled steady interval, seconds
     next_due: float = 0.0  # clock.monotonic()
     last_poll: float | None = None  # clock.monotonic() of the last attempt
+    in_flight: bool = False
+    nudged_due: float | None = None  # a reschedule made mid-fetch; the fetch must not undo it
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +116,20 @@ class Scheduler:
                 earliest = max(now, status.last_poll + self._sources[name].min_interval)
                 status.next_due = min(status.next_due, earliest)
 
+    def reschedule(self, name: str, immediate: bool = False) -> None:
+        """A source's cadence or selection changed: poll it again as soon as its new interval (or `immediate`) allows.
+
+        Only ever moves the next poll earlier, never into a backoff, and never below the source's minimum interval.
+        """
+        status, source = self.statuses[name], self._sources[name]
+        if status.last_poll is None or status.health.failures:
+            return
+        target = self._clock.monotonic() if immediate else status.last_poll + source.interval(status.health)
+        due = max(target, status.last_poll + source.min_interval)
+        status.next_due = min(status.next_due, due)
+        if status.in_flight:
+            status.nudged_due = due if status.nudged_due is None else min(status.nudged_due, due)
+
     def due(self) -> list[str]:
         now = self._clock.monotonic()
         return [name for name, status in self.statuses.items() if status.next_due <= now]
@@ -125,6 +141,7 @@ class Scheduler:
         source, status = self._sources[name], self.statuses[name]
         generation = self.generation
         status.last_poll = self._clock.monotonic()
+        status.in_flight, status.nudged_due = True, None
         status.health.polls += 1
         events: list[Event] = []
         batch = None
@@ -148,6 +165,8 @@ class Scheduler:
                 self._cursors[name] = batch.cursor
             status.interval = max(source.interval(health), 0.0)
             status.next_due = self._clock.monotonic() + status.interval
+            if status.nudged_due is not None:
+                status.next_due = min(status.next_due, status.nudged_due)
         else:
             health.failures += 1
             health.last_error = error
@@ -155,6 +174,7 @@ class Scheduler:
                 events.append(SourceDegraded(name, error))
             delay = backoff_delay(source.interval(health), health.failures, self._rng)
             status.next_due = self._clock.monotonic() + delay
+        status.in_flight = False
         result = PollResult(name, generation, tuple(events), batch, error)
         self._on_done(result)
         return result

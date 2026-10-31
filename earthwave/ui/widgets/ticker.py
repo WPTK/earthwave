@@ -13,12 +13,16 @@ class Ticker(Static):
         super().__init__("", **kwargs)
         self.show(None, 0.0)
 
-    def show(self, quake: Earthquake | None, age_seconds: float) -> None:
+    def show(self, quake: Earthquake | None, age_seconds: float, gauge: str = "") -> None:
+        """The latest major quake (or a quiet message), then any gauge anomaly in progress."""
         if quake is None:
-            self.update(Text(" No major quakes in this window", style="grey50"))
-            return
-        text = Text(" Latest major: ", style="grey62")
-        text.append(f"M{quake.mag:.1f}", mag_color(quake.mag))
-        text.append(f" {quake.place} ", "white")
-        text.append(f"{fmt_age(age_seconds)} ago", "grey62")
+            text = Text(" No major quakes in this window", style="grey50")
+        else:
+            text = Text(" Latest major: ", style="grey62")
+            text.append(f"M{quake.mag:.1f}", mag_color(quake.mag))
+            text.append(f" {quake.place} ", "white")
+            text.append(f"{fmt_age(age_seconds)} ago", "grey62")
+        if gauge:
+            text.append("   Gauge anomaly: ", "grey62")
+            text.append(gauge, "bold red")
         self.update(text)

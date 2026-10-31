@@ -7,6 +7,7 @@ from earthwave.models import Earthquake
 from earthwave.sources import levels
 from earthwave.state.events import (
     Event,
+    GaugeAnomaly,
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
@@ -57,6 +58,8 @@ class AlertRules:
                 and event.alert.level in levels.ACTIONABLE
             ):
                 tsunamis.append(self._tsunami(event))
+            elif isinstance(event, GaugeAnomaly) and self._config.tsunami:
+                tsunamis.append(self._gauge(event))
         out = [n for n in tsunamis if self._first(n)]
         fresh = [n for n in quakes if self._first(n)]
         if len(fresh) >= BURST:
@@ -99,3 +102,9 @@ class AlertRules:
                 title += f" (was {event.previous_level.title()})"
         urgency = "critical" if alert.level in (levels.WARNING, levels.ADVISORY) else "warning"
         return Notification(f"tsunami:{alert.id}:{alert.level}", title, alert.headline, urgency, bell=bell)
+
+    def _gauge(self, event: GaugeAnomaly) -> Notification:
+        """One toast per anomaly episode: the store only raises the event when an episode starts."""
+        name = event.name or event.station_id
+        body = f"{name}: {event.residual_m:+.3f} m from the tide (threshold {event.threshold_m:g} m)"
+        return Notification(f"gauge:{event.station_id}:{event.ts:%Y%m%dT%H%M%S}", "Gauge anomaly", body, "warning")
