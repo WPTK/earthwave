@@ -56,19 +56,19 @@ def choose_stations(
     dart_list, coops_list = list(dart_stations), list(coops_stations)
     dart: dict[str, tuple[float, Station]] = {}
     coops: dict[str, tuple[float, Station]] = {}
-    targets: list[tuple[geo.Point | None, list[geo.Point]]] = []
+    targets: list[tuple[geo.Point | None, list[geo.Point], float]] = []
     for alert in store.active_alerts(clock):
         linked = store.quake_for(alert)
         epi = geo.epicentre(
             (alert.origin[1], alert.origin[2]) if alert.origin else None,
             (linked.lat, linked.lon) if linked else None,
         )
-        targets.append((epi, geo.geometry_points(alert.geometry, epi)))
+        targets.append((epi, geo.geometry_points(alert.geometry, epi), geo.footprint_radius_km(alert.geometry)))
     if quake is not None:
         here = (quake.lat, quake.lon)
-        targets.append((here, [here]))
-    for epi, points in targets:
+        targets.append((here, [here], 0.0))
+    for epi, points, radius in targets:
         if epi is not None:
             _merge(geo.select_dart(dart_list, epi, exclude=unavailable), dart)
-        _merge(geo.select_coops(coops_list, points), coops)
+        _merge(geo.select_coops(coops_list, points, radius_km=radius), coops)
     return GaugeSelection(_nearest_first(dart), _nearest_first(coops))

@@ -80,6 +80,7 @@ class GaugeAnomaly:
     ts: datetime
     name: str = ""
     threshold_m: float = 0.0
+    late: bool = False  # seen more than GAUGE_FRESH after it happened; messages then say when
     kind: ClassVar[str] = "gauge_anomaly"
 
     def __str__(self) -> str:

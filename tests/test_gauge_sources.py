@@ -106,6 +106,16 @@ def test_select_coops_ignores_gauges_beyond_the_distance_cap():
     )
 
 
+def test_the_distance_cap_is_measured_to_the_edge_of_a_circle():
+    stations = _coops_stations()
+    pt = (30.0, -140.0)
+    nearest = min(haversine_km(*pt, s.lat, s.lon) for s in stations)
+    assert COOPS_MAX_KM < nearest < COOPS_MAX_KM + 1000
+    assert select_coops(stations, [pt]) == []
+    inside = select_coops(stations, [pt], radius_km=1000.0)
+    assert inside and inside[0][0] == pytest.approx(nearest - 1000.0)
+
+
 # --- anomaly decisions -------------------------------------------------------------------------------------------
 
 
@@ -241,6 +251,23 @@ async def test_dart_404_is_retried_after_a_while(clock):
         assert source.unavailable == frozenset()  # selection will pick it again
         batch = await source.fetch(client, None)
     assert {r.station_id for r in batch.readings} == {"46402"} and source.unavailable == frozenset()
+
+
+async def test_dart_404_wait_doubles_and_resets_on_success(clock):
+    source = ndbc.DartSource(clock)
+    retry = ndbc.UNAVAILABLE_RETRY
+    source.mark_unavailable("21413")
+    clock.advance(retry + 1)
+    assert source.unavailable == frozenset()
+    source.mark_unavailable("21413")
+    clock.advance(retry + 1)
+    assert source.unavailable == {"21413"}  # twice the wait the second time
+    clock.advance(retry)
+    assert source.unavailable == frozenset()
+    for _ in range(20):
+        source.mark_unavailable("21413")
+    clock.advance(ndbc.UNAVAILABLE_MAX + 1)
+    assert source.unavailable == frozenset()  # capped
 
 
 async def test_dart_404_marks_unavailable_and_total_failure_raises(clock):

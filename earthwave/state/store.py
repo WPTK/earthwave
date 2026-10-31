@@ -220,10 +220,12 @@ class Store:
         return events
 
     def forget_gauges(self, station_ids: Iterable[str]) -> None:
-        """Stations that left the selection: their next look is a first look again (see `_judge_gauge`)."""
+        """Stations that left the selection: their next look is a first look again (see `_judge_gauge`).
+
+        An episode in progress is kept, so a station that comes back mid-episode is not announced a second time.
+        """
         for station_id in station_ids:
             self._evaluated.pop(station_id, None)
-            self._episode_end.pop(station_id, None)
 
     def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
         """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""
@@ -263,7 +265,8 @@ class Store:
             return []
         station = self._gauge_stations.get(station_id)
         name = station.name.strip() if station and station.name else station_id
-        return [GaugeAnomaly(station_id, decision.residual_m, decision.ts, name, decision.threshold_m)]
+        late = clock.now() - decision.ts > GAUGE_FRESH
+        return [GaugeAnomaly(station_id, decision.residual_m, decision.ts, name, decision.threshold_m, late)]
 
     # --- tsunami alerts -----------------------------------------------------------------------------------------
 

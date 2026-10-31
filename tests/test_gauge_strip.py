@@ -66,6 +66,7 @@ def fixture_rows() -> list[GaugeRowData]:
             standard[-1].ts,
             tuple(r.residual_m for r in standard),
             DART_THRESHOLD,
+            "dart",
         ),
         GaugeRowData(
             "32401",
@@ -75,9 +76,17 @@ def fixture_rows() -> list[GaugeRowData]:
             event_rows[-1].ts,
             tuple(r.residual_m for r in event),
             DART_THRESHOLD,
+            "dart",
         ),
         GaugeRowData(
-            "9414290", "San Francisco", 95.0, "1m", gauge[-1].ts, tuple(r.residual_m for r in gauge), GAUGE_THRESHOLD
+            "9414290",
+            "San Francisco",
+            95.0,
+            "1m",
+            gauge[-1].ts,
+            tuple(r.residual_m for r in gauge),
+            GAUGE_THRESHOLD,
+            "coops",
         ),
     ]
 
@@ -112,6 +121,18 @@ def test_a_row_with_old_data_says_stale_instead_of_flagging_it():
     # a 15-minute DART file arrives in batches, so hours-old data is normal for it, a day is not
     assert not is_stale(_row(), NOW) and is_stale(_row(newest=NOW - timedelta(hours=20)), NOW)
     assert is_stale(_row(mode="6m", newest=NOW - timedelta(hours=2)), NOW)
+
+
+async def test_strip_says_when_no_tide_gauge_is_in_range():
+    dart_only = [r for r in fixture_rows() if r.kind == "dart"]
+    app = StripApp(dart_only)
+    async with app.run_test(size=(110, 8)) as pilot:
+        await pilot.pause()
+        text = " ".join(str(w.render()) for w in app.query("Static"))
+        assert "No tide gauge within 1500 km" in text
+        app.query_one(GaugeStrip).show(fixture_rows(), NOW)
+        await pilot.pause()
+        assert "No tide gauge" not in " ".join(str(w.render()) for w in app.query("Static"))
 
 
 def test_sparkline_is_framed_by_zero_and_threshold():

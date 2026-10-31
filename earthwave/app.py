@@ -32,6 +32,7 @@ from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
+from earthwave.ui.labels import fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
@@ -239,6 +240,8 @@ class EarthwaveApp(App):
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
                 body = f"{event.name}: {event.residual_m:+.3f} m from the tide"
+                if event.late:
+                    body += f" at {fmt_time(event.ts, self.config.view.time_zone)}"
                 self.notify(body, title="Gauge anomaly", severity="warning", timeout=10)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
@@ -348,6 +351,7 @@ class EarthwaveApp(App):
                     newest=newest.ts if newest else None,
                     residuals=tuple(r.residual_m for r in self.store.gauge_residuals(station.id)),
                     threshold_m=threshold_m(station.kind, self.config.alerts),
+                    kind=station.kind,
                 )
             )
         return rows

@@ -10,12 +10,13 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Sparkline, Static
 
+from earthwave.sources.geo import COOPS_MAX_KM
 from earthwave.ui.labels import fmt_age
 
 MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
 NAME_WIDTH = 20
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
-STALE_AFTER_BATCH = timedelta(hours=6)  # a 15-minute DART file arrives in batches, hours apart
+STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,7 @@ class GaugeRowData:
     newest: datetime | None  # timestamp of the newest reading
     residuals: tuple[float, ...]  # signed metres, oldest first
     threshold_m: float  # the anomaly threshold for this station's kind
+    kind: str = ""  # dart | coops
 
 
 def shown_residuals(residuals: Sequence[float]) -> list[float]:
@@ -128,6 +130,8 @@ class GaugeStrip(Vertical):
             return
         for row in self._rows:
             yield GaugeRow(row, self._now)
+        if any(r.kind == "dart" for r in self._rows) and not any(r.kind == "coops" for r in self._rows):
+            yield Static(f"No tide gauge within {COOPS_MAX_KM:.0f} km.", classes="gauge-empty")
 
     def show(self, rows: Sequence[GaugeRowData], now: datetime) -> None:
         self._rows = tuple(rows)

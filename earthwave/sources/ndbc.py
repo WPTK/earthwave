@@ -29,7 +29,8 @@ DART_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station_id}.dart"
 MODES = {1: "15m", 2: "1m", 3: "15s"}
 # NDBC marks a missing value with a run of 9s whose width depends on the field. The short ones fall inside the
 # physical range, so they are listed; 9999.000 and the like are caught by the range, which also drops zero, negative
-# and NaN heights. A DART water column is between a few metres and the deepest trench.
+# and NaN heights. DART buoys moor in water from a few hundred to about 7,000 m, so 9,000 m leaves margin and stays
+# below the 9999 marker.
 MISSING = frozenset({99.999, 999.999})
 MIN_HEIGHT_M = 1.0
 MAX_HEIGHT_M = 9000.0
@@ -185,6 +186,7 @@ def detrend(
 STATIONS_TTL = 3600.0  # activestations.xml is refetched hourly
 STATIONS_RETRY = 600.0  # after a failed refresh, keep the known list and retry in ten minutes
 UNAVAILABLE_RETRY = 600.0  # a buoy whose file answered 404 is left out of the selection this long, then tried again
+UNAVAILABLE_MAX = 6 * 3600.0  # the wait doubles with every further 404 in a row, up to this
 HISTORY = timedelta(hours=12)  # readings kept per station per batch: the 3 h fit plus room to draw
 
 
@@ -221,6 +223,7 @@ class DartSource:
         self._alert_active = False
         self._stations = load_bundled_stations()
         self._stations_due: float | None = None  # clock.monotonic() when activestations.xml is next refetched
+        self._strikes: dict[str, int] = {}  # consecutive 404s per station
         self._unavailable: dict[str, float] = {}  # station -> clock.monotonic() when it is tried again
         self._event_until: dict[str, datetime] = {}  # per station; only a fresh answer from that station changes it
         self._unsent: tuple[models.Station, ...] = ()
@@ -237,6 +240,12 @@ class DartSource:
     def stations(self) -> tuple[models.Station, ...]:
         """The station list as last fetched, or the bundled snapshot before the first fetch."""
         return tuple(self._stations)
+
+    def mark_unavailable(self, station_id: str) -> None:
+        """The file answered 404: leave the buoy out of the selection, twice as long for each 404 in a row."""
+        strikes = self._strikes[station_id] = self._strikes.get(station_id, 0) + 1
+        wait = min(UNAVAILABLE_RETRY * 2 ** (strikes - 1), UNAVAILABLE_MAX)
+        self._unavailable[station_id] = self._clock.monotonic() + wait
 
     @property
     def unavailable(self) -> frozenset[str]:
@@ -279,7 +288,7 @@ class DartSource:
             try:
                 response = await client.get(DART_URL.format(station_id=station_id))
                 if response.status_code == 404:
-                    self._unavailable[station_id] = self._clock.monotonic() + UNAVAILABLE_RETRY
+                    self.mark_unavailable(station_id)
                     self._event_until.pop(station_id, None)
                     continue
                 response.raise_for_status()
@@ -288,6 +297,7 @@ class DartSource:
                 continue
             ok += 1
             self._unavailable.pop(station_id, None)
+            self._strikes.pop(station_id, None)
             rows = parse_dart(response.text, station_id)
             self._event_until.pop(station_id, None)
             if rows:

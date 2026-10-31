@@ -179,6 +179,44 @@ def test_a_reselected_station_does_not_replay_hours_old_history(dclock):
     assert merge_dart(store, dclock, pulse_rows(dart_rows()[-1], range(1, 40), 0.15)) == []
 
 
+def test_leaving_and_reentering_the_selection_does_not_reannounce_an_ongoing_episode(dclock):
+    store = anomaly_store(dclock)
+    last = dart_rows()[-1]
+    assert len(merge_dart(store, dclock, pulse_rows(last, range(1, 25), 0.15))) == 1
+    store.forget_gauges(["46402"])  # out of the selection and back in
+    more = [replace(r, value_m=last.value_m + 0.15) for r in pulse_rows(last, range(25, 40), 0.15)]
+    assert merge_dart(store, dclock, more) == []
+
+
+def test_a_late_anomaly_says_so(dclock):
+    store = anomaly_store(dclock)
+    dclock.advance(3600)
+    (event,) = merge_dart(store, dclock, pulse_rows(dart_rows()[-1], range(1, 40), 0.15))
+    assert event.late
+    (note,) = AlertRules(ALERTS).evaluate([event])
+    assert " at " in note.body and "20" in note.body
+    on_time = GaugeAnomaly("46402", 0.1, dclock.now(), "x", 0.05)
+    assert not on_time.late and " at " not in AlertRules(ALERTS).evaluate([on_time])[0].body
+
+
+def _coops_step(start_h: float, offset: float = 0.4, hours: int = 10):
+    preds = [
+        coops.Prediction("S", datetime(2026, 10, 31, tzinfo=UTC) + timedelta(minutes=6 * i), 1.0)
+        for i in range(hours * 10)
+    ]
+    obs = [
+        GaugeReading("S", "coops", p.ts, 1.0 + (offset if p.ts >= preds[0].ts + timedelta(hours=start_h) else 0), "6m")
+        for p in preds
+    ]
+    return coops.remove_baseline(coops.residuals(obs, preds)), preds[0].ts
+
+
+def test_a_sustained_offset_is_not_absorbed_mid_event():
+    out, t0 = _coops_step(5)
+    two_hours_in = next(r for r in out if r.ts == t0 + timedelta(hours=7))
+    assert two_hours_in.residual_m > 0.3  # still an anomaly two hours into a surge
+
+
 def _coops_tide(hours: int = 8):
     t0 = datetime(2026, 10, 31, tzinfo=UTC)
     return [coops.Prediction("9414290", t0 + timedelta(minutes=6 * i), 1.0) for i in range(hours * 10)]
@@ -281,7 +319,11 @@ def test_selection_follows_the_geometry_chain(clock):
     circle = alert(geometry=("circle", 52.5, 160.3, 300.0), origin=(T0, 52.5, 160.3))
     store.merge(Batch("tsunamigov", T0, alerts=(circle,)), clock)
     sel = choose_stations(store, clock, darts, tides)
-    assert 0 < len(sel.dart) <= 6 and sel.coops == ()  # no US tide gauge is within reach of Kamchatka
+    assert 0 < len(sel.dart) <= 6
+    assert all(km <= 1500 for km, _ in sel.coops) and {s.name for _, s in sel.coops} == {
+        "Adak Island",
+        "Atka",
+    }  # only the Aleutian gauges reach the edge of a 300 km circle off Kamchatka
     assert [km for km, _ in sel.dart] == sorted(km for km, _ in sel.dart) and all(km <= 3000 for km, _ in sel.dart)
     assert sel.ids == sel.dart_ids + sel.coops_ids
 
@@ -384,6 +426,41 @@ async def test_alert_hint_speeds_both_sources_up_and_back_down(clock):
         app.sync_gauges()
         assert (app.dart.interval(SourceHealth()), app.coops.interval(SourceHealth())) == (900, 300)
         assert app.dart._selected == () and app.gauge_selection == GaugeSelection()
+
+
+async def test_a_404_buoy_backs_off_instead_of_displacing_another_every_ten_minutes(clock):
+    watch = alert(levels.WATCH, origin=(T0, 52.5, 160.3), geometry=("circle", 52.5, 160.3, 300.0))
+    app = gauge_app(clock, [watch])
+    async with app.run_test(size=(120, 40)):
+        app.sync_gauges()
+        first = app.gauge_selection.dart_ids[0]
+        retry = ndbc.UNAVAILABLE_RETRY
+        app.dart.mark_unavailable(first)
+        app.sync_gauges()
+        assert first not in app.gauge_selection.dart_ids
+        clock.advance(retry + 1)
+        app.sync_gauges()
+        assert first in app.gauge_selection.dart_ids  # probed again after the first wait
+        app.dart.mark_unavailable(first)  # and it still answers 404
+        app.sync_gauges()
+        clock.advance(retry + 1)
+        app.sync_gauges()
+        assert first not in app.gauge_selection.dart_ids  # the wait doubled
+        clock.advance(retry + 1)
+        app.sync_gauges()
+        assert first in app.gauge_selection.dart_ids
+
+
+async def test_a_station_leaving_the_selection_is_forgotten_by_the_store(clock):
+    watch = alert(levels.WATCH, origin=(T0, 52.5, 160.3), geometry=("circle", 52.5, 160.3, 300.0))
+    app = gauge_app(clock, [watch])
+    async with app.run_test(size=(120, 40)):
+        app.sync_gauges()
+        first = app.gauge_selection.dart_ids[0]
+        app.store._evaluated[first] = T0
+        app.dart.mark_unavailable(first)
+        app.sync_gauges()
+        assert first not in app.store._evaluated
 
 
 async def test_information_statements_select_stations_without_speeding_up(clock):
@@ -518,7 +595,9 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
         await app._outbox.join()
         assert [n.title for n in fake.sent].count("Gauge anomaly") == 1  # one toast for the whole episode
         await drive(
-            clock, lambda: min(app.store.gauge_residuals("32401"), key=lambda r: r.residual_m).residual_m < -0.025
+            clock,
+            lambda: min(app.store.gauge_residuals("32401"), key=lambda r: r.residual_m).residual_m < -0.025,
+            step=15,
         )
         row = next(r for r in app.gauge_rows() if r.station_id == "32401")
         assert row.mode != "15m" and row.threshold_m == 0.02
@@ -527,7 +606,7 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
             app.screen.refresh_gauges()
             return "-0.031 m !" in strip_text(app)  # the signed maximum of the real pulse, flagged
 
-        await drive(clock, pulse_flagged)
+        await drive(clock, pulse_flagged, step=15)
         assert app.tracker.gauge_active() == ["32401"]
         assert "Gauge anomaly" in str(app.dashboard.query_one("#ticker").render())
 

@@ -98,7 +98,7 @@ async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
             app.screen.refresh_gauges()
             return "-0.031 m !" in screen_text(app)
 
-        await drive(clock, flagged)
+        await drive(clock, flagged, step=15)
         assert [n.title for n in fake.sent].count("Gauge anomaly") == 1
         assert next(r for r in app.gauge_rows() if r.station_id == "32401").mode != "15m"
 
