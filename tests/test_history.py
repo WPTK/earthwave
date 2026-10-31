@@ -373,6 +373,8 @@ def _run_cli(monkeypatch, tmp_path, argv):
     seen = {}
 
     class FakeApp:
+        return_code = None
+
         def __init__(self, config, **kwargs):
             seen.update(kwargs)
 

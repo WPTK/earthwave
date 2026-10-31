@@ -1,6 +1,5 @@
 """UAT: the dashboard, the too-small message and live resizing, driven through Pilot at real terminal sizes."""
 
-
 from earthwave.ui.widgets.quake_list import QuakeList
 from uat.harness import screen_text, week_app
 

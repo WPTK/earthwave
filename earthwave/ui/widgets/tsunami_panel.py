@@ -1,5 +1,6 @@
 """Dashboard tsunami panel: the alerts in force (or a quiet message), pulsing its border while one is unacknowledged."""
 
+from collections.abc import Callable
 from datetime import datetime
 
 from rich.text import Text
@@ -25,9 +26,11 @@ def build_panel(
     down: tuple[str, ...] = (),
     unknown: bool = False,
     checking: bool = False,
+    expiry: Callable[[TsunamiAlert], datetime | None] = lambda alert: alert.expires,
 ) -> Text:
     """The alerts in force. `overdue` ids are past their expiry with no word from their feed; `down` names feeds
-    that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear."""
+    that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear.
+    `expiry` says when each alert lapses (the store's answer, which covers alerts that state no expiry)."""
     if not alerts and checking:
         return Text("Checking tsunami feeds", style="grey50")
     if not alerts and not down:
@@ -39,7 +42,7 @@ def build_panel(
         if alert.id in overdue:
             text.append("OVERDUE, feed has not confirmed it ended", "bold red")
         else:
-            text.append(fmt_until(alert.expires, now), "grey62")
+            text.append(fmt_until(expiry(alert), now), "grey62")
         text.append("\n")
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
@@ -68,6 +71,9 @@ class TsunamiPanel(Static):
         down: tuple[str, ...] = (),
         unknown: bool = False,
         checking: bool = False,
+        expiry: Callable[[TsunamiAlert], datetime | None] = lambda alert: alert.expires,
     ) -> None:
-        self.update(build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking))
+        self.update(
+            build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking, expiry=expiry)
+        )
         self.set_class(pulse, "pulse")

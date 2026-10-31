@@ -27,7 +27,7 @@ from earthwave.state.store import Store
 from earthwave.ui.widgets.quake_list import QuakeList
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
-MODULES = ("textual", "httpx", "platformdirs", "tomli_w")
+MODULES = ("textual", "httpx", "platformdirs")
 
 
 def _need(count: int, what: str) -> int:
@@ -169,7 +169,11 @@ def run(args: argparse.Namespace) -> int:
     except ConfigError as exc:
         print(f"earthwave: {exc}", file=sys.stderr)
         return 2
-    log_path = setup_logging(Path(args.log) if args.log else None, args.debug)
+    try:
+        log_path = setup_logging(Path(args.log) if args.log else None, args.debug)
+    except OSError as exc:
+        print(f"earthwave: cannot open the log file: {exc}", file=sys.stderr)
+        return 2
     clock: Clock = SystemClock()
     transport: httpx.AsyncBaseTransport | None = None
     try:
@@ -190,7 +194,7 @@ def run(args: argparse.Namespace) -> int:
     notifier = default_notifier() if notifying else None
     # a replayed past must not enter the real history
     history, history_error = (None, None) if args.replay else open_history(config, clock)
-    EarthwaveApp(
+    app = EarthwaveApp(
         config,
         clock=clock,
         transport=transport,
@@ -199,13 +203,25 @@ def run(args: argparse.Namespace) -> int:
         history=history,
         offline=args.offline,
         history_error=history_error,
-    ).run()
-    return 0
+    )
+    app.run()
+    return app.return_code or 0
+
+
+def _attach_home_value(argv: list[str]) -> list[str]:
+    """argparse takes `-33.87,151.21` for an option, so `--home -33.87,151.21` becomes `--home=-33.87,151.21`."""
+    out: list[str] = []
+    for arg in argv:
+        if out and out[-1] == "--home" and arg.startswith("-"):
+            out[-1] = f"--home={arg}"
+        else:
+            out.append(arg)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_attach_home_value(sys.argv[1:] if argv is None else argv))
     if args.selftest:
         return selftest()
     return run(args)
