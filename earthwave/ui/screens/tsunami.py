@@ -27,6 +27,7 @@ STATUS_STYLE = {
     "expired": "grey50",
     "cancelled": "grey50",
     "superseded": "grey50",
+    "withdrawn": "grey50",
 }
 
 
@@ -113,7 +114,11 @@ class TsunamiScreen(Screen):
                 SOURCE_NAMES.get(alert.source, alert.source),
                 "; ".join(alert.areas)[:40],
                 fmt_time(alert.issued, tz) if alert.issued else "",
-                "overdue" if status == "overdue" else fmt_until(alert.expires, now) if status == "active" else "",
+                "overdue"
+                if status == "overdue"
+                else fmt_until(app.store.expiry(alert), now)
+                if status == "active"
+                else "",
                 Text(status, STATUS_STYLE.get(status, "grey62")),
                 key=alert.id,
             )

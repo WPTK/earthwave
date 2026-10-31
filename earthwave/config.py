@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,13 +94,14 @@ CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("view", "time_zone"): ("local", "UTC"),
     ("alerts", "pager_min"): ("green", "yellow", "orange", "red"),
 }
-# (minimum, maximum); None means unbounded. USGS is never polled faster than 60 s.
+# (minimum, maximum); None means unbounded. USGS is never polled faster than 60 s, and no feed is polled so rarely
+# that the status bar would call it fresh for hours.
 RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
-    ("poll", "usgs_seconds"): (60, None),
-    ("poll", "tsunami_seconds"): (30, None),
-    ("poll", "dart_seconds"): (60, None),
-    ("poll", "coops_seconds"): (60, None),
-    ("poll", "alert_gauge_seconds"): (30, None),
+    ("poll", "usgs_seconds"): (60, 3600),
+    ("poll", "tsunami_seconds"): (30, 600),
+    ("poll", "dart_seconds"): (60, 3600),
+    ("poll", "coops_seconds"): (60, 3600),
+    ("poll", "alert_gauge_seconds"): (30, 600),
     ("view", "min_magnitude"): (-2, 10),
     ("view", "hours"): (1, 24 * 365),
     ("home", "lat"): (-90, 90),
@@ -107,6 +109,8 @@ RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
     ("home", "radius_km"): (1, 20_000),
     ("alerts", "major_magnitude"): (0, 10),
     ("alerts", "near_home_magnitude"): (-2, 10),
+    ("alerts", "gauge_anomaly_dart_m"): (0.001, 10),
+    ("alerts", "gauge_anomaly_gauge_m"): (0.001, 10),
     ("history", "retain_days"): (1, 3650),
 }
 
@@ -170,12 +174,16 @@ def _coerce(section: str, key: str, value: Any, default: Any) -> Any:
     if isinstance(default, int | float):
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise ConfigError(f"{where} must be a number, got {value!r}")
+        if not math.isfinite(value):
+            raise ConfigError(f"{where} must be a finite number, got {value!r}")
         low, high = RANGES.get((section, key), (None, None))
         if (low is not None and value < low) or (high is not None and value > high):
             raise ConfigError(f"{where} must be between {low} and {high}, got {value!r}")
         return int(value) if isinstance(default, int) and float(value).is_integer() else value
     if not isinstance(value, str):
         raise ConfigError(f"{where} must be text, got {value!r}")
+    if not value.isprintable():
+        raise ConfigError(f"{where} must not contain control characters, got {value!r}")
     choices = CHOICES.get((section, key))
     if choices and value not in choices:
         raise ConfigError(f"{where} must be one of {', '.join(choices)}, got {value!r}")
@@ -183,7 +191,7 @@ def _coerce(section: str, key: str, value: Any, default: Any) -> Any:
 
 
 def parse_config(data: dict[str, Any]) -> Config:
-    """Build a Config from parsed TOML; unknown keys are logged and ignored, bad values raise ConfigError."""
+    """Build a Config from parsed TOML; unknown keys and bad values raise ConfigError (a typo must not pass quietly)."""
     sections: dict[str, Any] = {}
     for fld in dataclasses.fields(Config):
         cls = type(getattr(Config(), fld.name))
@@ -191,16 +199,16 @@ def parse_config(data: dict[str, Any]) -> Config:
         if not isinstance(raw, dict):
             raise ConfigError(f"[{fld.name}] must be a table")
         defaults = cls()
+        known = {f.name for f in dataclasses.fields(cls)}
         values = {}
         for key, value in raw.items():
-            if not hasattr(defaults, key) or isinstance(getattr(cls, key, None), property):
-                log.warning("config: ignoring unknown key [%s] %s", fld.name, key)
-                continue
+            if key not in known:
+                raise ConfigError(f"unknown key [{fld.name}] {key}")
             values[key] = _coerce(fld.name, key, value, getattr(defaults, key))
         sections[fld.name] = cls(**values)
     for key in data:
         if key not in sections:
-            log.warning("config: ignoring unknown section [%s]", key)
+            raise ConfigError(f"unknown section [{key}]")
     return Config(**sections)
 
 

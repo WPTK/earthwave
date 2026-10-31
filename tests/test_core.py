@@ -158,10 +158,6 @@ def test_invalid_values_raise(tmp_path, toml):
         parse_config(tomllib.loads(toml))
 
 
-def test_unknown_keys_are_ignored():
-    assert parse_config({"view": {"nope": 1}, "extra": {}}) == Config()
-
-
 def test_broken_toml_names_the_file(tmp_path):
     path = tmp_path / "c.toml"
     path.write_text("[view\n", encoding="utf-8")
@@ -263,3 +259,71 @@ def test_home_at_null_island_counts_as_unset():
     from earthwave.config import HomeConfig
 
     assert not HomeConfig("Home", 0.0, 0.0).enabled and HomeConfig("Home", 1.0, 0.0).enabled
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        "[poll]\ntsunami_seconds = inf",
+        "[poll]\ndart_seconds = nan",
+        "[poll]\ntsunami_seconds = 86400",
+        "[home]\nlat = nan",
+        "[home]\nradius_km = inf",
+        "[alerts]\ngauge_anomaly_dart_m = 0",
+        "[alerts]\ngauge_anomaly_gauge_m = -1.0",
+        "[alerts]\ngauge_anomaly_gauge_m = nan",
+        "[alerts]\ngauge_anomaly_dart_m = 1e9",
+        '[notify]\ncontact = "a\\u000ab"',
+        "[alerts]\nmajor_magnitde = 5.0",
+        "[home]\nradius = 200",
+        "[extra]\nx = 1",
+        '[view]\n__init__ = "x"',
+    ],
+)
+def test_non_finite_huge_and_unknown_config_values_raise(toml):
+    with pytest.raises(ConfigError):
+        parse_config(tomllib.loads(toml))
+
+
+def test_home_accepts_a_negative_latitude_without_equals(monkeypatch):
+    from earthwave import __main__ as cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "run", lambda args: seen.update(home=args.home) or 0)
+    assert cli.main(["--home", "-33.87,151.21", "--no-config"]) == 0
+    assert seen["home"] == "-33.87,151.21"
+    assert parse_home(seen["home"]) == (-33.87, 151.21)
+
+
+def test_a_bad_log_path_is_a_clean_message(tmp_path, capsys):
+    from earthwave import __main__ as cli
+
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    assert cli.main(["--no-config", "--log", str(blocker / "e.log")]) == 2
+    assert "cannot open the log file" in capsys.readouterr().err
+
+
+def test_a_crashed_app_exits_non_zero(monkeypatch):
+    from earthwave import __main__ as cli
+
+    class Crashed:
+        return_code = 1
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(cli, "EarthwaveApp", Crashed)
+    monkeypatch.setattr(cli, "open_history", lambda config, clock: (None, None))
+    assert cli.main(["--no-config"]) == 1
+
+
+def test_disabling_logging_resets_a_debug_level():
+    import logging
+
+    setup_logging(None, True)
+    setup_logging(None, False)
+    assert logging.getLogger("earthwave").level == logging.WARNING
