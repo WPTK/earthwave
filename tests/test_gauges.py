@@ -204,6 +204,86 @@ def test_snapshot_script_matches_bundled_json(tmp_path):
     subprocess.run([sys.executable, str(ROOT / "scripts" / "snapshot_stations.py"), "--out", str(out)], check=True)
     data = json.loads(out.read_text())
     assert len(data["stations"]) == 76
-    assert {"id", "kind", "name", "lat", "lon", "owner", "pgm", "type", "elev"} <= set().union(*data["stations"])
+    for st in data["stations"]:
+        assert {
+            "id",
+            "kind",
+            "name",
+            "lat",
+            "lon",
+            "owner",
+            "pgm",
+            "type",
+            "met",
+            "currents",
+            "waterquality",
+            "dart",
+        } <= set(st)
+        assert isinstance(st["lat"], float) and isinstance(st["lon"], float)
     bundled = ROOT / "earthwave" / "data" / "dart_stations.json"
     assert json.loads(bundled.read_text()) == data
+
+
+def test_snapshot_build_skips_rows_without_coordinates():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import snapshot_stations
+
+    xml = b'<stations created="x"><station id="1" type="dart" name="a"/><station id="2" type="dart" lat="1" lon="2"/></stations>'
+    assert [s["id"] for s in snapshot_stations.build(xml)["stations"]] == ["2"]
+
+
+# ---- detrend guards -------------------------------------------------------------------------
+
+
+def series(minutes: list[int], value=lambda m: 4700.0) -> list[ndbc.GaugeReading]:
+    t0 = datetime(2026, 10, 31, tzinfo=UTC)
+    return [ndbc.GaugeReading("T", "dart", t0 + timedelta(minutes=m), value(m), "15m") for m in minutes]
+
+
+def test_detrend_eight_point_boundary():
+    rows = series(list(range(0, 15 * 9, 15)))  # 9 readings: the last has exactly 8 prior, spanning 1h45
+    assert [r.ts for r in ndbc.detrend(rows)] == [rows[-1].ts]
+    assert ndbc.detrend(rows[:-1]) == []  # 7 prior
+
+
+def test_detrend_needs_time_span():
+    rows = series(list(range(0, 60)))  # plenty of points, only an hour of them
+    assert ndbc.detrend(rows) == []
+    assert ndbc.detrend(series(list(range(0, 91)))) != []  # 90 minutes of history is enough
+
+
+def test_detrend_duplicate_timestamps_do_not_blow_up():
+    rows = series(list(range(0, 200, 5)), lambda m: 4700 + 0.001 * m)
+    dup = rows + [r._replace(value_m=r.value_m + 0.02) for r in rows[10:30]]
+    res = ndbc.detrend(dup)
+    assert res and max(abs(r.residual_m) for r in res) < 0.05
+    assert len({r.ts for r in res}) == len(res)
+
+
+def test_detrend_hole_mid_window():
+    minutes = [m for m in range(0, 331) if not 100 < m < 132]  # 32-minute gap, 31 minutes with no samples
+    res = ndbc.detrend(series(minutes))
+    ts = {r.ts for r in res}
+    t0 = datetime(2026, 10, 31, tzinfo=UTC)
+    assert t0 + timedelta(minutes=99) in ts  # before the hole
+    assert t0 + timedelta(minutes=132) not in ts  # first point after it
+    assert t0 + timedelta(minutes=200) not in ts  # hole still inside the prior 3 h
+    assert t0 + timedelta(minutes=330) in ts  # hole has left the window
+
+
+def test_coops_one_minute_residual_against_one_minute_predictions():
+    obs = coops.parse_one_minute_water_level(load("one_minute_water_level_9414290.json"))
+    pred = coops.parse_predictions(load("predictions_1min_9414290.json"), "9414290")
+    res = coops.residuals(obs, pred)
+    assert len(res) >= 3
+    assert {r.ts for r in res} <= {o.ts for o in obs} & {p.ts for p in pred}
+    assert max(abs(r.residual_m) for r in res) < 1.0
+
+
+def test_coops_error_payload_raises():
+    err = {"error": {"message": "No data was found. This product may not be offered at this station."}}
+    for fn in (coops.parse_water_level, coops.parse_one_minute_water_level):
+        with pytest.raises(coops.CoopsError, match="No data"):
+            fn(err)
+    with pytest.raises(coops.CoopsError):
+        coops.parse_predictions(json.dumps(err), "1")

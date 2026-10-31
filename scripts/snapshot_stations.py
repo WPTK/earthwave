@@ -20,16 +20,17 @@ OUT = ROOT / "earthwave" / "data" / "dart_stations.json"
 
 
 def build(xml: bytes) -> dict:
-    """Every attribute of every ``type="dart"`` row, unpruned; coordinates become floats."""
+    """Every attribute of every ``type="dart"`` row, unpruned; rows without coordinates are skipped."""
     created = re.search(rb'created="([^"]+)"', xml)
     stations = []
     for el in ET.fromstring(xml).iter("station"):
         if el.get("type") != "dart":
             continue
         row = {k: v.strip() for k, v in el.attrib.items()}
-        for key in ("lat", "lon"):
-            if key in row:
-                row[key] = float(row[key])
+        try:
+            row["lat"], row["lon"] = float(row["lat"]), float(row["lon"])
+        except (KeyError, ValueError):
+            continue  # same rule as parse_active_stations
         row["kind"] = "dart"
         stations.append(row)
     stations.sort(key=lambda r: r["id"])

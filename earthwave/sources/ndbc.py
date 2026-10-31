@@ -4,6 +4,7 @@ Pure parsing and math: no network, no UI. The records mirror the plan's ``Statio
 ``GaugeReading`` so a later step can adapt them to the shared models.
 """
 
+import itertools
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
@@ -18,6 +19,7 @@ DETREND_WINDOW = timedelta(hours=3)
 DETREND_DEGREE = 3
 MIN_FIT_POINTS = 8
 MAX_GAP = timedelta(minutes=30)
+MIN_SPAN = DETREND_WINDOW / 2
 EVENT_WINDOW = timedelta(minutes=30)
 
 
@@ -129,13 +131,14 @@ def detrend(
     """Residual of each reading against a cubic fitted to the prior ``window`` of readings.
 
     This is NOAA's detiding approach: the fit uses only readings strictly before the point,
-    extrapolated to it. Points with fewer than ``MIN_FIT_POINTS`` prior readings in the window,
-    or whose newest prior reading is more than ``MAX_GAP`` earlier, are omitted (extrapolating
-    across a batch hole gives centimetre-scale errors).
-    ``since`` limits output (not the fit) to readings at or after that time.
-    Mixed 15-minute and 1-minute data is fine; the fit is over whatever rows exist.
+    extrapolated to it. A point gets no residual unless the prior window holds at least
+    ``MIN_FIT_POINTS`` distinct timestamps spanning at least ``MIN_SPAN`` with no hole longer
+    than ``MAX_GAP`` anywhere in it, including between the newest prior reading and the point
+    (extrapolating across a batch hole gives centimetre-scale errors). Rows sharing a timestamp
+    are collapsed to the last one. ``since`` limits output (not the fit) to readings at or
+    after that time. Mixed 15-minute and 1-minute data is fine; the fit is over whatever rows exist.
     """
-    rows = sorted(readings, key=lambda r: r.ts)
+    rows = sorted({r.ts: r for r in readings}.values(), key=lambda r: r.ts)
     span = window.total_seconds()
     out: list[Residual] = []
     lo = 0
@@ -145,8 +148,11 @@ def detrend(
         while rows[lo].ts < r.ts - window:
             lo += 1
         prior = [p for p in rows[lo:i] if p.ts < r.ts]
-        if len(prior) < MIN_FIT_POINTS or r.ts - prior[-1].ts > MAX_GAP:
-            continue  # too little history, or extrapolating across a data hole
+        if len(prior) < max(MIN_FIT_POINTS, degree + 1) or r.ts - prior[0].ts < MIN_SPAN:
+            continue  # too little history to fit
+        times = [p.ts for p in prior] + [r.ts]
+        if any(b - a > MAX_GAP for a, b in itertools.pairwise(times)):
+            continue  # a data hole inside the window
         xs = [(p.ts - r.ts).total_seconds() / span for p in prior]
         try:
             trend = _polyfit_at_zero(xs, [p.value_m for p in prior], degree)

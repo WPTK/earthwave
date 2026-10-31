@@ -42,8 +42,16 @@ class Residual(NamedTuple):
     residual_m: float
 
 
+class CoopsError(ValueError):
+    """CO-OPS answered 200 with an ``{"error": {"message": ...}}`` payload (no data, bad station, bad range)."""
+
+
 def _load(payload: str | bytes | dict) -> dict:
-    return payload if isinstance(payload, dict) else json.loads(payload)
+    data = payload if isinstance(payload, dict) else json.loads(payload)
+    error = data.get("error")
+    if error:
+        raise CoopsError(error.get("message", str(error)) if isinstance(error, dict) else str(error))
+    return data
 
 
 def _ts(text: str) -> datetime:
