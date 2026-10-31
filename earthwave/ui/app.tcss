@@ -109,23 +109,17 @@ TsunamiScreen {
     height: auto;
 }
 
-#tsunami_footer {
-    height: 1;
-    dock: bottom;
-    background: $panel;
-    color: $text-muted;
-}
-
 #search {
     display: none;
     height: 3;
     dock: bottom;
-    margin-bottom: 1;
+    margin-bottom: 2;  /* above the status bar and the footer */
 }
 
 #status {
     height: 1;
     dock: bottom;
+    margin-bottom: 1;  /* the footer takes the last row */
     background: $panel;
 }
 
@@ -147,6 +141,7 @@ Screen.too-small #banner,
 Screen.too-small #main,
 Screen.too-small #ticker,
 Screen.too-small #status,
+Screen.too-small Footer,
 Screen.too-small #search {
     display: none;
 }
@@ -217,4 +212,8 @@ FiltersScreen, HelpScreen {
 
 #detail_scroll {
     padding: 1 2;
+}
+
+Footer {
+    scrollbar-size-horizontal: 0;  /* too long for the width: later (lower priority) keys are cut off, no scrollbar row */
 }

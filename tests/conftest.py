@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,28 @@ def make_quake(quake_id: str = "q1", mag: float = 4.0, minutes_ago: float = 5, *
     time = kwargs.pop("time", T0 - timedelta(minutes=minutes_ago))
     defaults = {"lat": 10.0, "lon": 20.0, "depth_km": 10.0, "place": "somewhere", "updated": time}
     return Earthquake(id=quake_id, time=time, mag=mag, **{**defaults, **kwargs})
+
+
+async def wait_until(pilot, predicate, timeout: float = 2.0, what: str = "condition") -> None:
+    """Poll `predicate()` between frames; the footer and other late-composed widgets fill in a few frames after a
+    screen appears, so a fixed pause is a race."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await pilot.pause(0.02)
+
+
+async def footer_keys(pilot, timeout: float = 2.0) -> list:
+    """The current screen's footer keys once the footer has composed and been laid out."""
+    from textual.widgets._footer import FooterKey
+
+    def ready() -> bool:
+        keys = list(pilot.app.screen.query(FooterKey))
+        return bool(keys) and all(k.region.width > 0 for k in keys)
+
+    await wait_until(pilot, ready, timeout, "the footer")
+    return list(pilot.app.screen.query(FooterKey))
 
 
 @pytest.fixture

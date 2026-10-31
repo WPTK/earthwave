@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Input, Static
+from textual.widgets import Footer, Input, Static
 
 from earthwave.sources import levels
 from earthwave.ui.labels import filter_summary
@@ -64,6 +64,7 @@ class DashboardScreen(Screen):
                 yield TsunamiPanel(id="tsunami")
         yield Input(placeholder="search place, Enter to apply, Esc to clear", id="search")
         yield StatusBar(app.glyphs, id="status")
+        yield Footer(compact=True, show_command_palette=False)
         yield TooSmall(id="too_small")
 
     def on_mount(self) -> None:

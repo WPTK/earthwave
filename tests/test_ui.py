@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import pytest
-from conftest import FIXTURES, T0, load_json, make_quake
+from conftest import FIXTURES, T0, footer_keys, load_json, make_quake
 from rich.text import Text
 from test_observations import drive
 
@@ -458,6 +458,27 @@ async def test_help_lists_every_visible_binding_exactly_once():
     for key in keys:
         assert listed[key] == 1, (key, listed[key])
     assert all(len(Text.from_markup(line).plain) <= 74 for line in HELP_TEXT.splitlines())
+
+
+async def test_footer_is_built_from_bindings_and_leaves_the_status_bar_visible():
+    from textual.widgets import Footer
+
+    app = week_app()
+    async with app.run_test(size=(100, 30)) as pilot:  # the smallest supported terminal
+        await pilot.pause()
+        footer = app.screen.query_one(Footer)
+        status = app.screen.query_one("#status")
+        assert footer.display and status.display
+        assert footer.region.y == 29 and status.region.y == 28  # one row each, the footer last
+        keys = await footer_keys(pilot)
+        # Every shown dashboard binding is in the footer, in BINDINGS order, and none is cut off by the width.
+        assert [k.description for k in keys[:-1]] == [b.description for b in DashboardScreen.BINDINGS if b.show]
+        assert keys[-1].description == "Quit"
+        assert all(k.region.right <= 100 and k.region.width > 0 for k in keys)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, DetailScreen)
+        assert [k.description for k in await footer_keys(pilot)] == ["Back", "Browser", "Copy URL", "Quit"]
 
 
 # --- snapshot ---------------------------------------------------------------------------------------------------
