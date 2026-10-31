@@ -75,8 +75,9 @@ class QuakeList(ScrollView, can_focus=True):
     # --- data ---------------------------------------------------------------------------------------------------
 
     def set_rows(self, rows: list[Earthquake]) -> None:
-        """Replace the rows, keeping the cursor on the same quake if it is still listed."""
+        """Replace the rows, keeping the cursor, and a scrolled view, on the same quakes if they are still listed."""
         selected = self.selected
+        top = self.rows[self.scroll_offset.y].id if 0 < self.scroll_offset.y < len(self.rows) else None
         self.rows = rows
         if selected is not None:
             for i, quake in enumerate(rows):
@@ -88,6 +89,8 @@ class QuakeList(ScrollView, can_focus=True):
         else:
             self.cursor = 0
         self.virtual_size = Size(max(self.size.width, 1), len(rows))
+        if top is not None and (index := next((i for i, q in enumerate(rows) if q.id == top), None)) is not None:
+            self.scroll_to(y=index, animate=False, immediate=True)  # rows inserted above must not push the view
         self.refresh()
 
     @property

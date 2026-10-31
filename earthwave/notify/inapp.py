@@ -36,6 +36,9 @@ class AttentionKind(StrEnum):
 _RANK = {AttentionKind.UPDATED: 1, AttentionKind.NEW: 2, AttentionKind.MAJOR: 3, AttentionKind.TSUNAMI: 4}
 
 
+_UNSEEN_KINDS = (AttentionKind.NEW, AttentionKind.MAJOR)  # rows that count toward the unseen badge
+
+
 class PulseGate:
     """Cooldown per (id, kind): a repeated minor update does not re-flash a row that just flashed."""
 
@@ -165,12 +168,17 @@ class AttentionTracker:
         for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]
 
+    def restore(self, quake_ids: set[str]) -> None:
+        """Quakes announced in an earlier run and never seen: back to the dim highlight, with no flash."""
+        for quake_id in quake_ids:
+            self._items.setdefault(quake_id, Attention(AttentionKind.NEW, self._clock.monotonic() - NEW_FLASH_SECONDS))
+
+    def is_unseen(self, quake_id: str) -> bool:
+        item = self._items.get(quake_id)
+        return item is not None and item.kind in _UNSEEN_KINDS and not item.acked
+
     def unseen(self) -> int:
-        return sum(
-            1
-            for item in self._items.values()
-            if item.kind not in (AttentionKind.UPDATED, AttentionKind.TSUNAMI, AttentionKind.GAUGE) and not item.acked
-        )
+        return sum(1 for item in self._items.values() if item.kind in _UNSEEN_KINDS and not item.acked)
 
     def kind_of(self, quake_id: str) -> AttentionKind | None:
         item = self._items.get(quake_id)

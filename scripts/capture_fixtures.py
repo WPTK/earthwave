@@ -62,8 +62,15 @@ def main() -> int:
             c,
             COOPS,
             "coops/water_level_9414290.json",
-            {"product": "water_level", "station": "9414290", "datum": "MLLW", "units": "metric",
-             "time_zone": "gmt", "format": "json", "range": 6},
+            {
+                "product": "water_level",
+                "station": "9414290",
+                "datum": "MLLW",
+                "units": "metric",
+                "time_zone": "gmt",
+                "format": "json",
+                "range": 6,
+            },
         )
         jma_list = json.loads(save(c, "https://www.jma.go.jp/bosai/tsunami/data/list.json", "jma/list.json"))
         save(c, f"https://www.jma.go.jp/bosai/tsunami/data/{jma_list[0]['json']}", "jma/detail.json")
