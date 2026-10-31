@@ -53,7 +53,7 @@ $text.Item(0).InnerText = $env:EARTHWAVE_TOAST_TITLE
 $text.Item(1).InnerText = $env:EARTHWAVE_TOAST_BODY
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('earthwave').Show($toast)
-"""
+"""  # noqa: E501
 TOAST_TIMEOUT = 10  # seconds before a stuck PowerShell is killed
 
 
@@ -81,7 +81,8 @@ class WindowsToast(_ThreadedNotifier):
 class NotifySend(_ThreadedNotifier):
     def _show(self, note: Notification) -> None:
         level = "critical" if note.urgency == "critical" else "normal"
-        subprocess.run(["notify-send", "-u", level, "-a", "earthwave", "--", note.title, note.body], check=False, timeout=10)
+        cmd = ["notify-send", "-u", level, "-a", "earthwave", "--", note.title, note.body]
+        subprocess.run(cmd, check=False, timeout=10)
 
 
 class Osascript(_ThreadedNotifier):

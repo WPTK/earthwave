@@ -745,7 +745,7 @@ async def test_osascript_escapes_quotes_and_backslashes(monkeypatch):
     assert calls[0][2] == f"display notification {body} with title {title}"
 
 
-HOSTILE = "Quake $(Start-Process calc) `whoami` \"quoted\" 'single' ]]> <b>x</b>\n\"@\nStart-Process calc\x00"
+HOSTILE = 'Quake $(Start-Process calc) `whoami` "quoted" \'single\' ]]> <b>x</b>\n"@\nStart-Process calc\x00'
 
 
 async def test_windows_toast_keeps_feed_text_out_of_the_script(monkeypatch):
