@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +11,13 @@ from earthwave.__main__ import FIXTURES, main, selftest
 
 
 def test_version_is_zerover():
-    assert earthwave.__version__ == "0.0.1"
     assert earthwave.__version__.startswith("0.")
+
+
+def test_changelog_has_a_section_for_the_version():
+    """The release workflow refuses a tag whose version has no dated changelog section."""
+    changelog = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert re.search(rf"^## \[{re.escape(earthwave.__version__)}\] - \d{{4}}-\d{{2}}-\d{{2}}$", changelog, re.M)
 
 
 def test_version_flag(capsys):
