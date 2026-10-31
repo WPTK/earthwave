@@ -17,6 +17,7 @@ from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import ReplayTransport, recording_start
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
+from earthwave.poll import Freshness, Scheduler
 from earthwave.sources import jma, levels, nws, tsunamigov
 from earthwave.sources.base import SourceHealth
 from earthwave.state.events import (
@@ -30,6 +31,7 @@ from earthwave.state.events import (
 from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import Store
 from earthwave.ui.screens.tsunami import TsunamiScreen
+from earthwave.ui.widgets.tsunami_panel import build_panel
 
 TG = FIXTURES / "tsunamigov"
 KAM = TG / "kamchatka"
@@ -209,6 +211,7 @@ async def test_tsunamigov_source_follows_cap_links_once(clock):
     source = tsunamigov.TsunamiGovSource(clock)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         first = await source.fetch(client, None)
+        assert not first.meta["incomplete"]
         assert sorted(a.id for a in first.alerts) == ["PAAQ-1-tnfxzn", "PHEB-1-26297050"]
         count = len(calls)
         second = await source.fetch(client, None)
@@ -227,6 +230,7 @@ async def test_tsunamigov_survives_one_feed_failing_and_a_missing_bulletin(clock
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         batch = await tsunamigov.TsunamiGovSource(clock).fetch(client, None)
+    assert batch.meta["incomplete"]  # one Atom feed was down
     assert [a.id for a in batch.alerts] == ["PAAQ-1-tnfxzn"]
     assert batch.alerts[0].dedupe_key.startswith("WEAK53 PAAQ")  # header rebuilt from the URL
 
@@ -298,7 +302,8 @@ async def test_tsunamigov_keeps_retrying_through_a_cap_outage(clock):
     source = tsunamigov.TsunamiGovSource(clock)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         for _ in range(tsunamigov.MAX_ENTRY_FAILURES * 2):
-            assert (await source.fetch(client, None)).alerts == ()
+            outage = await source.fetch(client, None)
+            assert outage.alerts == () and outage.meta["incomplete"]  # a skipped CAP is not an answer
         batch = await source.fetch(client, None)
     assert [a.id for a in batch.alerts] == ["PAAQ-1-tnfxzn"]  # the outage outlasted the give-up count, still delivered
 
@@ -974,3 +979,384 @@ def test_replay_fixture_covers_every_url_once_per_step():
     assert stamps == sorted(stamps) and all(r["status"] == 200 for r in rows)
     assert sum(r["url"] == tsunamigov.FEEDS[0] for r in rows) == 3
     assert T0.year == 2026  # fixtures replay as 2025 events on the replay clock, not the test clock
+
+
+# --- alert correctness: lift reports, downgrades, restarts, silent feeds ------------------------------------------
+
+
+JMA_NOW = datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
+
+
+class JmaFeed:
+    """One JMA event served through the real source. `reports` maps a file name to (Kind code or None, report time);
+    None is an observation-only report with no forecast block. Names in `fail` answer 500."""
+
+    def __init__(self, reports: dict[str, tuple[str | None, str]]):
+        entry = json.loads(read(FIXTURES / "jma" / "list.json"))[0]
+        self.entries = [{**entry, "json": n, "ctt": f"2026101003374{i}"} for i, n in enumerate(reports)]
+        self.details = {}
+        for name, (code, reported) in reports.items():
+            detail = json.loads(read(FIXTURES / "jma" / "detail.json"))
+            detail["Head"]["ReportDateTime"] = reported
+            if code is None:
+                del detail["Body"]["Tsunami"]
+            else:
+                detail["Body"]["Tsunami"]["Forecast"]["Item"][0]["Category"]["Kind"]["Code"] = code
+            self.details[name] = detail
+        self.fail: set[str] = set()
+        self.source = jma.JmaSource(ReplayClock(JMA_NOW, real=lambda: 0.0))
+
+    async def poll(self) -> Batch:
+        def handler(request):
+            if request.url.path.endswith("list.json"):
+                return httpx.Response(200, json=self.entries)
+            name = request.url.path.rsplit("/", 1)[1]
+            if name in self.fail:
+                return httpx.Response(500)
+            return httpx.Response(200, json=self.details[name])
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await self.source.fetch(client, None)
+
+
+def jma_store() -> tuple[Store, ReplayClock]:
+    clock = ReplayClock(JMA_NOW, real=lambda: 0.0)
+    return Store(), clock
+
+
+async def test_jma_lift_report_ends_the_warning():
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:37:00+09:00"), "b.json": ("71", "2026-10-10T04:37:00+09:00")})
+    feed.fail = {"b.json"}
+    store, clock = jma_store()
+    tracker = AttentionTracker(clock)
+    first = await feed.poll()
+    warning = first.alerts[0]
+    assert warning.level == levels.WARNING and first.meta["incomplete"]  # b.json is still to come
+    events = store.merge(first, clock)
+    tracker.observe(events)
+    assert [type(e) for e in events] == [TsunamiIssued]
+    feed.fail = set()
+    second = await feed.poll()
+    lift = second.alerts[0]
+    assert lift.level == levels.INFORMATION and lift.areas  # code 71 only: nothing left to warn about
+    assert not second.meta["incomplete"]
+    events = store.merge(second, clock)
+    tracker.observe(events)
+    assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.WARNING
+    assert store.alert_status(warning, clock) == "superseded"
+    assert store.active_alerts(clock, actionable_only=True) == []
+    tracker.tsunami_sync({a.id for a in store.active_alerts(clock, actionable_only=True)})
+    assert tracker.tsunami_unacked() == 0
+    assert AlertRules(AlertsConfig()).evaluate(events) == []  # a lift is not a toast
+
+
+async def test_jma_observation_only_report_does_not_end_a_live_warning():
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:37:00+09:00"), "b.json": (None, "2026-10-10T04:37:00+09:00")})
+    store, clock = jma_store()
+    batch = await feed.poll()
+    observation = batch.alerts[1]
+    assert observation.level == levels.INFORMATION and observation.areas == ()
+    store.merge(batch, clock)
+    assert store.alert_status(batch.alerts[0], clock) == "active"
+    assert [a.id for a in store.active_alerts(clock, actionable_only=True)] == [batch.alerts[0].id]
+
+
+async def test_jma_report_retried_late_does_not_end_the_newer_warning():
+    feed = JmaFeed({"a.json": ("71", "2026-10-10T03:37:00+09:00"), "b.json": ("51", "2026-10-10T04:37:00+09:00")})
+    feed.fail = {"a.json"}  # the older report's detail is down at first, so the newer one is merged without it
+    store, clock = jma_store()
+    first = await feed.poll()
+    assert first.meta["incomplete"]
+    store.merge(first, clock)
+    feed.fail = set()
+    retried = await feed.poll()
+    assert retried.alerts[0].references == (first.alerts[0].id,)  # it names the newer report
+    assert retried.alerts[0].level == levels.INFORMATION and retried.alerts[0].areas
+    store.merge(retried, clock)
+    assert store.alert_status(first.alerts[0], clock) == "active"
+
+
+def test_information_from_another_source_still_ends_nothing(kclock):
+    # Only a source whose reports are snapshots (JMA) lets an information statement end its predecessors.
+    store = Store()
+    merge(store, kclock, kam(1))
+    info = replace(kam(1), id="info3", dedupe_key="info3", level=levels.INFORMATION, references=(kam(1).id,))
+    merge(store, kclock, info)
+    assert store.alert_status(kam(1), kclock) == "active"
+
+
+def test_downgrade_is_not_swallowed_by_the_record_it_updates(kclock):
+    store = Store()
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    merge(store, kclock, nws_alert(), source="nws")  # N1
+    merge(store, kclock, kam(1))  # W1 repeats N1 (same WMO header) and gives the record its quake
+    assert len(store.alerts()) == 1 and store.alerts()[0].quake_ref == "us6000qw60"
+    downgrade = replace(
+        kam(1),
+        id="w2",
+        dedupe_key="w2",
+        level=levels.ADVISORY,
+        references=(kam(1).id,),
+        areas=store.alerts()[0].areas,
+        issued=NOW,
+    )
+    events = merge(store, kclock, downgrade)
+    assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.WARNING
+    assert [(a.id, a.level) for a in store.active_alerts(kclock)] == [("w2", levels.ADVISORY)]
+    assert store.alert_status(store.get_alert(kam(1).id), kclock) == "superseded"
+
+
+def test_a_repeat_of_a_follow_up_still_closes_what_it_names(kclock):
+    # NWS repeats a follow-up whose reference ids it spells differently; the tsunami.gov copy then names the target.
+    store = Store()
+    merge(store, kclock, kam(1))
+    first = replace(kam(2), id="c-nws", references=("urn:not-known",), quake_ref=None, origin=None, source="nws")
+    merge(store, kclock, first, source="nws")
+    assert store.alert_status(kam(1), kclock) == "active"  # nothing it names is known yet
+    again = replace(kam(2), id="c-cap", references=(kam(1).id,))
+    events = merge(store, kclock, again)
+    assert [type(e) for e in events] == [TsunamiCancelled] and events[0].alert.id == kam(1).id
+    assert store.alert_status(kam(1), kclock) == "cancelled"
+
+
+def test_a_batch_replaying_watch_warning_cancel_raises_no_alarm(kclock):
+    store, tracker = Store(), AttentionTracker(kclock)
+    events = merge(store, kclock, kam(0), kam(1), kam(2))  # a feed that keeps its entries, read after a restart
+    assert not [e for e in events if isinstance(e, TsunamiIssued | TsunamiChanged)]
+    assert AlertRules(AlertsConfig()).evaluate(events) == []
+    tracker.observe(events)
+    assert tracker.tsunami_unacked() == 0 and store.active_alerts(kclock) == []
+
+
+def test_a_batch_reports_only_the_alert_that_is_live_at_its_end(kclock):
+    store = Store()
+    events = merge(store, kclock, kam(0), kam(1))
+    assert [type(e) for e in events] == [TsunamiChanged] and events[0].alert.id == kam(1).id
+    assert events[0].previous_level == levels.WATCH
+
+
+class ScriptedFeed:
+    name = "tsunamigov"
+    min_interval = 60.0
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+
+    def interval(self, health):
+        return 60.0
+
+    async def fetch(self, client, since):
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome() if callable(outcome) else outcome
+
+
+async def test_warning_stays_in_force_until_its_feed_answers_after_expiry(kclock):
+    store = Store()
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),)), RuntimeError("down"), Batch("tsunamigov", NOW)])
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since  # what Scheduler.run wires up
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "active"
+        kclock.advance(5 * 3600)  # past the 03:51Z expiry with the feed erroring
+        await sched.poll_source("tsunamigov", client)
+        assert sched.freshness("tsunamigov") is not Freshness.FRESH
+        assert store.alert_status(kam(1), kclock) == "overdue"
+        assert [a.id for a in store.active_alerts(kclock, actionable_only=True)] == [kam(1).id]
+        await sched.poll_source("tsunamigov", client)  # the feed answers, and nothing follows up
+    assert store.alert_status(kam(1), kclock) == "expired" and store.active_alerts(kclock) == []
+
+
+async def test_a_poll_that_skipped_something_or_began_before_expiry_does_not_confirm(kclock):
+    store = Store()
+
+    def slow_answer():
+        kclock.advance(5 * 3600)  # the expiry passes while the request is in flight
+        return Batch("tsunamigov", NOW)
+
+    feed = ScriptedFeed(
+        [
+            Batch("tsunamigov", NOW, alerts=(kam(1),)),
+            slow_answer,
+            Batch("tsunamigov", NOW, meta={"incomplete": True}),
+            Batch("tsunamigov", NOW),
+        ]
+    )
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "overdue"  # it began before the expiry
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "overdue"  # it skipped a product
+        await sched.poll_source("tsunamigov", client)
+    assert store.alert_status(kam(1), kclock) == "expired"
+
+
+async def test_follow_up_of_an_overdue_alert_is_a_change_and_its_cancel_a_cancellation(kclock):
+    store = Store()
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),)), RuntimeError("down")])
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        kclock.advance(5 * 3600)
+        await sched.poll_source("tsunamigov", client)
+    assert store.alert_status(kam(1), kclock) == "overdue"
+    later = replace(
+        kam(1), id="w3", dedupe_key="w3", references=(kam(1).id,), expires=kclock.now() + timedelta(hours=1)
+    )
+    events = merge(store, kclock, later)
+    assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.WARNING
+    early = ReplayClock(NOW, real=lambda: 0.0)
+    store2 = Store()
+    store2.answered_since = lambda source, when: False  # a feed that has said nothing since
+    merge(store2, early, kam(1))
+    early.advance(5 * 3600)
+    assert store2.alert_status(kam(1), early) == "overdue"
+    events = merge(store2, early, replace(kam(2), expires=None))
+    assert [type(e) for e in events] == [TsunamiCancelled] and events[0].alert.id == kam(1).id
+
+
+def test_panel_never_reads_as_an_all_clear_while_feeds_are_down(kclock):
+    assert build_panel([], NOW).plain == "No tsunami alerts in force"
+    every = build_panel([], NOW, down=("tsunamigov failed", "nws stale"), unknown=True).plain
+    assert "UNKNOWN" in every and "tsunamigov failed, nws stale" in every and "No tsunami alerts" not in every
+    one = build_panel([], NOW, down=("jma failed",)).plain
+    assert "UNKNOWN" not in one and "Partial: jma failed" in one and "No tsunami alerts in force" in one
+    late = build_panel([kam(1)], NOW + timedelta(hours=5), overdue=frozenset({kam(1).id}), down=("nws failed",)).plain
+    assert "OVERDUE" in late and "Partial: nws failed" in late
+
+
+def failing_app(handler=None, start=NOW + timedelta(hours=5)) -> EarthwaveApp:
+    """An app on the replay clock whose requests go to `handler`, by default all failing."""
+
+    def down(request):
+        raise httpx.ConnectError("network down")
+
+    clock = ReplayClock(start, speed=500)
+    config = with_overrides(Config(), 2.5, 24, None, "ascii")
+    return EarthwaveApp(config, clock=clock, transport=httpx.MockTransport(handler or down))
+
+
+async def test_offline_start_does_not_say_all_clear():
+    app = failing_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_for(lambda: app.tsunami_feeds_down()[0] and app.tsunami_feeds_down()[1])
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "UNKNOWN" in panel and "tsunamigov failed" in panel and "No tsunami alerts" not in panel
+
+
+async def test_one_failing_feed_is_a_partial_notice_not_an_unknown():
+    nws_body = read(FIXTURES / "nws" / "tsunami_warning.geojson")
+
+    def handler(request):
+        if "weather.gov" in str(request.url):
+            return httpx.Response(200, text=nws_body)
+        raise httpx.ConnectError("network down")
+
+    app = failing_app(handler, start=NOW)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_for(lambda: app.scheduler.freshness("jma") is Freshness.ERROR)
+        await wait_for(lambda: app.store.alerts())
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        down, every = app.tsunami_feeds_down()
+        assert "nws" not in [n for n, _ in down]
+        assert not every  # nws answered
+        assert "UNKNOWN" not in str(app.dashboard.query_one("#tsunami").render())
+
+
+async def test_warning_stays_on_screen_when_its_feed_dies_past_expiry():
+    nws_body = read(FIXTURES / "nws" / "tsunami_warning.geojson")
+    state = {"up": True}
+
+    def handler(request):
+        if state["up"] and "weather.gov" in str(request.url):
+            return httpx.Response(200, text=nws_body)
+        raise httpx.ConnectError("network down")
+
+    app = failing_app(handler, start=NOW)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_for(lambda: app.tracker.tsunami_unacked() == 1)  # issued while running, through the merge path
+        warning = app.store.alerts()[0]
+        state["up"] = False
+        app.clock.advance(5 * 3600)  # past the 03:51Z expiry
+        await wait_for(lambda: app.scheduler.statuses["nws"].health.failures > 0)
+        app.sync_tsunami()
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        assert app.store.alert_status(warning, app.clock) == "overdue"
+        assert app.tracker.tsunami_unacked() == 1
+        assert app.dashboard.query_one("#banner").display
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "WARNING" in panel and "OVERDUE" in panel
+
+
+async def test_restart_replay_in_an_incomplete_batch_raises_no_events(kclock):
+    kclock.advance(5 * 3600)  # the Warning expired long before this start
+    store = Store()
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),), meta={"incomplete": True})])
+    results = []
+    sched = Scheduler([feed], store, kclock, results.append)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        result = await sched.poll_source("tsunamigov", client)
+    assert result.events == ()
+    assert store.alert_status(kam(1), kclock) == "expired" and store.active_alerts(kclock) == []
+
+
+async def test_overdue_ends_even_if_the_feed_never_completes_a_poll(kclock):
+    store = Store()
+    incomplete = Batch("tsunamigov", NOW, meta={"incomplete": True})
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),), meta={"incomplete": True}), incomplete, incomplete])
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        assert sched.statuses["tsunamigov"].health.incomplete
+        kclock.advance(5 * 3600)
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "overdue"
+        kclock.advance(7 * 3600)  # more than OVERDUE_MAX after the 03:51Z expiry
+        await sched.poll_source("tsunamigov", client)
+    assert store.alert_status(kam(1), kclock) == "expired"
+
+
+async def test_jma_advisory_retried_late_does_not_end_the_newer_warning():
+    feed = JmaFeed({"a.json": ("62", "2026-10-10T03:37:00+09:00"), "b.json": ("51", "2026-10-10T04:37:00+09:00")})
+    feed.fail = {"a.json"}
+    store, clock = jma_store()
+    first = await feed.poll()
+    store.merge(first, clock)
+    feed.fail = set()
+    retried = await feed.poll()
+    assert retried.alerts[0].level == levels.ADVISORY and retried.alerts[0].references == (first.alerts[0].id,)
+    store.merge(retried, clock)
+    assert store.alert_status(first.alerts[0], clock) == "active"
+    assert store.alert_status(retried.alerts[0], clock) == "active"
+
+
+def test_panel_checks_before_it_clears():
+    assert build_panel([], NOW, checking=True).plain == "Checking tsunami feeds"
+
+
+async def test_no_fresh_feed_never_reads_as_all_clear():
+    config = with_overrides(Config(), 2.5, 24, None, "ascii")
+    app = EarthwaveApp(config, clock=ReplayClock(NOW, real=lambda: 0.0), run_scheduler=False, ticks=False)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.scheduler_running = True  # polling is on, but nothing has answered yet
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "Checking tsunami feeds" in panel and "No tsunami alerts" not in panel
+        app.scheduler.statuses["nws"].health.failures = 1  # one feed fails while the others are still loading
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "UNKNOWN" in panel and "nws failed" in panel and "No tsunami alerts" not in panel

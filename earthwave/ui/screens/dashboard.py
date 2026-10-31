@@ -14,7 +14,7 @@ from earthwave.ui.labels import filter_summary
 from earthwave.ui.widgets.banner import Banner
 from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
-from earthwave.ui.widgets.status_bar import SourceLine, StatusBar, StatusInfo
+from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusBar, StatusInfo
 from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import TooSmall, is_too_small
 from earthwave.ui.widgets.tsunami_panel import TsunamiPanel
@@ -94,7 +94,7 @@ class DashboardScreen(Screen):
         app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
-        empty.display = not rows
+        empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
         empty.update(f"No quakes match {filter_summary(app.view)}. Press f to change filters.")
         self.refresh_ticker()
         self.refresh_tsunami()
@@ -122,14 +122,29 @@ class DashboardScreen(Screen):
         blink = int(app.clock.monotonic() * 2) % 2 == 0
         self.query_one(Banner).show(actionable, unacked)
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
-        self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=bool(unacked) and blink)
+        overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
+        feeds, none_fresh = app.tsunami_feeds_down()
+        down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in feeds)
+        pulse = bool(unacked) and blink
+        self.query_one(TsunamiPanel).show(
+            active,
+            app.clock.now(),
+            pulse=pulse,
+            overdue=overdue,
+            down=down,
+            unknown=none_fresh and bool(down),
+            checking=none_fresh and not down,
+        )
 
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave
         if shown is None:
             shown = len(self.query_one(QuakeList).rows)
         sched = app.scheduler
-        lines = tuple(SourceLine(name, sched.freshness(name), sched.age(name)) for name in sched.statuses)
+        lines = tuple(
+            SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
+            for name in sched.statuses
+        )
         next_poll = (
             min((sched.next_poll_in(n) for n in sched.statuses), default=None) if app.scheduler_running else None
         )

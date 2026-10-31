@@ -17,17 +17,39 @@ def fmt_until(expires: datetime | None, now: datetime) -> str:
     return f"expires in {fmt_age(seconds)}" if seconds > 0 else "expired"
 
 
-def build_panel(alerts: list[TsunamiAlert], now: datetime, max_lines: int = 8) -> Text:
-    if not alerts:
+def build_panel(
+    alerts: list[TsunamiAlert],
+    now: datetime,
+    max_lines: int = 8,
+    overdue: frozenset[str] = frozenset(),
+    down: tuple[str, ...] = (),
+    unknown: bool = False,
+    checking: bool = False,
+) -> Text:
+    """The alerts in force. `overdue` ids are past their expiry with no word from their feed; `down` names feeds
+    that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear."""
+    if not alerts and checking:
+        return Text("Checking tsunami feeds", style="grey50")
+    if not alerts and not down:
         return Text("No tsunami alerts in force", style="grey50")
     text = Text(no_wrap=True, overflow="ellipsis")
     for alert in alerts[:max_lines]:
         text.append(f"{alert.level:<11}", LEVEL_COLORS[alert.level])
         text.append(f" {alert.headline} ", "white")
-        text.append(fmt_until(alert.expires, now), "grey62")
+        if alert.id in overdue:
+            text.append("OVERDUE, feed has not confirmed it ended", "bold red")
+        else:
+            text.append(fmt_until(alert.expires, now), "grey62")
         text.append("\n")
     if len(alerts) > max_lines:
-        text.append(f"+{len(alerts) - max_lines} more, t for all", "grey62")
+        text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
+    if not alerts and not unknown:
+        text.append("No tsunami alerts in force\n", "grey50")
+    if down:
+        if unknown:
+            text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", "bold red")
+        else:
+            text.append(f"Partial: {', '.join(down)}", "yellow")
     return text
 
 
@@ -37,6 +59,15 @@ class TsunamiPanel(Static):
         self.border_title = "Tsunami"
         self.update(Text("No tsunami alerts in force", style="grey50"))
 
-    def show(self, alerts: list[TsunamiAlert], now: datetime, pulse: bool) -> None:
-        self.update(build_panel(alerts, now))
+    def show(
+        self,
+        alerts: list[TsunamiAlert],
+        now: datetime,
+        pulse: bool,
+        overdue: frozenset[str] = frozenset(),
+        down: tuple[str, ...] = (),
+        unknown: bool = False,
+        checking: bool = False,
+    ) -> None:
+        self.update(build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking))
         self.set_class(pulse, "pulse")

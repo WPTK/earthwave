@@ -96,6 +96,11 @@ class Scheduler:
         last_ok = self.statuses[name].health.last_ok
         return None if last_ok is None else (self._clock.now() - last_ok).total_seconds()
 
+    def answered_since(self, name: str, when: datetime) -> bool:
+        """True when a poll that skipped nothing began at or after `when`; an unknown source is never in doubt."""
+        status = self.statuses.get(name)
+        return status is None or (status.health.last_complete is not None and status.health.last_complete >= when)
+
     def next_poll_in(self, name: str) -> float:
         return max(0.0, self.statuses[name].next_due - self._clock.monotonic())
 
@@ -143,6 +148,7 @@ class Scheduler:
         status.last_poll = self._clock.monotonic()
         status.in_flight, status.nudged_due = True, None
         status.health.polls += 1
+        started = self._clock.now()
         events: list[Event] = []
         batch = None
         error = None
@@ -160,6 +166,9 @@ class Scheduler:
                 events.append(SourceRecovered(name))
             health.failures = 0
             health.last_ok = self._clock.now()
+            health.incomplete = bool(batch is not None and batch.meta.get("incomplete"))
+            if batch is not None and not health.incomplete:
+                health.last_complete = started
             health.last_error = None
             if batch is not None and batch.cursor is not None:
                 self._cursors[name] = batch.cursor
@@ -208,6 +217,7 @@ class Scheduler:
     async def run(self, client: httpx.AsyncClient) -> None:
         """Poll forever; each source has its own task, so a slow or failing one never delays the others."""
         running: dict[str, asyncio.Task] = {}
+        self._store.answered_since = self.answered_since  # an alert past its expiry now needs a fresh answer
         try:
             while True:
                 for name in self.due():

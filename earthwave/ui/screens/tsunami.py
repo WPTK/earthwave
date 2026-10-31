@@ -11,6 +11,7 @@ from textual.widgets import DataTable, Static
 
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
+from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import LEVEL_COLORS
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
@@ -20,14 +21,20 @@ if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
 
 SOURCE_NAMES = {"tsunamigov": "tsunami.gov", "nws": "NWS", "jma": "JMA"}
-STATUS_STYLE = {"active": "green", "expired": "grey50", "cancelled": "grey50", "superseded": "grey50"}
+STATUS_STYLE = {
+    "active": "green",
+    "overdue": "bold red",
+    "expired": "grey50",
+    "cancelled": "grey50",
+    "superseded": "grey50",
+}
 
 
 def table_rows(alerts: list[TsunamiAlert], statuses: dict[str, str]) -> list[TsunamiAlert]:
     """Alerts in force first (highest level, newest), then the rest newest first."""
 
     def key(alert: TsunamiAlert) -> tuple:
-        live = statuses[alert.id] == "active"
+        live = statuses[alert.id] in IN_FORCE
         issued = alert.issued.timestamp() if alert.issued else 0.0
         return (not live, -levels.RANK[alert.level] if live else 0, -issued)
 
@@ -106,7 +113,7 @@ class TsunamiScreen(Screen):
                 SOURCE_NAMES.get(alert.source, alert.source),
                 "; ".join(alert.areas)[:40],
                 fmt_time(alert.issued, tz) if alert.issued else "",
-                fmt_until(alert.expires, now) if status == "active" else "",
+                "overdue" if status == "overdue" else fmt_until(alert.expires, now) if status == "active" else "",
                 Text(status, STATUS_STYLE.get(status, "grey62")),
                 key=alert.id,
             )
