@@ -1306,7 +1306,7 @@ def failing_app(handler=None, start=NOW + timedelta(hours=5)) -> EarthwaveApp:
     def down(request):
         raise httpx.ConnectError("network down")
 
-    clock = ReplayClock(start, speed=500)
+    clock = ReplayClock(start, real=lambda: 0.0)  # moves only when a test advances it, never with the runner's load
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     return EarthwaveApp(config, clock=clock, transport=httpx.MockTransport(handler or down))
 

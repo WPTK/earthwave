@@ -11,6 +11,7 @@ import httpx
 import pytest
 from conftest import FIXTURES, T0, load_json, make_quake
 from rich.text import Text
+from test_observations import drive
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -308,11 +309,11 @@ async def test_scheduler_exception_is_logged_not_swallowed(caplog):
 
 async def test_live_replay_session_runs_through_the_app():
     path = FIXTURES / "replay" / "usgs_short.jsonl"
-    clock = ReplayClock(recording_start(path), speed=600)
+    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive` and the recording
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock))
     async with app.run_test(size=(120, 40)) as pilot:
-        await wait_for(lambda: app.store.get("replay_new1") is not None)
+        await drive(clock, lambda: app.store.get("replay_new1") is not None)
         await pilot.pause()
         assert app.tracker.kind_of("replay_new1") == "major"
         assert app.scheduler.freshness("usgs") is Freshness.FRESH
@@ -329,7 +330,7 @@ async def test_source_crash_leaves_app_running():
         raise httpx.ConnectError("network down")
 
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
-    app = EarthwaveApp(config, clock=ReplayClock(T0, speed=500), transport=httpx.MockTransport(handler))
+    app = EarthwaveApp(config, clock=ReplayClock(T0, real=lambda: 0.0), transport=httpx.MockTransport(handler))
     async with app.run_test(size=(120, 40)) as pilot:
         await wait_for(lambda: app.scheduler.statuses["usgs"].health.failures > 0)
         await pilot.pause()
