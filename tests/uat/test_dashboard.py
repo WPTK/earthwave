@@ -19,15 +19,7 @@ async def test_dashboard_shows_list_status_and_ticker(size):
         assert "too small" not in text
 
 
-async def test_status_bar_shows_counts_and_filter(size, request):
-    if size[0] <= 120:
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason="BUG: while sources are still loading, the status bar's per-source words ('usgs loading ...') "
-                "fill the line at 120 columns and below, so 'N shown of M' and the filter summary are ellipsized away",
-            )
-        )
+async def test_status_bar_shows_counts_and_filter(size):
     app = week_app()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
@@ -114,11 +106,6 @@ async def test_live_resize_relays_out_and_keeps_working():
         assert "Map · region" in screen_text(app)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: after the too-small overlay has been shown and the terminal grows back, no widget has focus "
-    "(app.focused is None), so j/k and Enter on the quake list do nothing until Tab is pressed",
-)
 async def test_list_keeps_focus_after_a_too_small_round_trip():
     app = week_app()
     async with app.run_test(size=(120, 30)) as pilot:
