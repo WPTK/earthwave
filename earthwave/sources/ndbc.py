@@ -1,13 +1,26 @@
-"""NDBC DART buoys: station list, ``.dart`` rows, event-mode detection and cubic detrend.
+"""NDBC DART buoys: station list, ``.dart`` rows, event-mode detection, cubic detrend and the polling source.
 
-Pure parsing and math: no network, no UI. The records mirror the plan's ``Station`` and
-``GaugeReading`` so a later step can adapt them to the shared models.
+The parsers and math are pure. ``DartSource`` is the network half: it adapts the NamedTuples here to the
+shared models and picks its own cadence.
 """
 
 import itertools
+import json
+import logging
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from importlib import resources
 from typing import NamedTuple
+
+import httpx
+
+from earthwave import models
+from earthwave.clock import Clock
+from earthwave.config import PollConfig
+from earthwave.sources.base import SourceHealth
+
+log = logging.getLogger(__name__)
 
 STATIONS_URL = "https://www.ndbc.noaa.gov/activestations.xml"
 DART_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station_id}.dart"
@@ -160,3 +173,123 @@ def detrend(
             continue
         out.append(Residual(r.station_id, r.ts, r.value_m, trend, r.value_m - trend))
     return out
+
+
+# --- polling source ---------------------------------------------------------------------------------------------
+
+STATIONS_TTL = 3600.0  # activestations.xml is refetched hourly
+STATIONS_RETRY = 600.0  # after a failed refresh, keep the known list and retry in ten minutes
+HISTORY = timedelta(hours=12)  # readings kept per station per batch: the 3 h fit plus room to draw
+
+
+def load_bundled_stations() -> list[models.Station]:
+    """The bundled snapshot of NDBC's DART stations (``data/dart_stations.json``)."""
+    data = json.loads(resources.files("earthwave").joinpath("data/dart_stations.json").read_text(encoding="utf-8"))
+    return [models.Station(s["id"], "dart", s["name"], float(s["lat"]), float(s["lon"])) for s in data["stations"]]
+
+
+def to_station(s: Station) -> models.Station:
+    return models.Station(s.id, s.kind, s.name, s.lat, s.lon)
+
+
+def to_reading(r: GaugeReading) -> models.GaugeReading:
+    return models.GaugeReading(r.station_id, r.kind, r.ts, r.value_m, r.mode)
+
+
+class DartSource:
+    """Polls ``.dart`` files for the selected stations only (see ``set_selection``).
+
+    Cadence: ``dart_seconds`` normally, ``alert_gauge_seconds`` while ``set_alert_active(True)`` or while a selected
+    buoy's newest reading is 1-minute/15-second data no older than ``EVENT_WINDOW`` on the injected clock. A buoy
+    that fails to answer keeps its last event state. The batch cursor and ``since`` are not used by design: each
+    poll reads the whole file and the store merges duplicates.
+    """
+
+    name = "dart"
+    min_interval = 30.0  # alert_gauge_seconds may be configured as low as 30
+
+    def __init__(self, clock: Clock, poll: PollConfig | None = None):
+        self._clock = clock
+        self._poll = poll or PollConfig()
+        self._selected: tuple[str, ...] = ()
+        self._alert_active = False
+        self._stations = load_bundled_stations()
+        self._stations_due: float | None = None  # clock.monotonic() when activestations.xml is next refetched
+        self._unavailable: set[str] = set()
+        self._event_until: dict[str, datetime] = {}  # per station; only a fresh answer from that station changes it
+        self._unsent: tuple[models.Station, ...] = ()
+
+    def set_selection(self, station_ids: Iterable[str]) -> None:
+        self._selected = tuple(station_ids)
+        self._event_until = {k: v for k, v in self._event_until.items() if k in self._selected}
+
+    def set_alert_active(self, active: bool) -> None:
+        """Hint from the alert store: a Warning, Advisory or Watch is active (poll at ``alert_gauge_seconds``)."""
+        self._alert_active = active
+
+    @property
+    def stations(self) -> tuple[models.Station, ...]:
+        """The station list as last fetched, or the bundled snapshot before the first fetch."""
+        return tuple(self._stations)
+
+    @property
+    def unavailable(self) -> frozenset[str]:
+        """Stations whose file answered 404; selection should skip them."""
+        return frozenset(self._unavailable)
+
+    def event_mode(self) -> bool:
+        now = self._clock.now()
+        return any(now < until for until in self._event_until.values())
+
+    def interval(self, health: SourceHealth) -> float:
+        fast = self._alert_active or self.event_mode()
+        return float(self._poll.alert_gauge_seconds if fast else self._poll.dart_seconds)
+
+    async def _refresh_stations(self, client: httpx.AsyncClient) -> None:
+        """Refetch the list when due; the new list waits in `_unsent` until a batch carrying it is returned."""
+        if self._stations_due is not None and self._clock.monotonic() < self._stations_due:
+            return
+        try:
+            response = await client.get(STATIONS_URL)
+            response.raise_for_status()
+            fresh = [to_station(s) for s in parse_active_stations(response.content)]
+        except (httpx.HTTPError, ET.ParseError) as exc:
+            log.warning("dart: station list unavailable, keeping %d known (%r)", len(self._stations), exc)
+            fresh = []
+        if not fresh:
+            self._stations_due = self._clock.monotonic() + STATIONS_RETRY
+            return
+        self._stations = fresh
+        self._unsent = tuple(fresh)
+        self._stations_due = self._clock.monotonic() + STATIONS_TTL
+
+    async def fetch(self, client: httpx.AsyncClient, since: str | None) -> models.Batch:
+        await self._refresh_stations(client)
+        readings: list[models.GaugeReading] = []
+        failures: list[Exception] = []
+        ok = 0
+        for station_id in self._selected:
+            try:
+                response = await client.get(DART_URL.format(station_id=station_id))
+                if response.status_code == 404:
+                    self._unavailable.add(station_id)
+                    self._event_until.pop(station_id, None)
+                    continue
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                failures.append(exc)
+                continue
+            ok += 1
+            self._unavailable.discard(station_id)
+            rows = parse_dart(response.text, station_id)
+            self._event_until.pop(station_id, None)
+            if rows:
+                newest = rows[-1].ts
+                rows = [r for r in rows if r.ts >= newest - HISTORY]
+                if in_event_mode(rows):
+                    self._event_until[station_id] = newest + EVENT_WINDOW
+            readings.extend(to_reading(r) for r in rows)
+        if failures and not ok:
+            raise failures[-1]
+        stations, self._unsent = self._unsent, ()  # a fetch that raised above keeps them for the next batch
+        return models.Batch(self.name, self._clock.now(), readings=tuple(readings), stations=stations)
