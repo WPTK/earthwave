@@ -33,6 +33,7 @@ dev = [
     "pytest-xdist>=3.6",
     "pytest-cov>=5",
     "pytest-textual-snapshot",
+    "textual==8.2.8",
     "ruff>=0.8",
     "vulture>=2.14",
     "mypy>=1.13",
@@ -51,7 +52,7 @@ version = { attr = "earthwave.__version__" }
 include = ["earthwave*"]
 
 [tool.setuptools.package-data]
-earthwave = ["data/*.json"]
+earthwave = ["ui/*.tcss", "data/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -20,7 +20,7 @@ The design, data sources and milestone list are in `docs/plan.md`; read it and i
 
 ## Milestone flow
 
-Before the PR: tick the milestone box in `docs/plan.md`, write a short "State after Mn" note, append changelog draft
+Before the PR (a session running in parallel leaves `docs/plan.md` to the managing session): tick the milestone box in `docs/plan.md`, write a short "State after Mn" note, append changelog draft
 lines, run the verification block. PRs go against `main`; merge only when CI is green on the exact head.
 
 ## Commands
@@ -40,3 +40,6 @@ py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -e ".[dev]"
 `earthwave/` package (`__main__.py` CLI; the full module plan is in `docs/plan.md`), `scripts/`, `tests/` with saved
 live payloads under `tests/fixtures/<source>/` (`-text` in `.gitattributes`, never reformat them), `docs/`.
 Use `127.0.0.1`, not `localhost`, for local servers on Windows.
+
+## Data resolution
+Geographic and generated data must be high resolution (Natural Earth 1:10m target, 1:50m minimum). The rule is stated once, in `docs/plan.md` under "Data resolution rule".

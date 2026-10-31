@@ -97,7 +97,7 @@ earthwave/
               banner.py  gauge_strip.py  too_small.py
     screens/  dashboard.py  detail.py  tsunami.py  history.py  filters.py  help.py
   data/
-    coastline_110m.json  Natural Earth 1:110m coastline as simplified polylines (public domain)
+    coastline_10m.json   Natural Earth 1:10m coastline, little or no simplification (public domain; file name set by the M3 PR)
     dart_stations.json   snapshot of NDBC DART station metadata (fallback when NDBC is down)
 scripts/   build_exe.ps1  make_coastline.py  snapshot_stations.py  screenshot_terminal.ps1
 tests/     fixtures/{usgs,tsunamigov,nws,jma,ndbc,coops,replay}/  test_*.py  __snapshots__/  uat/
@@ -153,7 +153,7 @@ Replay and record live in the transport layer, so every source runs unchanged ag
 
 ### Map panel
 
-- `scripts/make_coastline.py` (dev-only, uses `pyshp`) downloads Natural Earth 1:110m coastline, simplifies with Douglas–Peucker (tolerance 0.5°), writes `data/coastline_110m.json` as `[[lon, lat], ...]` polylines, about 100 KB. Committed; the script is for regeneration.
+- `scripts/make_coastline.py` (dev-only, uses `pyshp`) downloads Natural Earth coastline at 1:10m (1:50m is the minimum), applies little or no simplification, and writes `data/coastline_10m.json` as `[[lon, lat], ...]` polylines. There is no file size target. Committed; the script is for regeneration. The M3 PR (#15) regenerates the data to this rule; no M1 code depends on the file name.
 - `braille.py`: `BrailleCanvas(cols, rows)` with a 2×4 dot grid per cell, Bresenham line plotting, equirectangular projection for a viewport `(lon0, lat0, lon1, lat1)`. Coastline raster cached per viewport+size; only markers redraw each tick.
 - Markers over the raster: `·` `•` `●` `◉` by magnitude band, colored, blinking while they have attention; `⌂` for home; a ring glyph at the source quake of any active tsunami alert, and alert geometry (NWS polygon or CAP circle) tinted along the coast.
 - `glyphs = "auto"` picks unicode except on Windows without `WT_SESSION` (conhost), where it picks ascii: a 1×1 cell coastline with `.`/`:` and ASCII markers. `--glyphs` overrides.
@@ -229,7 +229,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 
 ## Execution: one session per milestone
 
-- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions run one at a time in the main checkout at `C:\earthwave` (no worktrees, since each worktree would need its own `.venv`). Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
+- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions may run in parallel in separate git worktrees (each with its own `.venv`) when their files do not overlap (the earlier "no worktrees" rule is relaxed after M1); otherwise they run one at a time in the main checkout at `C:\earthwave`. Sessions running in parallel do not edit `docs/plan.md`; the managing session ticks their boxes and writes their State notes. Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
 - A session reads `CLAUDE.md` and its milestone section in `docs/plan.md` first, implements only that milestone, and stops. Anything discovered outside its scope goes into a GitHub issue or the "Deferred" list at the end of `docs/plan.md`, never into the session.
 - Before opening its PR, a session (1) ticks its milestone's checkbox in `docs/plan.md` and writes a short "State after Mn" note there (what exists, what was deviated from and why, what the next session must know), (2) appends its changelog draft lines to the "Changelog draft" list in `docs/plan.md` (not to `CHANGELOG.md`; see Versioning and changelog), (3) runs the full verification block. The next session starts after the PR is merged.
 - Brief template for starting a milestone session (fill in N and the slug):
@@ -250,10 +250,14 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
   - A release with nothing to list uses a single emphasized notice such as `_First release._`.
   - `CHANGELOG.md` in M0 contains only the title; the first entry is written at the `0.1.0` release in M6.
 
+## Data resolution rule
+
+Geographic and generated data (coastlines, borders, plate boundaries, tsunami zones, station lists) must be high resolution, not oversimplified. File size is not a constraint. The linecast project (github.com/ashuttl/linecast) is the minimum detail bar; Natural Earth 1:10m is the target and 1:50m is the minimum.
+
 ## Milestones (one session, one branch, one PR each, in order)
 
 - [x] M0 Bootstrap
-- [ ] M1 Earthquake core and infrastructure
+- [x] M1 Earthquake core and infrastructure
 - [ ] M2 Tsunami alerts and alerting
 - [ ] M3 World map
 - [ ] M4 Observations
@@ -278,7 +282,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 - Fixtures: the captured Bonin Islands information statement; archived Warning/Advisory/Watch/Cancel products from tsunami.gov per-event URLs (the July 2025 Kamchatka M8.8 Pacific-wide warnings are a good set); one NWS tsunami alert GeoJSON; a JMA list + detail pair. A replay fixture that walks Watch → Warning → Cancellation drives the UI test and a tsunami-screen snapshot, since live feeds are quiet most days.
 
 ### M3: World map
-- `scripts/make_coastline.py`, `data/coastline_110m.json`, `ui/widgets/braille.py`, `map_panel.py`, zoom/pan, auto/ascii glyph selection, attention blinking on markers, tsunami geometry highlighting.
+- `scripts/make_coastline.py`, `data/coastline_10m.json`, `ui/widgets/braille.py`, `map_panel.py`, zoom/pan, auto/ascii glyph selection, attention blinking on markers, tsunami geometry highlighting.
 - Tests: projection math, canvas plotting of known segments, snapshots of the world view at 80×24 (ascii) and 160×40 (unicode).
 
 ### M4: Observations
@@ -321,6 +325,25 @@ Manual checks per milestone:
 - Deviations: repo root is `C:\earthwave` (built on Gilead, not the gaming PC); no winget install step; the plan was edited in place rather than re-committed. `--selftest` skips fixture parsing when `tests/fixtures` is absent (a packaged exe), so M6 can bundle or drop that.
 - Next session (M1): the repo has no `earthwave/` modules beyond the CLI; `.venv` is untracked and must be created with `py -3.13 -m venv .venv` then `pip install -e ".[dev]"`.
 
+## State after M1
+
+- Exists: everything in the M1 section. `clock.py`, `net.py`, `logging_setup.py`, `config.py`, `models.py`, `poll.py`, `app.py`, `sources/{base,usgs,geo}.py`, `state/{store,events}.py`, `notify/inapp.py` (AttentionTracker only), `ui/{theme,glyphs,labels,app.tcss}`, `ui/widgets/{quake_list,status_bar,ticker,map_panel,too_small}.py`, `ui/screens/{dashboard,detail,filters,help}.py`. Package `__init__.py` files are empty. `--selftest` also renders one headless 120x40 frame. Tests: 142 after the review fixes, with a dashboard snapshot; Textual is pinned to `8.2.8` in the dev extra. M3 (`braille.py`, coastline) and M4 (`ndbc.py`, `coops.py`, station snapshot) are pure modules and may land in parallel with or before M2 without touching M1 files.
+- Verified live on 2026-10-31: the startup chain (`4.5_week`, `all_day`, `significant_month`) then `2.5_day` returns 200 once and 304 (`If-Modified-Since` from the `Last-Modified` cursor) on the next poll.
+- Public shape of `earthwave/models.py` (all frozen, slotted dataclasses, aware-UTC datetimes):
+  - `Earthquake(id, time, lat, lon, mag, depth_km=0.0, source="usgs", mag_type="", place="", status="automatic", tsunami_flag=False, pager_alert=None, sig=0, felt=None, cdi=None, mmi=None, updated=None, url="", detail_url="", also_ids=())`
+  - `QuakeDetail(id, pager_alert, pager_max_mmi, shakemap_max_mmi, shakemap_max_pga, shakemap_max_pgv, dyfi_max_mmi, dyfi_responses, nearby_cities, products)` (all but `id` optional)
+  - `TsunamiAlert(id, dedupe_key, source, level, headline, areas=(), issued=None, expires=None, updated=None, geometry=None, text="", quake_ref=None)`; `geometry` is `("circle", lat, lon, radius_km)`, `("polygon", ((lon, lat), ...))` or `None`
+  - `Station(id, kind, name, lat, lon)`; `GaugeReading(station_id, kind, ts, value_m, mode)`
+  - `Batch(source, fetched_at, quakes=(), alerts=(), readings=(), stations=(), not_modified=False, backfill=False, cursor=None, coverage=None, meta={})`: `cursor` is opaque and handed back to that source's next `fetch` as `since`; `backfill` batches merge silently; `coverage` is `(hours, min_magnitude)`.
+- Public shape of `earthwave/sources/base.py`: `SourceHealth(failures=0, last_ok=None, last_error=None, polls=0)` and the `Source` protocol: attributes `name: str` and `min_interval: float` (the scheduler never polls faster), `interval(health) -> float` (seconds after a success; 0 = again immediately), `async fetch(client: httpx.AsyncClient, since: str | None) -> Batch` (raise on any failure; the scheduler catches it, applies backoff and emits `SourceDegraded`/`SourceRecovered`).
+- Adding a source (M2-M4): implement the protocol, add it to the `sources` list in `EarthwaveApp.__init__` (gated by `config.sources`), and extend `Store.merge` (alerts and readings are not merged yet; `Batch.alerts/readings/stations` are carried but ignored). `PollResult(source, generation, events, batch, error)` goes to the app as the `PollDone` message; `AttentionTracker.observe` ignores event types it does not know, so M2 adds the `tsunami` kind there and `PulseGate`.
+- Scheduler: `Scheduler(sources, store, clock, on_done, rng=None)`; `poll_source(name, client)` never raises; `submit_backfill(source, client, job)` runs a one-off query whose result is dropped if `switch()` bumped `generation` meanwhile; `refresh_now()` honors `min_interval`; backoff is interval x 2 per failure, capped at 600 s, +-10% jitter, 30 s base for a source whose interval is 0.
+- USGS source: startup chain once (silent backfill), then the smallest day feed that contains the view's `min_magnitude` (`steady_feed`); `set_min_magnitude` switches it, and `EarthwaveApp.apply_filters` backfills from fdsnws whenever the steady feed changed or `Store.is_covered(hours, min_magnitude)` is false. The store is "cold" until the first steady batch is merged; cold and backfill merges raise no events. Non-earthquake events (blasts) and features without a magnitude are skipped.
+- Replay: `ReplayTransport` serves the n-th request for a URL from the n-th record (the last repeats; unknown URL gives 404) and moves `ReplayClock` forward to the record's `ts`. `tests/fixtures/replay/usgs_short.jsonl` is composed from trimmed captured payloads (startup chain, `2.5_day` 200, 304, then a 200 with one revised and one synthetic M6.2 quake `replay_new1`); the new quake and its timestamps are synthetic.
+- Deviations: the map hides below 120 columns (not 100) because the overlay already replaces the layout below 100x30; the right column is only the map placeholder (the tsunami panel arrives in M2); `--notify` and `--offline` are not CLI flags yet (M2 and M5 add them); keys `t h o g z M` arrive with their milestones; the filter modal takes minimum magnitude and hours only; `pyproject.toml` ships `ui/*.tcss` and `data/*.json` as package data.
+- M3a and M4a landed on `main` before this PR merged (merged into this branch): `ui/widgets/braille.py` (`Viewport`, `WORLD`, `project`, `project_cell`, `BrailleCanvas`, `coastline_canvas`, `draw_polyline`, `render_ascii`, `load_coastline`), `earthwave/data/coastline_10m.json` (Natural Earth 1:10m, 148k points) and `scripts/make_coastline.py`; `sources/ndbc.py` (`parse_active_stations`, `parse_dart`, `in_event_mode`, `detrend`), `sources/coops.py` (`parse_stations`, `parse_water_level`, `parse_one_minute_water_level`, `parse_predictions`, `residuals`, `CoopsError`), `scripts/snapshot_stations.py` and `earthwave/data/dart_stations.json`. Their `Station` and `GaugeReading` NamedTuples are separate from `models.py` and must be adapted by M3b/M4b. Details are in PRs #15 and #17. The package-data entry in `pyproject.toml` is one table: `ui/*.tcss` and `data/*.json`.
+- Next sessions: M2 builds on `models.py`, `Store`, `AttentionTracker` and the `Scheduler`.
+
 ## Risks and mitigations
 
 - Tsunami feeds are quiet most of the time: capture the current information statement and archived warning products in M0/M2 and build everything from fixtures and replay with the replay clock.
@@ -343,7 +366,19 @@ Each milestone session appends its notable changes here as Common Changelog entr
 
 ### Added
 - Add `--version` and `--selftest` commands and project scaffolding.
+- Add a live earthquake dashboard from USGS feeds with a quake list, detail screen, filters, search, sorting and a status bar showing per-source freshness.
+- Add flashing rows for new, updated and major quakes, an unseen badge and an in-app toast for major quakes.
+- Add `fdsnws` history backfill when filters reach beyond what the feeds cover.
+- Add `--record` and `--replay` to capture and replay HTTP sessions with a replay clock, plus `--config`, `--no-config`, `--min-mag`, `--hours`, `--home`, `--glyphs`, `--log` and `--debug`.
+- Add a commented first-run config file under the user config directory.
+- Add a headless frame to `--selftest`.
 
 ## Deferred
 
 Items found during a milestone session that belong to a later one or to post-v1 go here, one line each, with the session that found them.
+
+- M1: the steady feed is a day feed, so revisions to quakes older than 24 h (for example a later `reviewed` flip) are only picked up when a filter change triggers an fdsnws query; an `updatedafter` fdsnws poll would close this.
+- M1: `Store.merge` keys on the USGS id only; when USGS re-associates events and changes the canonical id, the old row lingers until it ages out (`also_ids` is stored but not used to merge).
+- M1: nearby-cities parsing for the detail screen is tested only against a synthetic payload; the captured detail fixture has no `nearby-cities` product.
+- M1: `PulseGate` (repeat-flash cooldown) is not needed until updated rows can fire repeatedly; M2 adds it with the `tsunami` attention kind.
+- M1: the 60 s floor means pressing `r` soon after a poll does nothing visible; consider showing the wait in the toast.
