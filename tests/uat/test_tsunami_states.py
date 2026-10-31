@@ -54,7 +54,7 @@ async def test_state_warning_banner_then_acknowledge_clears_it(size):
         observe(app, 1)
         await pilot.pause()
         text = screen_text(app)
-        assert "TSUNAMI WARNING" in text and "TSUNAMI" in text.splitlines()[-1]  # banner and status bar
+        assert "TSUNAMI WARNING" in text and "TSUNAMI" in text.splitlines()[-2]  # banner and status bar
         banner = app.dashboard.query_one("#banner")
         assert banner.display
         await pilot.press("a")

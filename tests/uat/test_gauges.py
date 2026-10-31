@@ -42,7 +42,7 @@ async def test_observations_view_for_a_flagged_quake(clock, size):
         assert isinstance(app.screen, ObservationsScreen) and len(app.screen_stack) == 3
         text = screen_text(app)
         assert "somewhere" in text and "Stations nearest this quake" in text.replace("\n", " ")
-        assert "has not flagged" not in text and "Esc back" in text
+        assert "has not flagged" not in text and "esc Back" in text
         await pilot.press("o")  # `o` toggles back, like Esc
         await pilot.pause()
         assert app.screen is app.dashboard

@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Footer, Static
 
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
@@ -84,7 +84,7 @@ class TsunamiScreen(Screen):
                 yield Static("", id="alert_text")
             with Vertical(id="gauges"):
                 yield GaugeStrip(id="gauge_strip")
-        yield Static(" j/k move   a acknowledge   Esc back", id="tsunami_footer")
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)

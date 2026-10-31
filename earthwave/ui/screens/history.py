@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake
 from earthwave.sources import levels
@@ -45,7 +45,6 @@ class HistoryScreen(Screen):
     DEFAULT_CSS = """
     HistoryScreen #history_head { height: 1; background: $panel; padding: 0 1; }
     HistoryScreen #history_stats { height: 1; color: $text-muted; padding: 0 1; }
-    HistoryScreen #history_footer { height: 1; color: $text-muted; padding: 0 1; }
     HistoryScreen #history_header { height: 1; }
     HistoryScreen #history_list { height: 1fr; overflow-x: hidden; }
     """
@@ -69,7 +68,7 @@ class HistoryScreen(Screen):
         yield Static("", id="history_stats")
         yield Static("", id="history_header")
         yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="history_list")
-        yield Static(" Left/Right day   Enter detail   Esc back", id="history_footer")
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         self.day = self.today()

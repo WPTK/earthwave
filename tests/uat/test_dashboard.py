@@ -21,7 +21,9 @@ async def test_status_bar_shows_counts_and_filter(size):
     app = week_app()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        last = [line for line in screen_text(app).splitlines() if line.strip()][-1]
+        rows = [line for line in screen_text(app).splitlines() if line.strip()]
+        last = rows[-2]  # the status bar sits just above the footer
+        assert "Quit" in rows[-1]
         assert "151 shown of 151" in last and "M4.5+ 7d" in last and "sort:time" in last
 
 
