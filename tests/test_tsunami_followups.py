@@ -1,15 +1,22 @@
 """Leftovers of the tsunami alert review: fallback alerts, shown expiry, delisted NWS alerts, warm-up, dedupe month."""
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import httpx
-from test_tsunami import JmaFeed, kam, kclock, merge, nws_alert  # noqa: F401
+import pytest
+from test_tsunami import NOW, JmaFeed, kam, merge, nws_alert
 
+from earthwave.clock import ReplayClock
 from earthwave.models import Batch
 from earthwave.sources import jma, levels, tsunamigov
 from earthwave.state.store import Store
 from earthwave.ui.widgets.tsunami_panel import build_panel
+
+
+@pytest.fixture
+def kclock() -> ReplayClock:
+    return ReplayClock(NOW, real=lambda: 0.0)
 
 
 def atom_with(title: str, updated: str = "2026-10-25T02:26:53Z") -> str:

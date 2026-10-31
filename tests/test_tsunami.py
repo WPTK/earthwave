@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from conftest import FIXTURES, T0, make_quake
+from conftest import FIXTURES, make_quake
 from test_ui import wait_for
 
 from earthwave.app import EarthwaveApp
