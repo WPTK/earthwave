@@ -1,0 +1,538 @@
+{
+ "source": "https://www.ndbc.noaa.gov/activestations.xml",
+ "created": "2026-10-31T11:45:04UTC",
+ "stations": [
+  {
+   "id": "21413",
+   "kind": "dart",
+   "name": "SOUTHEAST TOKYO - 700NM ESE of Tokyo, JP",
+   "lat": 32.5494,
+   "lon": 148.051
+  },
+  {
+   "id": "21414",
+   "kind": "dart",
+   "name": "AMCHITKA - 170 NM South of Amchitka, AK",
+   "lat": 48.977,
+   "lon": 178.199
+  },
+  {
+   "id": "21415",
+   "kind": "dart",
+   "name": "ATTU - 175 NM South of Attu, AK",
+   "lat": 50.12,
+   "lon": 171.867
+  },
+  {
+   "id": "21416",
+   "kind": "dart",
+   "name": "KAMCHATKA PENINSULA - 240NM SE of Kamchatka Peninsula, RU",
+   "lat": 48.126,
+   "lon": 163.355
+  },
+  {
+   "id": "21418",
+   "kind": "dart",
+   "name": "NORTHEAST TOKYO - 450 NM NE of Tokyo, JP",
+   "lat": 38.84,
+   "lon": 148.753
+  },
+  {
+   "id": "21419",
+   "kind": "dart",
+   "name": "KURIL ISLANDS - 209NM SE of Kuril Is.",
+   "lat": 44.401,
+   "lon": 155.653
+  },
+  {
+   "id": "21420",
+   "kind": "dart",
+   "name": "SOUTHEAST MIYAZAKI - 260NM Southeast of Miyazaki",
+   "lat": 28.98,
+   "lon": 134.973
+  },
+  {
+   "id": "23217",
+   "kind": "dart",
+   "name": "Bay of Bengal IN3",
+   "lat": 3.798,
+   "lon": 91.701
+  },
+  {
+   "id": "23218",
+   "kind": "dart",
+   "name": "Bay of Bengal IN4",
+   "lat": 10.165,
+   "lon": 88.5
+  },
+  {
+   "id": "23219",
+   "kind": "dart",
+   "name": "Bay of Bengal",
+   "lat": 13.472,
+   "lon": 88.998
+  },
+  {
+   "id": "23223",
+   "kind": "dart",
+   "name": "Bay of Bengal",
+   "lat": 17.333,
+   "lon": 89.483
+  },
+  {
+   "id": "23226",
+   "kind": "dart",
+   "name": "Arabian Sea",
+   "lat": 20.2,
+   "lon": 67.333
+  },
+  {
+   "id": "23227",
+   "kind": "dart",
+   "name": "Bay of Bengal",
+   "lat": 6.265,
+   "lon": 88.653
+  },
+  {
+   "id": "23228",
+   "kind": "dart",
+   "name": "Arabian Sea",
+   "lat": 20.764,
+   "lon": 65.284
+  },
+  {
+   "id": "23401",
+   "kind": "dart",
+   "name": "BAY OF BENGAL - 600 NM WNW of Phuket, Thailand",
+   "lat": 8.86,
+   "lon": 88.55
+  },
+  {
+   "id": "23461",
+   "kind": "dart",
+   "name": "ANDAMAN SEA - 180 NM NW of Phuket, Thailand",
+   "lat": 9.534,
+   "lon": 95.669
+  },
+  {
+   "id": "3202520",
+   "kind": "dart",
+   "name": "San Cristobal - Galapagos (B1-S)",
+   "lat": -4.148,
+   "lon": -89.008
+  },
+  {
+   "id": "3202521",
+   "kind": "dart",
+   "name": "Isabela - Galapagos (B2-W)",
+   "lat": -0.525,
+   "lon": -81.386
+  },
+  {
+   "id": "32068",
+   "kind": "dart",
+   "name": "Manta - 58 NM West of Manta, Ecuador",
+   "lat": -0.891,
+   "lon": -81.637
+  },
+  {
+   "id": "32069",
+   "kind": "dart",
+   "name": "Esmeraldas - 71 NM West of Pedernales, Ecuador",
+   "lat": 0.278,
+   "lon": -81.185
+  },
+  {
+   "id": "32401",
+   "kind": "dart",
+   "name": "180 NM West of Iquique, Chile",
+   "lat": -20.611,
+   "lon": -73.394
+  },
+  {
+   "id": "32402",
+   "kind": "dart",
+   "name": "180 NM  West of Caldera, Chile",
+   "lat": -26.743,
+   "lon": -73.983
+  },
+  {
+   "id": "32403",
+   "kind": "dart",
+   "name": "91NM West of Antofagasta, Chile",
+   "lat": -23.163,
+   "lon": -72.037
+  },
+  {
+   "id": "32404",
+   "kind": "dart",
+   "name": "120 NM NW of Valparaiso",
+   "lat": -32.13,
+   "lon": -73.797
+  },
+  {
+   "id": "32411",
+   "kind": "dart",
+   "name": "WEST PANAMA - 710 NM WSW of Panama City, Panama",
+   "lat": 4.979,
+   "lon": -90.793
+  },
+  {
+   "id": "32413",
+   "kind": "dart",
+   "name": "NORTHWEST LIMA - 1000 NM WNW of Lima, Peru",
+   "lat": -7.432,
+   "lon": -93.464
+  },
+  {
+   "id": "32489",
+   "kind": "dart",
+   "name": "Colombia   121NM SW of Buenaventura, Colombia",
+   "lat": 2.998,
+   "lon": -79.101
+  },
+  {
+   "id": "34420",
+   "kind": "dart",
+   "name": "119NM NW of Concepcion, Chile",
+   "lat": -35.758,
+   "lon": -75.243
+  },
+  {
+   "id": "41420",
+   "kind": "dart",
+   "name": "NORTH SANTO DOMINGO - 328NM NNE of Santo Domingo, DO",
+   "lat": 23.433,
+   "lon": -67.386
+  },
+  {
+   "id": "41421",
+   "kind": "dart",
+   "name": "NORTH ST THOMAS - 300 NM North of St Thomas, Virgin Is",
+   "lat": 23.44,
+   "lon": -63.834
+  },
+  {
+   "id": "41425",
+   "kind": "dart",
+   "name": "SOUTHWEST BERMUDA - 200 NM SSW of Hamilton, Bermuda",
+   "lat": 28.639,
+   "lon": -65.774
+  },
+  {
+   "id": "42407",
+   "kind": "dart",
+   "name": "SOUTH PUERTO RICO - 230 NM Southwest of San Juan, PR",
+   "lat": 15.276,
+   "lon": -68.191
+  },
+  {
+   "id": "42409",
+   "kind": "dart",
+   "name": "GULF OF AMERICA - 247 NM South of New Orleans, LA",
+   "lat": 25.797,
+   "lon": -89.288
+  },
+  {
+   "id": "43412",
+   "kind": "dart",
+   "name": "SOUTHWEST MANZANILLO - 240 NM SW of Manzanillo, MX",
+   "lat": 14.1562,
+   "lon": -106.521
+  },
+  {
+   "id": "43413",
+   "kind": "dart",
+   "name": "SOUTH ACAPULCO - 360NM South of Acapulco, MX",
+   "lat": 10.927,
+   "lon": -100.012
+  },
+  {
+   "id": "44402",
+   "kind": "dart",
+   "name": "SOUTHEAST BLOCK CANYON - 130 NM SE of Fire Island, NY",
+   "lat": 39.314,
+   "lon": -70.717
+  },
+  {
+   "id": "44403",
+   "kind": "dart",
+   "name": "SABLE ISLAND BANK - 437 NM E of Boston, MA",
+   "lat": 41.928,
+   "lon": -61.664
+  },
+  {
+   "id": "46402",
+   "kind": "dart",
+   "name": "South Dutch Harbor - 220 NM SSE of Dutch Harbor, AK",
+   "lat": 50.913,
+   "lon": -164.147
+  },
+  {
+   "id": "46403",
+   "kind": "dart",
+   "name": "SOUTHEAST SHUMAGIN ISLAND - 186 NM SE of Shumagin Is, AK",
+   "lat": 52.7,
+   "lon": -156.983
+  },
+  {
+   "id": "46404",
+   "kind": "dart",
+   "name": "WEST ASTORIA - 230 NM West of Astoria, OR",
+   "lat": 45.852,
+   "lon": -128.745
+  },
+  {
+   "id": "46407",
+   "kind": "dart",
+   "name": "NEWPORT - 210NM West of Coos Bay, OR",
+   "lat": 42.704,
+   "lon": -128.895
+  },
+  {
+   "id": "46408",
+   "kind": "dart",
+   "name": "NIKOLSKI - 212 NM South of Umnak Is, AK",
+   "lat": 49.677,
+   "lon": -169.825
+  },
+  {
+   "id": "46409",
+   "kind": "dart",
+   "name": "SOUTHEAST KODIAK - 210 NM SE of Kodiak, AK",
+   "lat": 55.338,
+   "lon": -148.575
+  },
+  {
+   "id": "46410",
+   "kind": "dart",
+   "name": "SOUTH CORDOVA - 188 NM SSE of Cordova, AK",
+   "lat": 57.641,
+   "lon": -143.771
+  },
+  {
+   "id": "46411",
+   "kind": "dart",
+   "name": "Mendocino - 150 NM West of  Mendocino Bay, CA",
+   "lat": 39.337,
+   "lon": -127.04
+  },
+  {
+   "id": "46413",
+   "kind": "dart",
+   "name": "SOUTH-SOUTHEAST ADAK - 243 NM SSE of Adak Island, AK",
+   "lat": 48.031,
+   "lon": -173.766
+  },
+  {
+   "id": "46414",
+   "kind": "dart",
+   "name": "SOUTHEAST CHIRIKOF - 165 NM SE of Chirikof Island, AK",
+   "lat": 53.756,
+   "lon": -152.456
+  },
+  {
+   "id": "46415",
+   "kind": "dart",
+   "name": "SOUTHWEST JUNEAU - 370 NM SW of Juneau, AK",
+   "lat": 53.029,
+   "lon": -139.889
+  },
+  {
+   "id": "46416",
+   "kind": "dart",
+   "name": "WEST VANCOUVER - 442NM West of Vancouver, BC, Canada",
+   "lat": 49.939,
+   "lon": -134.427
+  },
+  {
+   "id": "46419",
+   "kind": "dart",
+   "name": "NORTHWEST SEATTLE - 300 NM WNW of Seattle, WA",
+   "lat": 48.812,
+   "lon": -129.621
+  },
+  {
+   "id": "51407",
+   "kind": "dart",
+   "name": "HAWAII - 34NM West of Kailua-Kona, HI",
+   "lat": 19.53,
+   "lon": -156.601
+  },
+  {
+   "id": "51425",
+   "kind": "dart",
+   "name": "NORTHWEST APIA - 370 NM NW of Apia, Samoa",
+   "lat": -9.511,
+   "lon": -176.258
+  },
+  {
+   "id": "52401",
+   "kind": "dart",
+   "name": "NORTHEAST SAIPAN - 610 NM ENE of Saipan",
+   "lat": 19.282,
+   "lon": 155.759
+  },
+  {
+   "id": "52402",
+   "kind": "dart",
+   "name": "SOUTHEAST SAIPAN - 540NM ESE of Saipan",
+   "lat": 11.928,
+   "lon": 153.876
+  },
+  {
+   "id": "52403",
+   "kind": "dart",
+   "name": "NORTH MANUS - 345NM North of Manus Is , New Guinea",
+   "lat": 4.018,
+   "lon": 145.628
+  },
+  {
+   "id": "52404",
+   "kind": "dart",
+   "name": "NORTH PHILIPPINE SEA - 750 NM NE of Manila, Philippines",
+   "lat": 20.625,
+   "lon": 132.228
+  },
+  {
+   "id": "52405",
+   "kind": "dart",
+   "name": "SOUTH PHILIPPINE SEA -725 NM West of Agana, Guam",
+   "lat": 12.992,
+   "lon": 132.232
+  },
+  {
+   "id": "52406",
+   "kind": "dart",
+   "name": "NORTHEAST SOLOMON - 370NM NE of Guadalcanal",
+   "lat": -5.374,
+   "lon": 164.99
+  },
+  {
+   "id": "5401000",
+   "kind": "dart",
+   "name": "NZC - Offshore Gisborne Hikurangi",
+   "lat": -38.2,
+   "lon": -179.797
+  },
+  {
+   "id": "5401001",
+   "kind": "dart",
+   "name": "NZE - Offshore East Cape Kermadec",
+   "lat": -36.049,
+   "lon": -177.708
+  },
+  {
+   "id": "5401002",
+   "kind": "dart",
+   "name": "NZF - Offshore Raoul Island Kermadec",
+   "lat": -29.683,
+   "lon": -175.012
+  },
+  {
+   "id": "5401003",
+   "kind": "dart",
+   "name": "NZG - Offshore Tongatapu Tonga",
+   "lat": -23.352,
+   "lon": -173.402
+  },
+  {
+   "id": "5401004",
+   "kind": "dart",
+   "name": "NZH - Offshore Niue Tonga",
+   "lat": -20.088,
+   "lon": -171.863
+  },
+  {
+   "id": "5401005",
+   "kind": "dart",
+   "name": "NZI - Offshore Samoa Tonga",
+   "lat": -16.889,
+   "lon": -171.191
+  },
+  {
+   "id": "5501002",
+   "kind": "dart",
+   "name": "NZA - Offshore Wellington Hikurangi",
+   "lat": -42.371,
+   "lon": 176.911
+  },
+  {
+   "id": "5501003",
+   "kind": "dart",
+   "name": "NZB - Offshore Hawke's Bay Hikurangi",
+   "lat": -40.599,
+   "lon": 179.096
+  },
+  {
+   "id": "5501004",
+   "kind": "dart",
+   "name": "NZD - Offshore Bay of Plenty Kermadec",
+   "lat": -36.1,
+   "lon": 178.604
+  },
+  {
+   "id": "5501005",
+   "kind": "dart",
+   "name": "NZJ - Offshore Norfolk Island New Hebrides",
+   "lat": -26.667,
+   "lon": 163.955
+  },
+  {
+   "id": "5501006",
+   "kind": "dart",
+   "name": "NZK - Offshore New Caledonia New Hebrides",
+   "lat": -24.309,
+   "lon": 169.499
+  },
+  {
+   "id": "5501007",
+   "kind": "dart",
+   "name": "NZL - Offshore Vanuatu New Hebrides",
+   "lat": -19.31,
+   "lon": 166.782
+  },
+  {
+   "id": "55012",
+   "kind": "dart",
+   "name": "Coral Sea 1     -     1285km ENE of Townsville",
+   "lat": -15.664,
+   "lon": 158.453
+  },
+  {
+   "id": "55015",
+   "kind": "dart",
+   "name": "TASMAN SEA 1     -     1110km ESE of Hobart",
+   "lat": -46.956,
+   "lon": 160.343
+  },
+  {
+   "id": "55023",
+   "kind": "dart",
+   "name": "Coral Sea 2     -     870km NE of Townsville",
+   "lat": -14.715,
+   "lon": 153.537
+  },
+  {
+   "id": "55042",
+   "kind": "dart",
+   "name": "Tasman Sea 2     -     1175km ESE of Hobart",
+   "lat": -44.79,
+   "lon": 161.7
+  },
+  {
+   "id": "56001",
+   "kind": "dart",
+   "name": "Indian Ocean 1     -      1025km NW of Dampier",
+   "lat": -14.046,
+   "lon": 110.028
+  },
+  {
+   "id": "56003",
+   "kind": "dart",
+   "name": "Indian Ocean 2     -     630km NNE of Dampier",
+   "lat": -15.019,
+   "lon": 118.073
+  }
+ ]
+}

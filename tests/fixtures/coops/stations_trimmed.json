@@ -1,0 +1,79 @@
+{
+ "count": 6,
+ "units": null,
+ "stations": [
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "HI",
+   "timezone": "HAST",
+   "id": "1611400",
+   "name": "Nawiliwili",
+   "lat": 21.9544,
+   "lng": -159.3561,
+   "affiliations": "NWLON",
+   "tideType": "Mixed"
+  },
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "HI",
+   "timezone": "HAST",
+   "id": "1612340",
+   "name": "Honolulu",
+   "lat": 21.303333,
+   "lng": -157.86453,
+   "affiliations": "NWLON",
+   "tideType": "Mixed"
+  },
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "NY",
+   "timezone": "EST",
+   "id": "8518750",
+   "name": "The Battery",
+   "lat": 40.700554,
+   "lng": -74.01417,
+   "affiliations": "NWLORTS",
+   "tideType": "Mixed"
+  },
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "CA",
+   "timezone": "PST",
+   "id": "9414290",
+   "name": "San Francisco",
+   "lat": 37.806305,
+   "lng": -122.46589,
+   "affiliations": "NWLORTS",
+   "tideType": "Mixed"
+  },
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "WA",
+   "timezone": "PST",
+   "id": "9446484",
+   "name": "Tacoma",
+   "lat": 47.2667,
+   "lng": -122.4133,
+   "affiliations": "PORTS,Global",
+   "tideType": "Mixed"
+  },
+  {
+   "tidal": true,
+   "greatlakes": false,
+   "state": "AK",
+   "timezone": "AKST",
+   "id": "9455920",
+   "name": "Anchorage",
+   "lat": 61.2375,
+   "lng": -149.8904,
+   "affiliations": "NWLON",
+   "tideType": "Mixed"
+  }
+ ],
+ "self": null
+}
