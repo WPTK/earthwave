@@ -1,7 +1,7 @@
 """Braille dot canvas, equirectangular projection and the world coastline raster.
 
 Pure Python with no Textual dependency. A `BrailleCanvas(cols, rows)` is a grid of 2x4 dots per terminal
-cell. `coastline_canvas` rasterises the bundled Natural Earth 1:110m coastline for a viewport and caches
+cell. `coastline_canvas` rasterises the bundled Natural Earth 1:10m coastline for a viewport and caches
 the result; `render_ascii` is the 1x1 cell fallback for terminals without braille glyphs.
 """
 
@@ -14,7 +14,7 @@ from functools import cache, lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
-DATA_FILE = Path(__file__).resolve().parents[2] / "data" / "coastline_110m.json"
+DATA_FILE = Path(__file__).resolve().parents[2] / "data" / "coastline_10m.json"
 
 # Braille dot bit for (dx, dy) within a cell: dots 1-3 and 7 on the left, 4-6 and 8 on the right.
 _BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))

@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -107,7 +108,8 @@ def test_dateline_polyline_draws_across_the_edge():
 
 def test_coastline_data_shape():
     lines = load_coastline()
-    assert len(lines) > 50
+    assert len(lines) > 1000
+    assert sum(len(line) for line in lines) > 100_000  # linecast's 1:10m land layer has about 138k points
     for line in lines:
         assert len(line) >= 2
         for lon, lat in line:
@@ -138,6 +140,16 @@ def test_huge_offcanvas_segment_is_clipped_fast():
     assert not any(c.cell_bits(i, j) for i in range(c.cols) for j in range(c.rows))
 
 
+def test_full_world_render_performance():
+    start = time.perf_counter()
+    c = coastline_canvas(240, 60, Viewport(-179.0, -89.0, 179.0, 89.0))  # uncached viewport
+    assert time.perf_counter() - start < 5.0
+    assert sum(bin(c.cell_bits(i, j)).count("1") for i in range(c.cols) for j in range(c.rows)) > 2000
+    start = time.perf_counter()
+    coastline_canvas(240, 60, Viewport(-179.0, -89.0, 179.0, 89.0))  # cache hit
+    assert time.perf_counter() - start < 0.1
+
+
 def test_polyline_outside_viewport_draws_nothing():
     c = BrailleCanvas(20, 5)
     draw_polyline(c, [(100, 50), (110, 60)], Viewport(-10, -10, 10, 10))
@@ -153,7 +165,7 @@ def test_known_landmarks_have_dots():
 
     assert has_dots(-80, 26)  # Florida
     assert has_dots(139.7, 35.7)  # Tokyo bay
-    assert not has_dots(-30, 0, 2)  # mid Atlantic
+    assert not has_dots(-40, 20, 2)  # mid Atlantic
 
 
 def _check_golden(name: str, lines: list[str]) -> None:

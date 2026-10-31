@@ -1,6 +1,6 @@
-"""Regenerate earthwave/data/coastline_110m.json from Natural Earth 1:110m coastline (public domain).
+"""Regenerate earthwave/data/coastline_10m.json from Natural Earth 1:10m coastline (public domain).
 
-Dev-only: needs pyshp (in the dev extra). Usage: python scripts/make_coastline.py [--tolerance 0.5]
+Dev-only: needs pyshp (in the dev extra). Usage: python scripts/make_coastline.py [--scale 10m] [--tolerance 0.01]
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ from pathlib import Path
 
 import shapefile
 
-# Source: Natural Earth 1:110m physical vectors, ne_110m_coastline, version 4.1.0 (public domain).
-# Simplification is planar Douglas-Peucker in degrees (default 0.5), so it is coarser in longitude at high
-# latitudes; regional zoom may need the 1:50m dataset and a smaller tolerance.
-URL = "https://naciscdn.org/naturalearth/110m/physical/ne_110m_coastline.zip"
-OUT = Path(__file__).resolve().parent.parent / "earthwave" / "data" / "coastline_110m.json"
+# Source: Natural Earth 1:10m physical vectors, ne_10m_coastline (public domain).
+# Simplification is planar Douglas-Peucker in degrees (default 0.01, about 1 km), so it is slightly coarser in
+# longitude at high latitudes. For comparison linecast uses the same 1:10m set at 0.012 degrees.
+URL = "https://naciscdn.org/naturalearth/{scale}/physical/ne_{scale}_coastline.zip"
+OUT = Path(__file__).resolve().parent.parent / "earthwave" / "data" / "coastline_10m.json"
 
 Point = tuple[float, float]
 
@@ -55,8 +55,8 @@ def douglas_peucker(points: list[Point], tolerance: float) -> list[Point]:
     return [p for p, k in zip(points, keep, strict=True) if k]
 
 
-def build(tolerance: float) -> list[list[list[float]]]:
-    with urllib.request.urlopen(URL, timeout=60) as resp:
+def build(scale: str, tolerance: float) -> list[list[list[float]]]:
+    with urllib.request.urlopen(URL.format(scale=scale), timeout=120) as resp:
         data = resp.read()
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         stem = next(n[:-4] for n in zf.namelist() if n.endswith(".shp"))
@@ -72,15 +72,16 @@ def build(tolerance: float) -> list[list[list[float]]]:
             pts = [(float(x), float(y)) for x, y in shape.points[start:end]]
             simple = douglas_peucker(pts, tolerance)
             if len(simple) >= 2:
-                lines.append([[round(x, 2), round(y, 2)] for x, y in simple])
+                lines.append([[round(x, 3), round(y, 3)] for x, y in simple])
     return lines
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tolerance", type=float, default=0.5, help="Douglas-Peucker tolerance in degrees")
+    ap.add_argument("--tolerance", type=float, default=0.01, help="Douglas-Peucker tolerance in degrees")
+    ap.add_argument("--scale", default="10m", choices=["10m", "50m", "110m"], help="Natural Earth scale")
     args = ap.parse_args()
-    lines = build(args.tolerance)
+    lines = build(args.scale, args.tolerance)
     OUT.write_text(json.dumps(lines, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     n = sum(len(line) for line in lines)
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes, {len(lines)} polylines, {n} points)")
