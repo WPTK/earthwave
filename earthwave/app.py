@@ -256,8 +256,16 @@ class EarthwaveApp(App):
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
         steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
-        if steady and not result.error and not self.usgs.starting and not self._coverage_checked:
-            self._coverage_checked = True  # the first good steady answer: the network is up, so the backfill can run
+        if (
+            steady
+            and not result.error
+            and not self.usgs.starting
+            and (not self._coverage_checked or self.store.coverage_lapsed)
+        ):
+            # the first good steady answer, or the first after an outage longer than the feed's window: the network
+            # is up, so the backfill can run
+            self._coverage_checked = True
+            self.store.coverage_lapsed = False
             self._backfill_if_needed(force=False)
         self.sync_tsunami()
         self.sync_gauges()

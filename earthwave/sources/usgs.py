@@ -203,7 +203,14 @@ class UsgsSource:
             if response.status_code == 304:
                 self._done(feed, backfill)
                 log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
-                return Batch(self.name, self._clock.now(), not_modified=True, backfill=backfill, cursor=since)
+                return Batch(
+                    self.name,
+                    self._clock.now(),
+                    not_modified=True,
+                    backfill=backfill,
+                    cursor=since,
+                    coverage=feed_coverage(feed),
+                )
             response.raise_for_status()
             quakes = parse_collection(response.json())
         except Exception:
@@ -255,9 +262,9 @@ class UsgsSource:
         response.raise_for_status()
         quakes = parse_collection(response.json())
         log.debug("usgs fdsnws: %d quakes for %s", len(quakes), params)
-        hours = math.ceil((end - start) / timedelta(hours=1))
+        hours = (end - start) / timedelta(hours=1)
         # A result that hit the limit is only partial, so claim no coverage for it.
-        coverage = None if len(quakes) >= FDSN_LIMIT else (float(hours), min_magnitude)
+        coverage = None if len(quakes) >= FDSN_LIMIT else (hours, min_magnitude)
         return Batch(
             self.name, self._clock.now(), quakes=quakes, backfill=True, coverage=coverage, meta={"feed": "fdsnws"}
         )

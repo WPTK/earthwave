@@ -161,7 +161,6 @@ async def test_filters_modal_widens_window_and_backfills_from_fdsnws():
     app = week_app(transport=mock_transport(requests))
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        before = len(app.store)
         generation = app.scheduler.generation
         await pilot.press("f")
         await pilot.pause()
@@ -174,7 +173,9 @@ async def test_filters_modal_widens_window_and_backfills_from_fdsnws():
         assert (app.view.min_magnitude, app.view.hours) == (1.0, 168)
         assert app.scheduler.generation == generation + 1
         assert app.usgs.steady == "1.0_day"
-        await wait_for(lambda: len(app.store) > before)
+        await wait_for(
+            lambda: app.store.is_covered(168, 1.0)
+        )  # the canned reply replaces the window, as a complete list does
         await pilot.pause()
         params = dict(requests[-1].url.params)
         assert params["minmagnitude"] == "1" and params["format"] == "geojson"

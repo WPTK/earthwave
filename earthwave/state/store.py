@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from earthwave.clock import Clock
-from earthwave.config import AlertsConfig, HomeConfig
+from earthwave.config import MAX_VIEW_HOURS, AlertsConfig, HomeConfig
 from earthwave.models import Batch, Earthquake, GaugeReading, Station, TsunamiAlert
 from earthwave.sources import coops, levels, ndbc
 from earthwave.sources.anomaly import find_anomaly
@@ -26,10 +26,11 @@ from earthwave.state.events import (
 
 log = logging.getLogger(__name__)
 
-RETAIN = timedelta(days=35)
+RETAIN = timedelta(hours=MAX_VIEW_HOURS)
 MAG_DELTA = 0.2
 DEPTH_DELTA_KM = 10.0
 ALERT_RETAIN = timedelta(days=3)
+FEED_LAG = timedelta(minutes=10)  # a feed may not list a quake this fresh yet, nor drop one this old
 LINK_SECONDS = 300.0  # an alert names its quake within 5 minutes ...
 LINK_KM = 200.0  # ... and 200 km of the USGS origin
 DEFAULT_TTL = timedelta(hours=12)  # an alert that states no expiry lapses this long after it was issued or updated
@@ -93,7 +94,9 @@ class Store:
         self._alerts = alerts or AlertsConfig()
         self._home = home or HomeConfig()
         self._quakes: dict[str, Earthquake] = {}
-        self._coverage: list[tuple[float, float]] = []
+        # (hours, min_magnitude) -> when the claim was last confirmed: the store holds every such quake up to then
+        self._coverage: dict[tuple[float, float], datetime] = {}
+        self.coverage_lapsed = False  # a claim was dropped because the steady feed missed more than its window
         self.warm = False
         self._tsunamis: dict[str, TsunamiAlert] = {}
         self._first_seen: dict[str, datetime] = {}
@@ -127,7 +130,7 @@ class Store:
 
     def drop_coverage_below(self, min_magnitude: float) -> None:
         """Forget coverage claims for magnitudes the live feed no longer delivers (the steady feed narrowed)."""
-        self._coverage = [(h, m) for h, m in self._coverage if m >= min_magnitude]
+        self._coverage = {claim: at for claim, at in self._coverage.items() if claim[1] >= min_magnitude}
 
     def distance_home_km(self, quake: Earthquake) -> float | None:
         if not self._home.enabled:
@@ -159,13 +162,18 @@ class Store:
         update the store without raising events, so launch never produces a flash storm.
         """
         if batch.not_modified:
+            if batch.coverage:
+                self._claim(batch)  # the feed still lists what it did: its claims are current
             return []
         silent = batch.backfill or bool(batch.meta.get("silent")) or not self.warm
         events: list[Event] = []
         for quake in batch.quakes:
-            old = self._quakes.get(quake.id)
+            old = self._known(quake)
             if old is not None and quake.updated and old.updated and quake.updated < old.updated:
                 continue
+            if old is not None and old.id != quake.id:  # USGS moved the event to another preferred id
+                del self._quakes[old.id]
+                self._repoint(old.id, quake.id)
             self._quakes[quake.id] = quake
             if silent:
                 continue
@@ -177,8 +185,9 @@ class Store:
                 if changed:
                     events.append(QuakeUpdated(quake, changed))
                 events.extend(self._threshold_events(old, quake))
-        if batch.coverage and batch.coverage not in self._coverage:
-            self._coverage.append(batch.coverage)
+        if batch.coverage:
+            self._reconcile(batch)
+            self._claim(batch)
         if not batch.backfill and batch.source not in GAUGE_SOURCES | ALERT_SOURCES:
             self.warm = True
         events.extend(self._merge_alerts(batch, clock))
@@ -186,6 +195,47 @@ class Store:
         self._link_alerts()
         self._prune(clock)
         return events
+
+    def _known(self, quake: Earthquake) -> Earthquake | None:
+        """The stored version of this event under any id USGS has given it."""
+        for quake_id in (quake.id, *quake.also_ids):
+            if (old := self._quakes.get(quake_id)) is not None:
+                return old
+        return None
+
+    def _repoint(self, old_id: str, new_id: str) -> None:
+        for alert_id, alert in self._tsunamis.items():
+            if alert.quake_ref == old_id:
+                self._tsunamis[alert_id] = replace(alert, quake_ref=new_id)
+
+    def _reconcile(self, batch: Batch) -> None:
+        """A batch with coverage lists every quake of its window and magnitude floor, so a stored quake it omits was
+        deleted or revised out of the feed. The edges are spared: a feed lags, and its window slides."""
+        assert batch.coverage is not None
+        hours, floor = batch.coverage
+        oldest = batch.fetched_at - timedelta(hours=hours) + FEED_LAG
+        newest = batch.fetched_at - FEED_LAG
+        listed = {q.id for q in batch.quakes}
+        for quake in [q for q in self._quakes.values() if oldest <= q.time <= newest and q.mag >= floor]:
+            if quake.id not in listed:
+                del self._quakes[quake.id]
+
+    def _claim(self, batch: Batch) -> None:
+        """Record what the batch covers. A steady feed keeps every claim at or above its floor current, but only if it
+        saw the claim within its own window; an outage longer than that leaves a hole, so the claim lapses."""
+        assert batch.coverage is not None
+        hours, floor = batch.coverage
+        at = batch.fetched_at
+        if not batch.backfill:
+            window = timedelta(hours=hours)
+            lapsed = [claim for claim, seen in self._coverage.items() if seen < at - window]
+            self.coverage_lapsed |= bool(lapsed)
+            for claim in lapsed:
+                del self._coverage[claim]
+            for claim in self._coverage:
+                if claim[1] >= floor:
+                    self._coverage[claim] = at
+        self._coverage[batch.coverage] = at
 
     # --- gauges -------------------------------------------------------------------------------------------------
 

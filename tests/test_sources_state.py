@@ -307,6 +307,60 @@ def test_coverage_tracking_and_pruning(clock):
     assert store.get("ancient") is None
 
 
+def test_coverage_lapses_after_an_outage_longer_than_the_steady_feed(clock):
+    store = Store()
+    store.merge(batch(make_quake("a"), backfill=True, coverage=(168.0, 4.5)), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=23), quakes=(), coverage=(24.0, 4.5)), clock)
+    assert store.is_covered(168, 4.5) and not store.coverage_lapsed
+    store.merge(Batch("usgs", T0 + timedelta(hours=40), quakes=(), coverage=(24.0, 4.5), not_modified=True), clock)
+    assert store.is_covered(168, 4.5)  # a 304 still confirms the claim
+    store.merge(Batch("usgs", T0 + timedelta(hours=70), quakes=(), coverage=(24.0, 4.5)), clock)
+    assert not store.is_covered(168, 4.5) and store.is_covered(24, 4.5) and store.coverage_lapsed
+
+
+@respx.mock
+async def test_fdsn_coverage_claims_the_exact_window(clock):
+    respx.get(url__regex=r".*fdsnws.*").mock(return_value=httpx.Response(200, json={"features": []}))
+    async with build_client() as client:
+        got = await UsgsSource(clock).fetch_range(client, T0, T0 + timedelta(hours=24.5), 3.0)
+    assert got.coverage == (24.5, 3.0)
+
+
+def test_filter_hours_stop_at_what_the_store_keeps():
+    from earthwave.config import MAX_VIEW_HOURS
+    from earthwave.state.store import RETAIN
+    from earthwave.ui.screens.filters import parse_filters
+
+    assert timedelta(hours=MAX_VIEW_HOURS) == RETAIN
+    assert parse_filters("4.5", str(MAX_VIEW_HOURS)) == (4.5, MAX_VIEW_HOURS)
+    with pytest.raises(ValueError, match="between 1 and 840"):
+        parse_filters("4.5", str(MAX_VIEW_HOURS + 1))
+
+
+def test_a_preferred_id_change_replaces_the_row_without_new_alerts(clock):
+    from earthwave.models import TsunamiAlert
+
+    store = Store(AlertsConfig(major_magnitude=6.0))
+    store.merge(batch(make_quake("ak1", 6.4)), clock)  # warms the store
+    store._tsunamis["t"] = TsunamiAlert("t", "t", "nws", "Warning", "x", quake_ref="ak1")
+    events = store.merge(batch(make_quake("us1", 6.4, also_ids=("ak1",))), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+    assert events == []  # no QuakeNew, no second QuakeMajor
+    assert store._tsunamis["t"].quake_ref == "us1"
+
+
+def test_quakes_a_complete_batch_omits_are_removed(clock):
+    store = Store()
+    keep = make_quake("keep", 5.0, minutes_ago=120)
+    gone = make_quake("gone", 6.5, minutes_ago=120)
+    below = make_quake("below", 2.0, minutes_ago=120)  # under the feed's floor: the feed says nothing about it
+    fresh = make_quake("fresh", 5.0, minutes_ago=2)  # inside the feed's lag
+    old = make_quake("old", 5.0, minutes_ago=60 * 24 * 3)  # outside the feed's window
+    store.merge(batch(keep, gone, below, fresh, old, backfill=True), clock)
+    store.merge(batch(keep, backfill=True, coverage=(24.0, 4.5)), clock)
+    assert {q.id for q in store.all()} == {"keep", "below", "fresh", "old"}
+
+
 # --- attention --------------------------------------------------------------------------------------------------
 
 

@@ -6,6 +6,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label
 
+from earthwave.config import MAX_VIEW_HOURS
 from earthwave.state.store import ViewFilter
 
 
@@ -21,8 +22,8 @@ def parse_filters(mag_text: str, hours_text: str) -> tuple[float, float]:
         raise ValueError("Hours must be a number") from None
     if not -2 <= mag <= 10:
         raise ValueError("Minimum magnitude must be between -2 and 10")
-    if not 1 <= hours <= 24 * 365:
-        raise ValueError("Hours must be between 1 and 8760")
+    if not 1 <= hours <= MAX_VIEW_HOURS:
+        raise ValueError(f"Hours must be between 1 and {MAX_VIEW_HOURS}")
     return mag, hours
 
 
@@ -38,7 +39,7 @@ class FiltersScreen(ModalScreen[tuple[float, float] | None]):
             yield Label("Filters", id="dialog_title")
             yield Label("Minimum magnitude")
             yield Input(f"{self._view.min_magnitude:g}", id="min_mag", select_on_focus=True)
-            yield Label("Hours back (up to 8760)")
+            yield Label(f"Hours back (up to {MAX_VIEW_HOURS})")
             yield Input(f"{self._view.hours:g}", id="hours", select_on_focus=True)
             yield Label("", id="error")
             with Horizontal(id="buttons"):
