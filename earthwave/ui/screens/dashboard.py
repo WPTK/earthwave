@@ -54,6 +54,7 @@ class DashboardScreen(Screen):
         with Horizontal(id="main"):
             with Vertical(id="left"):
                 yield Static("", id="header")
+                yield Static("", id="empty")
                 yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="quakes")
             with Vertical(id="right"):
                 yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
@@ -91,6 +92,9 @@ class DashboardScreen(Screen):
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
         app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
+        empty = self.query_one("#empty", Static)
+        empty.display = not rows
+        empty.update(f"No quakes match {filter_summary(app.view)}. Press f to change filters.")
         self.refresh_ticker()
         self.refresh_tsunami()
         self.refresh_status(shown=len(rows))

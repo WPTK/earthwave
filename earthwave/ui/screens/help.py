@@ -10,23 +10,23 @@ HELP_TEXT = """\
 [b]earthwave[/b]  earthquakes worldwide
 
 [b]Keys[/b]
-  j / k, arrows   move          Enter   quake detail
-  f   filters                   s       cycle sort (time, magnitude, distance)
-  t   tsunami alerts            a       acknowledge tsunami banner and new rows
-  /   search place              m       show or hide the map
-  M   full-screen map           z       zoom map (world, region, home)
-  r   refresh now               ?       this help
-  q   quit                      Map focused (Tab): arrows pan
-  In detail:  b open USGS page, y copy URL, Esc back
+  j/k, arrows  move          Enter  quake detail
+  f  filters                 s      cycle sort
+  /  search place            m      show or hide map
+  M  full-screen map         z      zoom map
+  t  tsunami alerts          a      acknowledge alerts, new rows
+  r  refresh now             ?      this help
+  q  quit                    Tab    focus map; arrows pan
+  Detail: b open page, y copy URL, Esc back
 
 [b]Colors[/b]
-  magnitude  grey <3, cyan 3-4.4, green 4.5-5.4, yellow 5.5-6.4, orange 6.5-6.9, red 7+
-  new rows flash cyan; updated rows flash yellow; major quakes pulse red for a minute
-  tsunami: Warning red, Advisory orange, Watch yellow, Threat and Information blue
+  mag: grey <3, cyan <4.5, green <5.5, yellow <6.5, orange <7, red 7+
+  new rows flash cyan, updated rows yellow, major quakes pulse red
+  tsunami: Warning red, Advisory orange, Watch yellow, others blue
 
 [b]Data[/b]
-  Earthquakes: U.S. Geological Survey (earthquake.usgs.gov), public domain.
-  Tsunami alerts and sea-level data: NOAA / National Weather Service, Japan Meteorological Agency.
+  Quakes: USGS (earthquake.usgs.gov), public domain.
+  Tsunami and sea level: NOAA / NWS, Japan Meteorological Agency.
   Coastlines: Natural Earth, public domain.
 
 [dim]Esc or ? to close[/dim]
