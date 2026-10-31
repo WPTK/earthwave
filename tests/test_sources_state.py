@@ -1,5 +1,6 @@
 """USGS parsing, store merge rules, attention, and the scheduler (backoff, freshness, generation, replay)."""
 
+import asyncio
 import random
 from datetime import timedelta
 
@@ -513,3 +514,110 @@ async def test_replayed_session_drives_scheduler_end_to_end():
     last = results[-1].events
     assert {type(e) for e in last} == {QuakeNew, QuakeMajor, QuakeUpdated}
     assert clock.now() >= recording_start(path) + timedelta(seconds=180)
+
+
+# --- review fixes -----------------------------------------------------------------------------------------------
+
+
+def test_threshold_crossing_without_a_material_change_still_fires(clock):
+    store = Store(AlertsConfig(major_magnitude=6.0), HomeConfig())
+    store.merge(batch(make_quake("a", 5.9)), clock)
+    events = store.merge(batch(make_quake("a", 6.0, updated=T0 + timedelta(minutes=1))), clock)
+    assert [type(e) for e in events] == [QuakeMajor]  # 0.1 is not a material change, the threshold still counts
+    assert store.merge(batch(make_quake("a", 6.1, updated=T0 + timedelta(minutes=2))), clock) == []
+
+
+def test_tracker_retain_drops_attention_outside_the_view(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeNew(make_quake("in")), QuakeNew(make_quake("out"))])
+    tracker.retain({"in"})
+    assert tracker.unseen() == 1 and tracker.kind_of("out") is None
+
+
+@respx.mock
+async def test_startup_feed_is_retried_until_it_succeeds(clock):
+    first = respx.get(FEED_BASE + "4.5_week.geojson").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json={"features": []})]
+    )
+    respx.get(FEED_BASE + "all_day.geojson").mock(return_value=httpx.Response(200, json={"features": []}))
+    respx.get(FEED_BASE + "significant_month.geojson").mock(return_value=httpx.Response(200, json={"features": []}))
+    source = UsgsSource(clock)
+    async with build_client() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await source.fetch(client, None)
+        assert source.starting
+        feeds = [(await source.fetch(client, None)).meta["feed"] for _ in range(3)]
+    assert first.call_count == 2 and feeds == ["4.5_week", "all_day", "significant_month"]
+    assert not source.starting
+
+
+@respx.mock
+async def test_first_batch_of_a_new_feed_is_silent_then_normal(clock):
+    source = UsgsSource(clock)
+    source._startup.clear()
+    respx.get(FEED_BASE + "2.5_day.geojson").mock(
+        return_value=httpx.Response(200, json={"features": []}, headers={"Last-Modified": "x"})
+    )
+    async with build_client() as client:
+        first = await source.fetch(client, None)
+        again = await source.fetch(client, first.cursor)
+    assert first.meta["silent"] and not again.meta["silent"]
+    store = Store()
+    store.merge(batch(make_quake("seed")), clock)
+    loud = Batch("usgs", T0, quakes=(make_quake("n1"),), meta={"silent": False})
+    quiet = Batch("usgs", T0, quakes=(make_quake("n2"),), meta={"silent": True})
+    assert [type(e) for e in store.merge(loud, clock)] == [QuakeNew]
+    assert store.merge(quiet, clock) == [] and store.get("n2") is not None
+
+
+def test_coverage_below_the_narrowed_feed_is_forgotten(clock):
+    store = Store()
+    store.merge(Batch("usgs", T0, quakes=(), coverage=(24.0, 0.0)), clock)
+    store.merge(Batch("usgs", T0, quakes=(), coverage=(24.0, 4.5)), clock)
+    assert store.is_covered(24, 1.0)
+    store.drop_coverage_below(2.5)
+    assert not store.is_covered(24, 1.0) and store.is_covered(24, 4.5)
+
+
+class SlowSource(FakeSource):
+    name = "slow"
+
+    def __init__(self, release):
+        super().__init__([])
+        self.release = release
+
+    async def fetch(self, client, since):
+        self.calls += 1
+        await self.release.wait()
+        return Batch("slow", T0)
+
+
+class TickSource(FakeSource):
+    name = "tick"
+    min_interval = 0.0
+
+    def interval(self, health):
+        return 0.05
+
+    async def fetch(self, client, since):
+        self.calls += 1
+        return Batch("tick", T0)
+
+
+async def test_slow_source_does_not_delay_a_fast_one():
+    from earthwave.clock import SystemClock
+
+    release = asyncio.Event()
+    slow, fast = SlowSource(release), TickSource([])
+    sched = Scheduler([slow, fast], Store(), SystemClock(), lambda result: None)
+    async with build_client() as client:
+        task = asyncio.create_task(sched.run(client))
+        for _ in range(100):
+            if fast.calls >= 3:
+                break
+            await asyncio.sleep(0.02)
+        assert fast.calls >= 3 and slow.calls == 1  # the fast source kept polling while the slow one hung
+        release.set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

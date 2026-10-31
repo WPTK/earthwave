@@ -186,14 +186,21 @@ class Scheduler:
         return task
 
     async def run(self, client: httpx.AsyncClient) -> None:
-        """Poll forever; each due source runs concurrently and a failure in one never stops the others."""
+        """Poll forever; each source has its own task, so a slow or failing one never delays the others."""
+        running: dict[str, asyncio.Task] = {}
         try:
             while True:
-                if names := self.due():
-                    await asyncio.gather(*(self.poll_source(n, client) for n in names))
+                for name in self.due():
+                    if name not in running:
+                        running[name] = asyncio.get_running_loop().create_task(self.poll_source(name, client))
+                for name in [n for n, t in running.items() if t.done()]:
+                    del running[name]
                 now = self._clock.monotonic()
-                wait = min((s.next_due - now for s in self.statuses.values()), default=TICK)
+                wait = min(
+                    (s.next_due - now for n, s in self.statuses.items() if n not in running),
+                    default=TICK,
+                )
                 await self._clock.sleep(min(max(wait, 0.05), TICK))
         finally:
-            for task in list(self._tasks):
+            for task in [*running.values(), *self._tasks]:
                 task.cancel()

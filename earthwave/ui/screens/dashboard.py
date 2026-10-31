@@ -78,6 +78,7 @@ class DashboardScreen(Screen):
         quake_list = self.query_one(QuakeList)
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
+        app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         self.refresh_ticker()
         self.refresh_status(shown=len(rows))

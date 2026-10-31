@@ -1,5 +1,6 @@
 """The Textual application: owns the store, scheduler and attention tracker and wires them to the screens."""
 
+import asyncio
 import logging
 from dataclasses import replace
 from datetime import timedelta
@@ -16,7 +17,7 @@ from earthwave.models import Earthquake
 from earthwave.net import build_client
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import PollResult, Scheduler
-from earthwave.sources.usgs import UsgsSource
+from earthwave.sources.usgs import UsgsSource, feed_coverage
 from earthwave.state.events import QuakeMajor, SourceDegraded, SourceRecovered
 from earthwave.state.store import SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
@@ -50,6 +51,7 @@ class EarthwaveApp(App):
         store: Store | None = None,
         clock: Clock | None = None,
         run_scheduler: bool = True,
+        ticks: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         super().__init__()
@@ -64,6 +66,7 @@ class EarthwaveApp(App):
         self.client = build_client(config.notify.contact, transport)
         self.scheduler = Scheduler([self.usgs] if config.sources.usgs else [], self.store, self.clock, self._on_poll)
         self.scheduler_running = run_scheduler
+        self.ticking = ticks
         self.dashboard = DashboardScreen()
         self._previous_visible: set[str] = set()
         self._coverage_checked = False
@@ -72,7 +75,8 @@ class EarthwaveApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(self.dashboard)
-        self.set_interval(TICK_SECONDS, self._tick)
+        if self.ticking:
+            self.set_interval(TICK_SECONDS, self._tick)
         if self.scheduler_running:
             self._run_scheduler()
 
@@ -80,6 +84,11 @@ class EarthwaveApp(App):
     async def _run_scheduler(self) -> None:
         try:
             await self.scheduler.run(self.client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("scheduler stopped unexpectedly")
+            raise
         finally:
             await self.client.aclose()
 
@@ -135,6 +144,10 @@ class EarthwaveApp(App):
         self.view = replace(self.view, min_magnitude=min_magnitude, hours=hours)
         self.usgs.set_min_magnitude(min_magnitude)
         self.scheduler.switch()
+        if self.usgs.steady != old_feed:
+            floor = feed_coverage(self.usgs.steady)
+            if floor:
+                self.store.drop_coverage_below(floor[1])
         self._backfill_if_needed(force=self.usgs.steady != old_feed)
         self.dashboard.refresh_view()
 

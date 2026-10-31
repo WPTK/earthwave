@@ -181,18 +181,24 @@ class UsgsSource:
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         backfill = bool(self._startup)
-        feed = self._startup.pop(0) if backfill else self.steady
+        feed = self._startup[0] if backfill else self.steady
         headers = {}
-        if since and since.partition("|")[0] == feed and since.partition("|")[2]:
+        same_feed = bool(since) and since.partition("|")[0] == feed
+        if same_feed and since.partition("|")[2]:
             headers["If-Modified-Since"] = since.partition("|")[2]
+        # The first batch from a feed we have no cursor for may hold many quakes the store lacks (feed switch, or a
+        # failed backfill), so it merges silently instead of flashing them all as new.
+        silent = not backfill and not same_feed
         started = self._clock.monotonic()
         response = await client.get(f"{FEED_BASE}{feed}.geojson", headers=headers)
         elapsed = self._clock.monotonic() - started
         if response.status_code == 304:
+            self._done(feed, backfill)
             log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
             return Batch(self.name, self._clock.now(), not_modified=True, backfill=backfill, cursor=since)
         response.raise_for_status()
         quakes = parse_collection(response.json())
+        self._done(feed, backfill)
         log.debug(
             "usgs %s: %s, %d bytes, %d quakes (%.2fs)",
             feed,
@@ -207,10 +213,15 @@ class UsgsSource:
             self._clock.now(),
             quakes=quakes,
             backfill=backfill,
-            cursor=f"{feed}|{modified}" if modified else None,
+            cursor=f"{feed}|{modified or ''}",
             coverage=feed_coverage(feed),
-            meta={"feed": feed},
+            meta={"feed": feed, "silent": silent},
         )
+
+    def _done(self, feed: str, backfill: bool) -> None:
+        """A startup feed counts as loaded only once it fetched; failures retry the same feed."""
+        if backfill and self._startup and self._startup[0] == feed:
+            self._startup.pop(0)
 
     async def fetch_range(
         self, client: httpx.AsyncClient, start: datetime, end: datetime, min_magnitude: float

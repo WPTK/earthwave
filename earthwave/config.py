@@ -43,7 +43,8 @@ class HomeConfig:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.name)
+        """A name plus real coordinates; lat and lon both 0 is the unset default, so it counts as no home."""
+        return bool(self.name) and (self.lat, self.lon) != (0.0, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,12 +208,15 @@ def load_config(path: Path | None = None) -> Config:
     """Read the config file, writing the commented template first if it does not exist."""
     path = path or default_config_path()
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(TEMPLATE, encoding="utf-8")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(TEMPLATE, encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"{path}: cannot write the first-run template: {exc}") from exc
         log.info("config: wrote first-run template to %s", path)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     try:
         return parse_config(data)
@@ -240,6 +244,10 @@ def with_overrides(
 ) -> Config:
     """Apply command-line overrides; --home sets a coordinate pair and names it "home" if the config has no name."""
     view = config.view
+    for flag, key, value in (("--min-mag", "min_magnitude", min_magnitude), ("--hours", "hours", hours)):
+        low, high = RANGES[("view", key)]
+        if value is not None and not (low <= value <= high):
+            raise ConfigError(f"{flag} must be between {low} and {high}, got {value!r}")
     if min_magnitude is not None:
         view = dataclasses.replace(view, min_magnitude=min_magnitude)
     if hours is not None:

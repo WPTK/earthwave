@@ -35,13 +35,15 @@ DETAIL_BODY = (FIXTURES / "usgs" / "detail.geojson").read_bytes()
 HOUR_BODY = (FIXTURES / "usgs" / "all_hour.geojson").read_bytes()
 
 
-def week_app(transport=None, run_scheduler=False, home=True, **kwargs) -> EarthwaveApp:
+def week_app(transport=None, run_scheduler=False, home=True, ticks=False, **kwargs) -> EarthwaveApp:
     """Dashboard over the captured 4.5_week quakes at the instant they were captured (fully deterministic)."""
     clock = ReplayClock(WEEK_NOW, real=lambda: 0.0)
     config = with_overrides(Config(), 4.5, 168, (40.7, -74.0) if home else None, "unicode")
     store = Store(config.alerts, config.home)
     store.merge(Batch("usgs", WEEK_NOW, quakes=parse_collection(WEEK), backfill=True, coverage=(168.0, 4.5)), clock)
-    return EarthwaveApp(config, store=store, clock=clock, run_scheduler=run_scheduler, transport=transport, **kwargs)
+    return EarthwaveApp(
+        config, store=store, clock=clock, run_scheduler=run_scheduler, ticks=ticks, transport=transport, **kwargs
+    )
 
 
 def mock_transport(requests: list) -> httpx.MockTransport:
@@ -273,6 +275,30 @@ async def test_ack_all_and_unseen_badge():
         assert "3 unseen" in str(app.dashboard.query_one("#status").render())
         await pilot.press("a")
         assert app.tracker.unseen() == 0
+
+
+async def test_attention_for_hidden_quakes_never_counts_as_unseen():
+    app = week_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        hidden = make_quake("hidden", 2.7, time=WEEK_NOW)
+        app.tracker.observe([QuakeNew(hidden)])
+        app.dashboard.refresh_view()
+        assert app.tracker.unseen() == 0 and app.tracker.kind_of("hidden") is None
+
+
+async def test_scheduler_exception_is_logged_not_swallowed(caplog):
+    app = week_app()
+
+    async def boom(client):
+        raise RuntimeError("scheduler blew up")
+
+    app.scheduler.run = boom
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._run_scheduler()
+        await pilot.pause()
+        await pilot.pause()
+    assert "scheduler stopped unexpectedly" in caplog.text
 
 
 async def test_live_replay_session_runs_through_the_app():

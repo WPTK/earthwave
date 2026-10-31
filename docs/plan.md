@@ -229,7 +229,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 
 ## Execution: one session per milestone
 
-- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions may run in parallel in separate git worktrees (each with its own `.venv`) when their files do not overlap (the earlier "no worktrees" rule is relaxed after M1); otherwise they run one at a time in the main checkout at `C:\earthwave`. Only the managing session edits `docs/plan.md` while sessions run in parallel. Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
+- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions may run in parallel in separate git worktrees (each with its own `.venv`) when their files do not overlap (the earlier "no worktrees" rule is relaxed after M1); otherwise they run one at a time in the main checkout at `C:\earthwave`. Sessions running in parallel do not edit `docs/plan.md`; the managing session ticks their boxes and writes their State notes. Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
 - A session reads `CLAUDE.md` and its milestone section in `docs/plan.md` first, implements only that milestone, and stops. Anything discovered outside its scope goes into a GitHub issue or the "Deferred" list at the end of `docs/plan.md`, never into the session.
 - Before opening its PR, a session (1) ticks its milestone's checkbox in `docs/plan.md` and writes a short "State after Mn" note there (what exists, what was deviated from and why, what the next session must know), (2) appends its changelog draft lines to the "Changelog draft" list in `docs/plan.md` (not to `CHANGELOG.md`; see Versioning and changelog), (3) runs the full verification block. The next session starts after the PR is merged.
 - Brief template for starting a milestone session (fill in N and the slug):
@@ -252,7 +252,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 
 ## Data resolution rule
 
-Geographic and generated data (coastlines, borders, plate boundaries, tsunami zones, station lists) must be high resolution, not oversimplified. File size is not a constraint. The linecast project (github.com/ashuttl/linecast) is the minimum detail bar; Natural Earth 1:10m is the target.
+Geographic and generated data (coastlines, borders, plate boundaries, tsunami zones, station lists) must be high resolution, not oversimplified. File size is not a constraint. The linecast project (github.com/ashuttl/linecast) is the minimum detail bar; Natural Earth 1:10m is the target and 1:50m is the minimum.
 
 ## Milestones (one session, one branch, one PR each, in order)
 
@@ -327,7 +327,7 @@ Manual checks per milestone:
 
 ## State after M1
 
-- Exists: everything in the M1 section. `clock.py`, `net.py`, `logging_setup.py`, `config.py`, `models.py`, `poll.py`, `app.py`, `sources/{base,usgs,geo}.py`, `state/{store,events}.py`, `notify/inapp.py` (AttentionTracker only), `ui/{theme,glyphs,labels,app.tcss}`, `ui/widgets/{quake_list,status_bar,ticker,map_panel,too_small}.py`, `ui/screens/{dashboard,detail,filters,help}.py`. Package `__init__.py` files are empty. `--selftest` also renders one headless 120x40 frame. Tests: 90, with a dashboard snapshot; Textual is pinned to `8.2.8` in the dev extra. M3 (`braille.py`, coastline) and M4 (`ndbc.py`, `coops.py`, station snapshot) are pure modules and may land in parallel with or before M2 without touching M1 files.
+- Exists: everything in the M1 section. `clock.py`, `net.py`, `logging_setup.py`, `config.py`, `models.py`, `poll.py`, `app.py`, `sources/{base,usgs,geo}.py`, `state/{store,events}.py`, `notify/inapp.py` (AttentionTracker only), `ui/{theme,glyphs,labels,app.tcss}`, `ui/widgets/{quake_list,status_bar,ticker,map_panel,too_small}.py`, `ui/screens/{dashboard,detail,filters,help}.py`. Package `__init__.py` files are empty. `--selftest` also renders one headless 120x40 frame. Tests: 142 after the review fixes, with a dashboard snapshot; Textual is pinned to `8.2.8` in the dev extra. M3 (`braille.py`, coastline) and M4 (`ndbc.py`, `coops.py`, station snapshot) are pure modules and may land in parallel with or before M2 without touching M1 files.
 - Verified live on 2026-10-31: the startup chain (`4.5_week`, `all_day`, `significant_month`) then `2.5_day` returns 200 once and 304 (`If-Modified-Since` from the `Last-Modified` cursor) on the next poll.
 - Public shape of `earthwave/models.py` (all frozen, slotted dataclasses, aware-UTC datetimes):
   - `Earthquake(id, time, lat, lon, mag, depth_km=0.0, source="usgs", mag_type="", place="", status="automatic", tsunami_flag=False, pager_alert=None, sig=0, felt=None, cdi=None, mmi=None, updated=None, url="", detail_url="", also_ids=())`

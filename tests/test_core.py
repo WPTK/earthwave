@@ -244,3 +244,22 @@ def test_cli_rejects_bad_arguments(tmp_path, capsys):
     bad.write_text("[poll]\nusgs_seconds = 5\n", encoding="utf-8")
     assert main(["--config", str(bad)]) == 2
     assert "usgs_seconds" in capsys.readouterr().err
+
+
+def test_cli_validates_ranges_and_unreadable_config(tmp_path, capsys):
+    from earthwave.__main__ import main
+
+    assert main(["--no-config", "--hours", "0"]) == 2
+    assert "--hours" in capsys.readouterr().err
+    assert main(["--no-config", "--min-mag", "99"]) == 2
+    assert "--min-mag" in capsys.readouterr().err
+    binary = tmp_path / "bin.toml"
+    binary.write_bytes(b"\xff\xfe\x00bad")
+    assert main(["--config", str(binary)]) == 2
+    assert main(["--config", str(tmp_path)]) == 2  # a directory is an OSError, not a traceback
+
+
+def test_home_at_null_island_counts_as_unset():
+    from earthwave.config import HomeConfig
+
+    assert not HomeConfig("Home", 0.0, 0.0).enabled and HomeConfig("Home", 1.0, 0.0).enabled

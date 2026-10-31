@@ -84,6 +84,11 @@ class AttentionTracker:
         for quake_id in quake_ids:
             self.ack(quake_id)
 
+    def retain(self, quake_ids: set[str]) -> None:
+        """Drop attention for quakes outside the current view (filtered out or aged out): they can never be seen."""
+        for quake_id in [k for k in self._items if k not in quake_ids]:
+            del self._items[quake_id]
+
     def unseen(self) -> int:
         return sum(1 for item in self._items.values() if item.kind is not AttentionKind.UPDATED and not item.acked)
 

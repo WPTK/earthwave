@@ -74,6 +74,10 @@ class Store:
         """True when merged batches already contain every quake in the last `hours` at or above `min_magnitude`."""
         return any(h >= hours and m <= min_magnitude for h, m in self._coverage)
 
+    def drop_coverage_below(self, min_magnitude: float) -> None:
+        """Forget coverage claims for magnitudes the live feed no longer delivers (the steady feed narrowed)."""
+        self._coverage = [(h, m) for h, m in self._coverage if m >= min_magnitude]
+
     def distance_home_km(self, quake: Earthquake) -> float | None:
         if not self._home.enabled:
             return None
@@ -105,7 +109,7 @@ class Store:
         """
         if batch.not_modified:
             return []
-        silent = batch.backfill or not self.warm
+        silent = batch.backfill or bool(batch.meta.get("silent")) or not self.warm
         events: list[Event] = []
         for quake in batch.quakes:
             old = self._quakes.get(quake.id)
@@ -121,7 +125,7 @@ class Store:
                 changed = changed_fields(old, quake)
                 if changed:
                     events.append(QuakeUpdated(quake, changed))
-                    events.extend(self._threshold_events(old, quake))
+                events.extend(self._threshold_events(old, quake))
         if batch.coverage and batch.coverage not in self._coverage:
             self._coverage.append(batch.coverage)
         if not batch.backfill:
