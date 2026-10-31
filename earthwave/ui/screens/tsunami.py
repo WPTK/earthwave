@@ -112,7 +112,7 @@ class TsunamiScreen(Screen):
             table.add_row(
                 Text(alert.level, LEVEL_COLORS[alert.level]),
                 SOURCE_NAMES.get(alert.source, alert.source),
-                "; ".join(alert.areas)[:40],
+                Text("; ".join(alert.areas)[:40]),
                 fmt_time(alert.issued, tz) if alert.issued else "",
                 "overdue"
                 if status == "overdue"

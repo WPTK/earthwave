@@ -130,9 +130,10 @@ def test_template_parses_to_the_defaults():
     assert raw["poll"]["usgs_seconds"] == asdict(Config().poll)["usgs_seconds"]
 
 
-def test_first_run_writes_template_then_reads_it(tmp_path):
+def test_first_run_writes_template_then_reads_it(tmp_path, monkeypatch):
     path = tmp_path / "sub" / "config.toml"
-    assert load_config(path) == Config()
+    monkeypatch.setattr("earthwave.config.default_config_path", lambda: path)
+    assert load_config() == Config()
     assert path.read_text(encoding="utf-8") == TEMPLATE
     path.write_text(
         '[view]\nmin_magnitude = 4.5\nhours = 6.5\n[home]\nname = "Home"\nlat = 40\nlon = -74\n', encoding="utf-8"
@@ -156,6 +157,13 @@ def test_first_run_writes_template_then_reads_it(tmp_path):
 def test_invalid_values_raise(tmp_path, toml):
     with pytest.raises(ConfigError):
         parse_config(tomllib.loads(toml))
+
+
+def test_a_missing_explicit_config_path_is_an_error_and_creates_nothing(tmp_path):
+    path = tmp_path / "earhtwave.toml"
+    with pytest.raises(ConfigError, match="not found"):
+        load_config(path)
+    assert not path.exists()
 
 
 def test_broken_toml_names_the_file(tmp_path):
