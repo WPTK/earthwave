@@ -15,21 +15,29 @@ from earthwave.clock import Clock, SystemClock
 from earthwave.config import Config
 from earthwave.models import Earthquake
 from earthwave.net import build_client
+from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import PollResult, Scheduler
+from earthwave.sources.base import Source
+from earthwave.sources.jma import JmaSource
+from earthwave.sources.nws import NwsSource
+from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
 from earthwave.state.events import QuakeMajor, SourceDegraded, SourceRecovered
+from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
 from earthwave.ui.screens.help import HelpScreen
+from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.widgets.quake_list import QuakeList
 
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
 
 
 class PollDone(Message):
@@ -53,6 +61,8 @@ class EarthwaveApp(App):
         run_scheduler: bool = True,
         ticks: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        notifier: Notifier | None = None,
+        bell: bool = False,
     ):
         super().__init__()
         self.config = config
@@ -64,17 +74,33 @@ class EarthwaveApp(App):
         self.sort = SortKey.TIME
         self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude)
         self.client = build_client(config.notify.contact, transport)
-        self.scheduler = Scheduler([self.usgs] if config.sources.usgs else [], self.store, self.clock, self._on_poll)
+        self.rules = AlertRules(config.alerts)
+        self.notifier = notifier
+        self.bell_enabled = bell
+        self._outbox: asyncio.Queue[Notification] = asyncio.Queue()
+        self._sender: asyncio.Task | None = None
+        self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
         self.scheduler_running = run_scheduler
         self.ticking = ticks
         self.dashboard = DashboardScreen()
         self._previous_visible: set[str] = set()
         self._coverage_checked = False
 
+    def _enabled_sources(self, config: Config) -> list[Source]:
+        poll, enabled = config.poll, config.sources
+        return [
+            *([self.usgs] if enabled.usgs else []),
+            *([TsunamiGovSource(self.clock, poll.tsunami_seconds)] if enabled.tsunamigov else []),
+            *([NwsSource(self.clock, poll.tsunami_seconds)] if enabled.nws else []),
+            *([JmaSource(self.clock, poll.tsunami_seconds)] if enabled.jma else []),
+        ]
+
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
     def on_mount(self) -> None:
         self.push_screen(self.dashboard)
+        if self.notifier is not None:
+            self._sender = asyncio.get_running_loop().create_task(self._send_loop(self.notifier))
         if self.ticking:
             self.set_interval(TICK_SECONDS, self._tick)
         if self.scheduler_running:
@@ -92,18 +118,35 @@ class EarthwaveApp(App):
         finally:
             await self.client.aclose()
 
+    async def _send_loop(self, notifier: Notifier) -> None:
+        """Desktop notifications go out one at a time, in order, so a burst cannot pile up threads."""
+        while True:
+            note = await self._outbox.get()
+            try:
+                await asyncio.wait_for(notifier.send(note), SEND_TIMEOUT)
+            except Exception as exc:  # a raising or hung notifier must not stall the toasts behind it
+                log.warning("desktop notification %s dropped: %r", note.key, exc)
+            finally:
+                self._outbox.task_done()
+
     async def on_unmount(self) -> None:
+        if self._sender is not None:
+            self._sender.cancel()
         await self.client.aclose()
 
     def _tick(self) -> None:
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
         self.tracker.prune()
+        self.sync_tsunami()
+        if not self.screen_stack or not self.dashboard.query(QuakeList):  # shutting down, or not yet composed
+            return
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
             visible = quake_list.visible_ids()
             self.tracker.mark_seen(visible & self._previous_visible)
             self._previous_visible = visible
             quake_list.refresh()
+            self.dashboard.refresh_tsunami()
             self.dashboard.refresh_status()
         else:
             self._previous_visible = set()
@@ -116,6 +159,7 @@ class EarthwaveApp(App):
     def on_poll_done(self, message: PollDone) -> None:
         result = message.result
         self.tracker.observe(list(result.events))
+        self._notify_desktop(list(result.events))
         for event in result.events:
             if isinstance(event, QuakeMajor):
                 q = event.quake
@@ -125,7 +169,28 @@ class EarthwaveApp(App):
         if not self.usgs.starting and not self._coverage_checked:
             self._coverage_checked = True
             self._backfill_if_needed(force=False)
-        self.dashboard.refresh_view()
+        self.sync_tsunami()
+        if not self.screen_stack:  # a poll that lands while the app is shutting down
+            return
+        if self.dashboard.is_mounted and self.dashboard.query(
+            QuakeList
+        ):  # not before it composed or after it unmounted
+            self.dashboard.refresh_view()
+        if isinstance(self.screen, TsunamiScreen):
+            self.screen.refresh_alerts()
+
+    def sync_tsunami(self) -> None:
+        """Forget tsunami attention for alerts that expired or were closed since the last look."""
+        active = self.store.active_alerts(self.clock, actionable_only=True)
+        self.tracker.tsunami_sync({a.id for a in active})
+
+    def _notify_desktop(self, events: list) -> None:
+        """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
+        for note in self.rules.evaluate(events):
+            if self.bell_enabled and note.bell:
+                self.bell()
+            if self.notifier is not None:
+                self._outbox.put_nowait(note)
 
     # --- view changes -------------------------------------------------------------------------------------------
 
@@ -166,6 +231,17 @@ class EarthwaveApp(App):
 
     def open_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def open_tsunami(self) -> None:
+        if not isinstance(self.screen, TsunamiScreen):
+            self.push_screen(TsunamiScreen())
+
+    def refresh_tsunami(self) -> None:
+        self.sync_tsunami()
+        self.dashboard.refresh_tsunami()
+        self.dashboard.refresh_status()
+        if isinstance(self.screen, TsunamiScreen):
+            self.screen.refresh_alerts()
 
     def open_detail(self, quake: Earthquake) -> None:
         self.push_screen(DetailScreen(quake))

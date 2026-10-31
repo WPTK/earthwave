@@ -6,7 +6,7 @@ the same projection the raster uses and composes frames. `MapPanel` is the widge
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache, partial
@@ -19,16 +19,19 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 from earthwave.config import HomeConfig
-from earthwave.models import Earthquake
-from earthwave.notify.inapp import AttentionTracker
+from earthwave.models import Earthquake, TsunamiAlert
+from earthwave.notify.inapp import TSUNAMI_PREFIX, AttentionTracker
+from earthwave.sources import levels
+from earthwave.sources.geo import haversine_km
 from earthwave.ui.glyphs import Glyphs
-from earthwave.ui.theme import mag_color
+from earthwave.ui.theme import LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
     WORLD,
     Viewport,
     coastline_canvas,
     project_cell,
     render_ascii,
+    unproject,
     warm_coastline,
 )
 
@@ -92,6 +95,116 @@ def base_lines(cols: int, rows: int, view: Viewport, ascii_mode: bool) -> tuple[
     return tuple(render_ascii(canvas) if ascii_mode else canvas.render())
 
 
+@dataclass(frozen=True, slots=True)
+class TsunamiMark:
+    """One tsunami alert in force, reduced to what the map draws."""
+
+    alert_id: str
+    level: str
+    geometry: tuple | None  # ("circle", lat, lon, radius_km) | ("polygon", ((lon, lat), ...)) | None
+    source: tuple[float, float] | None  # (lat, lon) of the source quake
+
+
+def tsunami_marks(
+    alerts: Sequence[TsunamiAlert], quake_for: Callable[[TsunamiAlert], Earthquake | None]
+) -> list[TsunamiMark]:
+    """Marks for alerts in force; source = linked quake, else the product origin, else a circle centre."""
+    marks = []
+    for alert in alerts:
+        quake = quake_for(alert)
+        if quake is not None:
+            source: tuple[float, float] | None = (quake.lat, quake.lon)
+        elif alert.origin is not None:
+            source = (alert.origin[1], alert.origin[2])
+        elif alert.geometry and alert.geometry[0] == "circle":
+            source = (alert.geometry[1], alert.geometry[2])
+        else:
+            source = None
+        marks.append(TsunamiMark(alert.id, alert.level, alert.geometry, source))
+    return marks
+
+
+def _inside_polygon(lon: float, lat: float, ring: Sequence[tuple[float, float]]) -> bool:
+    inside = False
+    j = len(ring) - 1
+    for i, (xi, yi) in enumerate(ring):
+        xj, yj = ring[j]
+        if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _unwrap_ring(ring: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    offset = 0.0
+    prev: float | None = None
+    for lon, lat in ring:
+        if prev is not None:
+            if lon - prev > 180:
+                offset -= 360.0
+            elif prev - lon > 180:
+                offset += 360.0
+        prev = lon
+        out.append((lon + offset, lat))
+    return out
+
+
+@lru_cache(maxsize=64)
+def geometry_cells(geometry: tuple, view: Viewport, cols: int, rows: int, ascii_mode: bool) -> frozenset:
+    """Coastline cells whose centre lies inside the alert geometry (a circle or a polygon), for one view."""
+    blank = " " if ascii_mode else "\u2800"
+    base = base_lines(cols, rows, view, ascii_mode)
+    ring = _unwrap_ring(geometry[1]) if geometry[0] == "polygon" else []
+    cells = set()
+    for row, line in enumerate(base):
+        for col, ch in enumerate(line):
+            if ch == blank:
+                continue
+            lon, lat = unproject(col * 2 + 0.5, row * 4 + 1.5, view, cols * 2, rows * 4)
+            if geometry[0] == "circle":
+                hit = haversine_km(lat, lon, geometry[1], geometry[2]) <= geometry[3]
+            else:
+                hit = any(_inside_polygon(lon + shift, lat, ring) for shift in (-360.0, 0.0, 360.0))
+            if hit:
+                cells.add((col, row))
+    return frozenset(cells)
+
+
+def _level_style(mark: TsunamiMark, tracker: AttentionTracker | None) -> Style:
+    """Level colour; while the alert has attention it blinks with the tracker's flash background."""
+    style = Style.parse(LEVEL_COLORS.get(mark.level, "dodger_blue2"))
+    key = TSUNAMI_PREFIX + mark.alert_id
+    if tracker is not None and tracker.kind_of(key) is not None:
+        flash = tracker.style_for(key)
+        style = Style(color="white", bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
+    return style
+
+
+def place_tsunami(
+    marks: Sequence[TsunamiMark],
+    view: Viewport,
+    cols: int,
+    rows: int,
+    ascii_mode: bool,
+    tracker: AttentionTracker | None = None,
+) -> tuple[dict[tuple[int, int], Style], dict[tuple[int, int], Marker]]:
+    """(coast tint per cell, source-ring markers). Higher alert levels overwrite lower ones where they overlap."""
+    tint: dict[tuple[int, int], Style] = {}
+    rings: dict[tuple[int, int], Marker] = {}
+    for mark in sorted(marks, key=lambda m: levels.RANK.get(m.level, 0)):
+        style = _level_style(mark, tracker)
+        if mark.geometry:
+            for cell in geometry_cells(mark.geometry, view, cols, rows, ascii_mode):
+                tint[cell] = style
+        if mark.source is not None and (cell := project_cell(mark.source[1], mark.source[0], view, cols, rows)):
+            for dc, glyph in ((-1, "("), (1, ")")):
+                col = cell[0] + dc
+                if 0 <= col < cols:
+                    rings[(col, cell[1])] = Marker(col, cell[1], glyph, style, (False, False, 0, -1.0))
+    return tint, rings
+
+
 def warm_world(cols: int, rows: int, ascii_mode: bool) -> None:
     """Load the coastline and rasterise the world view for this size, so the first draw is a cache hit."""
     warm_coastline()
@@ -115,6 +228,7 @@ class Frame:
     view: Viewport
     base: tuple[str, ...]
     markers: dict[tuple[int, int], Marker]
+    tint: dict[tuple[int, int], Style]
 
 
 def _marker_style(quake: Earthquake, selected: bool, tracker: AttentionTracker | None) -> tuple[Style, bool]:
@@ -161,17 +275,26 @@ def place_markers(
     return cells
 
 
-def row_segments(base: str, markers: Sequence[Marker]) -> list[Segment]:
-    """Split one raster row around its markers (given in any order)."""
+def row_segments(base: str, markers: Sequence[Marker], tint: dict[int, Style] | None = None) -> list[Segment]:
+    """Split one raster row into styled runs: markers by column (any order), `tint` maps columns to a coast colour."""
+    tint = tint or {}
+    by_col = {m.col: m for m in markers}
     segments: list[Segment] = []
-    pos = 0
-    for marker in sorted(markers, key=lambda m: m.col):
-        if marker.col > pos:
-            segments.append(Segment(base[pos : marker.col], COAST_STYLE))
-        segments.append(Segment(marker.glyph, marker.style))
-        pos = marker.col + 1
-    if pos < len(base):
-        segments.append(Segment(base[pos:], COAST_STYLE))
+    run = ""
+    run_style = COAST_STYLE
+    for col, ch in enumerate(base):
+        if col in by_col:
+            glyph, style = by_col[col].glyph, by_col[col].style
+        else:
+            glyph, style = ch, tint.get(col, COAST_STYLE)
+        if style == run_style:
+            run += glyph
+            continue
+        if run:
+            segments.append(Segment(run, run_style))
+        run, run_style = glyph, style
+    if run:
+        segments.append(Segment(run, run_style))
     return segments
 
 
@@ -199,6 +322,7 @@ class MapModel:
         self.pan_lat = 0
         self.quakes: Sequence[Earthquake] = ()
         self.selected: Earthquake | None = None
+        self.tsunami: Sequence[TsunamiMark] = ()
 
     # --- state --------------------------------------------------------------------------------------------------
 
@@ -208,6 +332,9 @@ class MapModel:
     def set_quakes(self, quakes: Sequence[Earthquake], selected: Earthquake | None) -> None:
         self.quakes = quakes
         self.selected = selected
+
+    def set_tsunami(self, marks: Sequence[TsunamiMark]) -> None:
+        self.tsunami = marks
 
     def select(self, quake: Earthquake | None) -> None:
         if (quake.id if quake else None) != (self.selected.id if self.selected else None):
@@ -256,7 +383,11 @@ class MapModel:
     # --- geometry -----------------------------------------------------------------------------------------------
 
     def has_attention(self) -> bool:
-        return self.tracker is not None and any(self.tracker.kind_of(q.id) is not None for q in self.quakes)
+        if self.tracker is None:
+            return False
+        return any(self.tracker.kind_of(q.id) is not None for q in self.quakes) or any(
+            self.tracker.kind_of(TSUNAMI_PREFIX + m.alert_id) is not None for m in self.tsunami
+        )
 
     def view(self) -> Viewport:
         cols, rows = max(self.cols, 1), max(self.rows, 1)
@@ -272,13 +403,17 @@ class MapModel:
     def frame(self) -> Frame:
         view = self.view()
         if self.cols < 1 or self.rows < 1:
-            return Frame(self.cols, self.rows, view, (), {})
+            return Frame(self.cols, self.rows, view, (), {}, {})
         base = base_lines(self.cols, self.rows, view, self.ascii_mode)
         selected_id = self.selected.id if self.selected else None
         markers = place_markers(
             self.quakes, selected_id, self.home, view, self.cols, self.rows, self.ascii_mode, self.tracker
         )
-        return Frame(self.cols, self.rows, view, base, markers)
+        tint, rings = place_tsunami(self.tsunami, view, self.cols, self.rows, self.ascii_mode, self.tracker)
+        for key, ring in rings.items():
+            if key not in markers:  # rings never cover a quake or the home marker
+                markers[key] = ring
+        return Frame(self.cols, self.rows, view, base, markers, tint)
 
     def plain_rows(self) -> list[str]:
         """Text-only frame (raster plus marker glyphs), used by tests and goldens."""
@@ -311,9 +446,7 @@ class MapPanel(Widget, can_focus=True):
         self.model = MapModel(home, ascii_mode=not glyphs.unicode, tracker=tracker)
         self._frame: Frame | None = None
         self._by_row: dict[int, list[Marker]] = {}
-        # Hook for M2: tsunami alert geometry (NWS polygon, CAP circle) and the source-quake ring. Stored only; the
-        # panel draws nothing from it yet.
-        self.tsunami_overlay: object | None = None
+        self._tint_by_row: dict[int, dict[int, Style]] = {}
 
     def on_mount(self) -> None:
         self.model.resize(self.size.width, self.size.height)
@@ -347,9 +480,11 @@ class MapPanel(Widget, can_focus=True):
         self.model.select(quake)
         self.refresh()
 
-    def set_tsunami_overlay(self, overlay: object | None) -> None:
-        """M2 hook: hand over alert geometry and source quakes to draw. Not rendered in M3b."""
-        self.tsunami_overlay = overlay
+    def set_tsunami(self, marks: Sequence[TsunamiMark]) -> None:
+        """Alerts in force: their geometry tints the coast and a ring flanks the source quake."""
+        if list(marks) != list(self.model.tsunami):
+            self.model.set_tsunami(marks)
+            self.refresh()
 
     def action_cycle_zoom(self) -> None:
         self.model.cycle_zoom()
@@ -374,9 +509,12 @@ class MapPanel(Widget, can_focus=True):
         if self._frame is None:
             self._frame = self.model.frame()
             self._by_row = {}
+            self._tint_by_row = {}
+            for (col, row), style in self._frame.tint.items():
+                self._tint_by_row.setdefault(row, {})[col] = style
             for marker in self._frame.markers.values():
                 self._by_row.setdefault(marker.row, []).append(marker)
         frame = self._frame
         if y >= frame.rows or y >= len(frame.base):
             return Strip.blank(self.size.width)
-        return Strip(row_segments(frame.base[y], self._by_row.get(y, ())))
+        return Strip(row_segments(frame.base[y], self._by_row.get(y, ()), self._tint_by_row.get(y)))

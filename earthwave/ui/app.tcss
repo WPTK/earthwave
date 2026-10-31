@@ -23,13 +23,78 @@ Screen {
     height: 1fr;
 }
 
-#map {
+#right {
     width: 45%;
+}
+
+#map {
+    height: 1fr;
     border: round $primary-darken-2;
 }
 
 #map:focus {
     border: round $primary;
+}
+
+#tsunami {
+    height: auto;
+    max-height: 12;
+    min-height: 4;
+    border: round $primary-darken-2;
+    padding: 0 1;
+}
+
+#tsunami.pulse {
+    border: round red;
+}
+
+#banner {
+    display: none;
+    height: 1;
+    background: #b91c1c;
+    color: white;
+}
+
+#status.alert-info {
+    background: #1e3a8a;
+}
+
+#status.alert-active {
+    background: #7c2d12;
+}
+
+#status.alert-alarm {
+    background: #b91c1c;
+}
+
+TsunamiScreen {
+    layout: vertical;
+}
+
+#tsunami_body {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#alert_table {
+    height: 40%;
+}
+
+#alert_text_scroll {
+    height: 1fr;
+    border-top: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+#gauges {
+    height: auto;
+}
+
+#tsunami_footer {
+    height: 1;
+    dock: bottom;
+    background: $panel;
+    color: $text-muted;
 }
 
 #search {
@@ -59,6 +124,7 @@ Screen.too-small #too_small {
     display: block;
 }
 
+Screen.too-small #banner,
 Screen.too-small #main,
 Screen.too-small #ticker,
 Screen.too-small #status,
@@ -70,15 +136,24 @@ Screen.no-map #map {
     display: none;
 }
 
-Screen.map-full #left {
+Screen.narrow #right {
     display: none;
 }
 
-/* Same specificity as the no-map rule above and placed after it, so the full-screen map shows even when the
-   terminal is narrower than the auto-hide width. */
-Screen.map-full #map {
+/* Full-screen map: hide the list and the tsunami panel. These come after the narrow and no-map rules at the same
+   specificity, so the map shows even in a terminal narrower than the auto-hide width. */
+Screen.map-full #left,
+Screen.map-full #tsunami {
+    display: none;
+}
+
+Screen.map-full #right {
     display: block;
     width: 1fr;
+}
+
+Screen.map-full #map {
+    display: block;
 }
 
 FiltersScreen, HelpScreen {

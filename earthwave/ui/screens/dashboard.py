@@ -9,12 +9,15 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Static
 
+from earthwave.sources import levels
 from earthwave.ui.labels import filter_summary
-from earthwave.ui.widgets.map_panel import MapPanel
+from earthwave.ui.widgets.banner import Banner
+from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
 from earthwave.ui.widgets.status_bar import SourceLine, StatusBar, StatusInfo
 from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import TooSmall, is_too_small
+from earthwave.ui.widgets.tsunami_panel import TsunamiPanel
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -30,6 +33,7 @@ class DashboardScreen(Screen):
         Binding("m", "toggle_map", "Map"),
         Binding("M", "fullscreen_map", "Full map", show=False),
         Binding("z", "zoom_map", "Zoom", show=False),
+        Binding("t", "tsunami", "Tsunami"),
         Binding("a", "ack_all", "Ack all"),
         Binding("r", "refresh_now", "Refresh"),
         Binding("question_mark", "help", "Help"),
@@ -46,11 +50,14 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         app = self.earthwave
         yield Ticker(id="ticker")
+        yield Banner("", id="banner")
         with Horizontal(id="main"):
             with Vertical(id="left"):
                 yield Static("", id="header")
                 yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="quakes")
-            yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
+            with Vertical(id="right"):
+                yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
+                yield TsunamiPanel(id="tsunami")
         yield Input(placeholder="search place, Enter to apply, Esc to clear", id="search")
         yield StatusBar(app.glyphs, id="status")
         yield TooSmall(id="too_small")
@@ -71,6 +78,7 @@ class DashboardScreen(Screen):
         if small:
             self.query_one(TooSmall).show(width, height)
         self.set_class(not self.show_map or width < MAP_MIN_WIDTH, "no-map")
+        self.set_class(width < MAP_MIN_WIDTH, "narrow")
 
     # --- view ---------------------------------------------------------------------------------------------------
 
@@ -84,6 +92,7 @@ class DashboardScreen(Screen):
         app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         self.refresh_ticker()
+        self.refresh_tsunami()
         self.refresh_status(shown=len(rows))
 
     def refresh_ticker(self) -> None:
@@ -92,6 +101,23 @@ class DashboardScreen(Screen):
         latest = max(major, key=lambda q: q.time, default=None)
         age = (app.clock.now() - latest.time).total_seconds() if latest else 0.0
         self.query_one(Ticker).show(latest, age)
+
+    def tsunami_state(self) -> tuple[list, list, int, str]:
+        """(alerts in force, actionable ones, unacknowledged count, status bar state) from the store and tracker."""
+        app = self.earthwave
+        active = app.store.active_alerts(app.clock)
+        actionable = [a for a in active if a.level in levels.ACTIONABLE]
+        unacked = app.tracker.tsunami_unacked()
+        state = "alarm" if unacked else "active" if actionable else "info" if active else "none"
+        return active, actionable, unacked, state
+
+    def refresh_tsunami(self) -> None:
+        app = self.earthwave
+        active, actionable, unacked, _ = self.tsunami_state()
+        blink = int(app.clock.monotonic() * 2) % 2 == 0
+        self.query_one(Banner).show(actionable, unacked)
+        self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
+        self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=bool(unacked) and blink)
 
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave
@@ -111,6 +137,7 @@ class DashboardScreen(Screen):
                 filter_text=filter_summary(app.view),
                 unseen=app.tracker.unseen(),
                 sort=app.sort.value,
+                alert_state=self.tsunami_state()[3],
             )
         )
 
@@ -150,6 +177,9 @@ class DashboardScreen(Screen):
     def action_ack_all(self) -> None:
         self.earthwave.tracker.ack_all()
         self.refresh_view()
+
+    def action_tsunami(self) -> None:
+        self.earthwave.open_tsunami()
 
     def action_refresh_now(self) -> None:
         self.earthwave.scheduler.refresh_now()

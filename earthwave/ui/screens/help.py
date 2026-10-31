@@ -12,16 +12,17 @@ HELP_TEXT = """\
 [b]Keys[/b]
   j / k, arrows   move          Enter   quake detail
   f   filters                   s       cycle sort (time, magnitude, distance)
+  t   tsunami alerts            a       acknowledge tsunami banner and new rows
   /   search place              m       show or hide the map
   M   full-screen map           z       zoom map (world, region, home)
-  a   acknowledge all           r       refresh now
-  Map focused (Tab): arrows pan
-  ?   this help                 q       quit
+  r   refresh now               ?       this help
+  q   quit                      Map focused (Tab): arrows pan
   In detail:  b open USGS page, y copy URL, Esc back
 
 [b]Colors[/b]
   magnitude  grey <3, cyan 3-4.4, green 4.5-5.4, yellow 5.5-6.4, orange 6.5-6.9, red 7+
   new rows flash cyan; updated rows flash yellow; major quakes pulse red for a minute
+  tsunami: Warning red, Advisory orange, Watch yellow, Threat and Information blue
 
 [b]Data[/b]
   Earthquakes: U.S. Geological Survey (earthquake.usgs.gov), public domain.

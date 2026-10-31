@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>PAAQ-1-kam001</identifier>
+  <sender>ntwc@noaa.gov</sender>
+  <sent>2025-07-29T23:34:12-00:00</sent>
+  <status>Actual</status>
+  <msgType>Alert</msgType>
+  <source>NTWC</source>
+  <scope>Public</scope>
+  <code>IPAWSv1.0</code>
+  <info>
+    <category>Geo</category>
+    <event>Tsunami Watch</event>
+    <responseType>Prepare</responseType>
+    <urgency>Expected</urgency>
+    <severity>Moderate</severity>
+    <certainty>Possible</certainty>
+    <onset>2025-07-29T23:34:12-00:00</onset>
+    <expires>2025-07-30T01:34:12-00:00</expires>
+    <senderName>NWS NATIONAL TSUNAMI WARNING CENTER PALMER AK</senderName>
+    <headline>TSUNAMI WATCH NUMBER 1</headline>
+    <description>A tsunami watch is in effect for the Alaska Peninsula and the Aleutian Islands. A tsunami is possible.</description>
+    <instruction>  N/A </instruction>
+    <web>https://www.tsunami.gov/events/PAAQ/2025/07/29/kam001/1/WEAK51/WEAK51.txt</web>
+    <parameter>
+      <valueName>EventLocationName</valueName>
+      <value>OFF EAST COAST OF KAMCHATKA</value>
+    </parameter>
+    <parameter>
+      <valueName>EventPreliminaryMagnitude</valueName>
+      <value>8.0</value>
+    </parameter>
+    <parameter>
+      <valueName>EventPreliminaryMagnitudeType</valueName>
+      <value>Mww</value>
+    </parameter>
+    <parameter>
+      <valueName>EventOriginTime</valueName>
+      <value>2025-07-29T23:24:52-00:00</value>
+    </parameter>
+    <parameter>
+      <valueName>EventLatLon</valueName>
+      <value>52.500,160.300 0.000</value>
+    </parameter>
+    <parameter>
+      <valueName>WEAK51</valueName>
+      <value>Tsunami Warnings, Advisories and Watches for AK, BC, and US West Coast</value>
+    </parameter>
+    <area>
+      <areaDesc>Alaska Peninsula</areaDesc>
+      <circle>52.5,160.3 0.0</circle>
+    </area>
+    <area>
+      <areaDesc>Aleutian Islands</areaDesc>
+      <circle>52.5,160.3 0.0</circle>
+    </area>
+  </info>
+</alert>

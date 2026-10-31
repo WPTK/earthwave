@@ -19,6 +19,7 @@ from earthwave.config import Config, ConfigError, load_config, parse_home, with_
 from earthwave.logging_setup import setup_logging
 from earthwave.models import Batch, Earthquake
 from earthwave.net import RecordingTransport, ReplayTransport, recording_start
+from earthwave.notify.desktop import default_notifier
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.store import Store
 from earthwave.ui.widgets.quake_list import QuakeList
@@ -134,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record", metavar="PATH", help="append every HTTP exchange to a JSONL recording")
     parser.add_argument("--replay", metavar="PATH", help="serve a recording instead of the network")
     parser.add_argument("--speed", type=float, default=1.0, metavar="N", help="replay speed multiplier (default 1)")
+    parser.add_argument("--notify", action="store_true", help="force toasts and bell on (off under replay)")
     parser.add_argument("--log", metavar="PATH", help="write a rotating log file (default level WARNING)")
     parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file")
     return parser
@@ -165,7 +167,11 @@ def run(args: argparse.Namespace) -> int:
         return 2
     if log_path:
         logging.getLogger(__name__).info("logging to %s", log_path)
-    EarthwaveApp(config, clock=clock, transport=transport).run()
+    # Toasts and the bell follow the config, except under replay where only --notify turns them on.
+    notifying = args.notify or (config.notify.desktop and not args.replay)
+    bell = args.notify or (config.notify.bell and not args.replay)
+    notifier = default_notifier() if notifying else None
+    EarthwaveApp(config, clock=clock, transport=transport, notifier=notifier, bell=bell).run()
     return 0
 
 
