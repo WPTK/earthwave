@@ -103,6 +103,10 @@ class DetailScreen(Screen):
 
     async def _load(self) -> None:
         app = self.earthwave
+        if app.offline:
+            self.note = "Offline: PAGER, ShakeMap and nearby cities are not available."
+            self._show()
+            return
         try:
             self.detail = await app.usgs.fetch_detail(app.client, self.quake)
             self.note = ""

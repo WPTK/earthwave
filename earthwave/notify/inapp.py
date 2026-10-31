@@ -36,6 +36,9 @@ class AttentionKind(StrEnum):
 _RANK = {AttentionKind.UPDATED: 1, AttentionKind.NEW: 2, AttentionKind.MAJOR: 3, AttentionKind.TSUNAMI: 4}
 
 
+_UNSEEN_KINDS = (AttentionKind.NEW, AttentionKind.MAJOR)  # rows that count toward the unseen badge
+
+
 class PulseGate:
     """Cooldown per (id, kind): a repeated minor update does not re-flash a row that just flashed."""
 
@@ -79,6 +82,7 @@ class AttentionTracker:
     def __init__(self, clock: Clock):
         self._clock = clock
         self._items: dict[str, Attention] = {}
+        self._seen: set[str] = set()  # quakes acknowledged since the last take_seen()
         self._gate = PulseGate(clock)
 
     def _elapsed(self, item: Attention) -> float:
@@ -140,9 +144,19 @@ class AttentionTracker:
         if current is None or _RANK[kind] >= _RANK[current.kind] or self._finished(current):
             self._items[quake_id] = Attention(kind, self._clock.monotonic())
 
+    def _ack(self, key: str, item: Attention) -> None:
+        if not item.acked and item.kind in _UNSEEN_KINDS:
+            self._seen.add(key)
+        item.acked = True
+
+    def take_seen(self) -> set[str]:
+        """Quakes whose unseen highlight was acknowledged since the last call (rows dropped from the view are not)."""
+        seen, self._seen = self._seen, set()
+        return seen
+
     def ack(self, quake_id: str) -> None:
         if item := self._items.get(quake_id):
-            item.acked = True
+            self._ack(quake_id, item)
 
     def ack_tsunami(self) -> None:
         """Acknowledge tsunami alerts only; quake attention is left alone."""
@@ -151,8 +165,8 @@ class AttentionTracker:
                 item.acked = True
 
     def ack_all(self) -> None:
-        for item in self._items.values():
-            item.acked = True
+        for key, item in self._items.items():
+            self._ack(key, item)
 
     def mark_seen(self, quake_ids: set[str]) -> None:
         """Rows that stayed in the viewport for a whole tick count as seen."""
@@ -165,12 +179,22 @@ class AttentionTracker:
         for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]
 
+    def restore(self, new_ids: set[str], major_ids: set[str]) -> None:
+        """Quakes announced in an earlier run and never seen: back to the dim highlight, with no flash or pulse."""
+        for quake_id in new_ids | major_ids:
+            kind, age = (
+                (AttentionKind.MAJOR, MAJOR_PULSE_SECONDS)
+                if quake_id in major_ids
+                else (AttentionKind.NEW, NEW_FLASH_SECONDS)
+            )
+            self._items.setdefault(quake_id, Attention(kind, self._clock.monotonic() - age))
+
+    def is_unseen(self, quake_id: str) -> bool:
+        item = self._items.get(quake_id)
+        return item is not None and item.kind in _UNSEEN_KINDS and not item.acked
+
     def unseen(self) -> int:
-        return sum(
-            1
-            for item in self._items.values()
-            if item.kind not in (AttentionKind.UPDATED, AttentionKind.TSUNAMI, AttentionKind.GAUGE) and not item.acked
-        )
+        return sum(1 for item in self._items.values() if item.kind in _UNSEEN_KINDS and not item.acked)
 
     def kind_of(self, quake_id: str) -> AttentionKind | None:
         item = self._items.get(quake_id)
