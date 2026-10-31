@@ -315,7 +315,7 @@ Manual checks per milestone:
 
 ## State after M0
 
-- Branch `m0-bootstrap`, committed locally only: no GitHub repo, push, PR or CI run yet (Bill has not given the repo go-ahead or visibility). `ci.yml` is written but untested.
+- The public repo `WPTK/earthwave` now exists; `m0-bootstrap` is pushed with a PR against `main`. `ci.yml` is written and first runs on that PR.
 - Exists: `pyproject.toml` (ruff/pytest config mirrored from cfbtui; `pytest-textual-snapshot` and `pyshp` unpinned in the dev extra, Textual pinned only by the `<9` range, so pin it exactly when the first snapshot lands in M1), `CLAUDE.md`, README stub, title-only `CHANGELOG.md`, MIT `LICENSE`, `.gitignore`, `.gitattributes`, `earthwave/__init__.py` (`0.0.1`), `__main__.py` (`--version`, `--selftest`), `scripts/capture_fixtures.py`, `tests/test_basic.py`.
 - Fixtures under `tests/fixtures/` captured 2026-10-31, all sources: `tsunamigov/` (PAAQ and PHEB Atom, each with its one CAP and bulletin), `usgs/` (`all_hour`, `4.5_week`, `significant_month`, `detail` with losspager and shakemap), `ndbc/` (`activestations.xml`, `46402.dart`), `coops/water_level_9414290.json`, `jma/` (`list.json`, `detail.json`).
 - Deviations: repo root is `C:\earthwave` (built on Gilead, not the gaming PC); no winget install step; the plan was edited in place rather than re-committed. `--selftest` skips fixture parsing when `tests/fixtures` is absent (a packaged exe), so M6 can bundle or drop that.
@@ -334,7 +334,7 @@ Manual checks per milestone:
 
 ## Open items to confirm during execution
 
-- Create `WPTK/earthwave` on GitHub (not chosen in scoping; ask first). Not created yet: M0 is a local branch only, so `ci.yml` has never run and the User-Agent/Homepage URLs point at a repo that does not exist yet.
+- Create `WPTK/earthwave` on GitHub (not chosen in scoping; ask first). Created as a public repo after M0 was built.
 - Default home location: none until set in `config.toml` or `--home`.
 
 ## Changelog draft
