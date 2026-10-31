@@ -1,6 +1,7 @@
 """JMA tsunami source (undocumented bosai endpoint): event list, then the detail file of each unseen report."""
 
 import logging
+import re
 from dataclasses import replace
 from datetime import timedelta
 
@@ -18,8 +19,10 @@ BASE = "https://www.jma.go.jp/bosai/tsunami/data/"
 MAX_AGE = timedelta(hours=48)  # older reports are history, not alerts
 SEEN_LIMIT = 200
 
-# Category.Kind.Code from JMA's published XML format specification (tsunami warning/advisory/forecast element codes).
+# Category.Kind.Code values of a tsunami report, from the code table in JMA's XML dissemination format documentation
+# ("Kind" of the tsunami forecast element). A code missing from this table contributes no level and no area.
 KIND_LEVELS = {
+    "00": levels.INFORMATION,  # no tsunami expected
     "51": levels.WARNING,  # tsunami warning
     "52": levels.WARNING,  # major tsunami warning (special warning)
     "53": levels.WARNING,  # major tsunami warning
@@ -33,22 +36,21 @@ KIND_LEVELS = {
 CANCEL_INFO_TYPE = "\u53d6\u6d88"  # InfoType of a report that cancels an earlier one
 
 
+COORDINATE = re.compile(r"(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)(?:[+-]\d+(?:\.\d+)?)?/?$")
+
+
 def parse_coordinate(text: str) -> tuple[float, float] | None:
     """JMA ISO 6709 style '+07.5-080.8/' (optionally with depth) to (lat, lon)."""
-    body = text.split("/")[0]
-    for i in range(1, len(body)):
-        if body[i] in "+-":
-            try:
-                return float(body[:i]), float(body[i:])
-            except ValueError:
-                return None
-    return None
+    match = COORDINATE.match(text.strip())
+    return (float(match["lat"]), float(match["lon"])) if match else None
 
 
 def parse_detail(detail: dict, entry: dict) -> TsunamiAlert:
     """One detail file (with its list entry for the English title and file name) to a TsunamiAlert."""
     head, body = detail.get("Head", {}), detail.get("Body", {})
     items = (body.get("Tsunami") or {}).get("Forecast", {}).get("Item") or []
+    if isinstance(items, dict):
+        items = [items]
     codes = [i["Category"]["Kind"]["Code"] for i in items]
     ranked = [KIND_LEVELS[c] for c in codes if c in KIND_LEVELS]
     level = max(ranked, key=levels.RANK.__getitem__) if ranked else levels.INFORMATION
@@ -104,10 +106,12 @@ class JmaSource:
         response = await client.get(f"{BASE}list.json")
         response.raise_for_status()
         entries = response.json()
+        if not isinstance(entries, list):
+            raise ValueError("jma: list.json is not a list")
         now = self._clock.now()
         alerts: list[TsunamiAlert] = []
         # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
-        for entry in sorted(entries, key=lambda e: e.get("ctt", "")):
+        for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
             name = entry.get("json")
             reported = parse_time(entry.get("rdt"))
             if not name or name in self._seen or reported is None or now - reported > MAX_AGE:
@@ -115,11 +119,14 @@ class JmaSource:
             try:
                 detail = await client.get(f"{BASE}{name}")
                 detail.raise_for_status()
-                alert = parse_detail(detail.json(), entry)
-            except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as exc:
+                payload = detail.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("detail is not an object")
+                alert = parse_detail(payload, entry)
+            except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
                 log.warning("jma: skipping %s: %r", name, exc)
                 continue
-            earlier = self._ids_by_event.setdefault(entry["eid"], [])
+            earlier = self._ids_by_event.setdefault(str(entry.get("eid") or name), [])
             alert = replace(alert, references=tuple(earlier))
             earlier.append(alert.id)
             self._seen[name] = None

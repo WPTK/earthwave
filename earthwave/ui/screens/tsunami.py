@@ -57,7 +57,7 @@ class TsunamiScreen(Screen):
         Binding("escape,t,q", "back", "Back"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("a", "ack", "Ack all"),
+        Binding("a", "ack", "Ack tsunami"),
     ]
 
     def __init__(self):
@@ -136,7 +136,7 @@ class TsunamiScreen(Screen):
         self.query_one(DataTable).action_cursor_up()
 
     def action_ack(self) -> None:
-        self.earthwave.tracker.ack_all()
+        self.earthwave.tracker.ack_tsunami()
         self.earthwave.refresh_tsunami()
 
     def action_back(self) -> None:

@@ -19,6 +19,7 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 CAP = "{urn:oasis:names:tc:emergency:cap:1.2}"
 WMO_HEADER = re.compile(r"^\s*([A-Z]{4}\d{2} [A-Z]{4} \d{6})\b", re.MULTILINE)
 PRODUCT_URL = re.compile(r"/events/(PAAQ|PHEB)/\d{4}/\d{2}/\d{2}/[^/]+/\d+/([A-Z0-9]+)/")
+MAX_ENTRY_FAILURES = 5  # a CAP link that fails this many polls in a row is given up on
 SEEN_LIMIT = 500
 
 
@@ -157,6 +158,7 @@ class TsunamiGovSource:
         self._clock = clock
         self._interval = max(self.min_interval, float(interval_seconds))
         self._seen: dict[str, None] = {}
+        self._failures: dict[str, int] = {}
 
     def interval(self, health: SourceHealth) -> float:
         return self._interval
@@ -190,8 +192,13 @@ class TsunamiGovSource:
                             log.warning("tsunamigov: bulletin %s unavailable: %r", entry["bulletin_url"], exc)
                     alerts.append(parse_cap(cap, bulletin, entry["cap_url"]))
                 except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
-                    log.warning("tsunamigov: skipping %s: %r", entry["cap_url"], exc)
-                    continue
+                    count = self._failures.get(entry["id"], 0) + 1
+                    self._failures[entry["id"]] = count
+                    if count < MAX_ENTRY_FAILURES:
+                        log.debug("tsunamigov: %s failed (%d): %r", entry["cap_url"], count, exc)
+                        continue
+                    log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
+                self._failures.pop(entry["id"], None)
                 self._seen[entry["id"]] = None
                 while len(self._seen) > SEEN_LIMIT:
                     del self._seen[next(iter(self._seen))]

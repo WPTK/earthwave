@@ -1,7 +1,8 @@
 """NWS API source: active tsunami warnings, advisories and watches for US areas."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -16,6 +17,21 @@ log = logging.getLogger(__name__)
 URL = "https://api.weather.gov/alerts/active"
 EVENTS = "Tsunami Warning,Tsunami Advisory,Tsunami Watch"
 RETRY_AFTER_CAP = 10.0  # seconds; a 429 is retried once after the server's hint (about 5 s), capped here
+
+
+def retry_after(header: str | None, now: datetime, default: float = 5.0) -> float:
+    """Seconds to wait from a Retry-After header: a number of seconds or an HTTP date."""
+    if not header:
+        return default
+    try:
+        return max(0.0, float(header))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, (when - now).total_seconds()) if when.tzinfo else default
 
 
 def parse_geometry(geometry: dict | None) -> tuple | None:
@@ -71,7 +87,7 @@ def parse_alerts(data: dict) -> tuple[TsunamiAlert, ...]:
             continue
         if alert is not None:
             alerts.append(alert)
-    alerts.sort(key=lambda a: a.updated or datetime.min.replace(tzinfo=a.issued.tzinfo if a.issued else None))
+    alerts.sort(key=lambda a: a.updated or a.issued or datetime.min.replace(tzinfo=UTC))
     return tuple(alerts)
 
 
@@ -91,7 +107,7 @@ class NwsSource:
         headers = {"Accept": "application/geo+json"}
         response = await client.get(URL, params=params, headers=headers)
         if response.status_code == 429:
-            wait = min(float(response.headers.get("Retry-After", 5) or 5), RETRY_AFTER_CAP)
+            wait = min(retry_after(response.headers.get("Retry-After"), self._clock.now()), RETRY_AFTER_CAP)
             log.debug("nws: 429, retrying in %.0fs", wait)
             await self._clock.sleep(wait)
             response = await client.get(URL, params=params, headers=headers)

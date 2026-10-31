@@ -42,6 +42,7 @@ class PulseGate:
 
     def allow(self, key: str, kind: str) -> bool:
         now = self._clock.monotonic()
+        self._last = {k: t for k, t in self._last.items() if now - t < self._cooldown}
         last = self._last.get((key, kind))
         if last is not None and now - last < self._cooldown:
             return False
@@ -126,6 +127,12 @@ class AttentionTracker:
     def ack(self, quake_id: str) -> None:
         if item := self._items.get(quake_id):
             item.acked = True
+
+    def ack_tsunami(self) -> None:
+        """Acknowledge tsunami alerts only; quake attention is left alone."""
+        for key, item in self._items.items():
+            if key.startswith(TSUNAMI_PREFIX):
+                item.acked = True
 
     def ack_all(self) -> None:
         for item in self._items.values():

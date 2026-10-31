@@ -15,7 +15,7 @@ from earthwave.clock import ReplayClock
 from earthwave.config import AlertsConfig, Config, with_overrides
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import ReplayTransport, recording_start
-from earthwave.notify.desktop import RecordingNotifier, default_notifier
+from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
 from earthwave.sources import jma, levels, nws, tsunamigov
 from earthwave.sources.base import SourceHealth
@@ -27,7 +27,7 @@ from earthwave.state.events import (
     TsunamiChanged,
     TsunamiIssued,
 )
-from earthwave.state.rules import AlertRules
+from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import Store
 from earthwave.ui.screens.tsunami import TsunamiScreen
 
@@ -162,6 +162,31 @@ def test_jma_detail_maps_the_code_table():
     assert jma.parse_coordinate("garbage") is None
 
 
+def test_jma_coordinate_with_and_without_depth():
+    assert jma.parse_coordinate("+38.1+142.9-24000/") == (38.1, 142.9)  # ISO 6709 with a depth in metres
+    assert jma.parse_coordinate("+38.1+142.9/") == (38.1, 142.9)
+    assert jma.parse_coordinate("-12.5-076.25-10000/") == (-12.5, -76.25)
+    assert jma.parse_coordinate("") is None
+
+
+def test_jma_code_table_covers_no_tsunami_and_real_forecast_items():
+    entry = json.loads(read(FIXTURES / "jma" / "list.json"))[0]
+    detail = json.loads(read(FIXTURES / "jma" / "detail.json"))
+    assert jma.KIND_LEVELS["00"] == levels.INFORMATION  # "no tsunami expected"
+    item = {
+        "Area": {"Name": "北海道太平洋沿岸東部", "Code": "101", "enName": "EASTERN HOKKAIDO"},
+        "Category": {"Kind": {"Name": "津波注意報", "Code": "62"}},
+    }
+    detail["Body"]["Tsunami"]["Forecast"]["Item"] = [item]
+    alert = jma.parse_detail(detail, entry)
+    assert alert.level == levels.ADVISORY and alert.areas == ("EASTERN HOKKAIDO",)
+    item["Category"]["Kind"]["Code"] = "00"
+    quiet = jma.parse_detail(detail, entry)
+    assert quiet.level == levels.INFORMATION and quiet.areas == ("EASTERN HOKKAIDO",)
+    detail["Body"]["Tsunami"]["Forecast"]["Item"] = item  # a lone object instead of a list
+    assert jma.parse_detail(detail, entry).level == levels.INFORMATION
+
+
 # --- sources over a mock transport ------------------------------------------------------------------------------
 
 
@@ -232,6 +257,62 @@ async def test_nws_source_sends_event_filter_and_retries_a_429_once(clock):
             await nws.NwsSource(clock).fetch(client, None)
 
 
+async def test_tsunamigov_gives_up_on_a_cap_that_keeps_failing(clock, caplog):
+    cap_calls = []
+
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
+        cap_calls.append(url)
+        return httpx.Response(500)
+
+    source = tsunamigov.TsunamiGovSource(clock)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(tsunamigov.MAX_ENTRY_FAILURES + 3):
+            await source.fetch(client, None)
+    assert len(cap_calls) == tsunamigov.MAX_ENTRY_FAILURES  # then the entry is marked seen and left alone
+    assert caplog.text.count("giving up") == 1
+
+
+def test_nws_retry_after_accepts_seconds_and_http_dates():
+    now = datetime(2026, 10, 10, 12, 0, 0, tzinfo=UTC)
+    assert nws.retry_after("7", now) == 7.0
+    assert nws.retry_after("Sat, 10 Oct 2026 12:00:09 GMT", now) == 9.0
+    assert nws.retry_after("Sat, 10 Oct 2026 11:00:00 GMT", now) == 0.0
+    assert nws.retry_after(None, now) == 5.0 and nws.retry_after("soon", now) == 5.0
+
+
+def test_nws_sorts_alerts_with_and_without_timestamps():
+    collection = json.loads(read(FIXTURES / "nws" / "tsunami_warning.geojson"))
+    bare = json.loads(json.dumps(collection["features"][0]))
+    for key in ("sent", "effective", "onset"):
+        bare["properties"].pop(key, None)
+    bare["id"] = "bare"
+    collection["features"].append(bare)
+    alerts = nws.parse_alerts(collection)
+    assert len(alerts) == 2 and alerts[0].issued is None  # undated sorts first, without a naive/aware comparison error
+
+
+async def test_nws_source_waits_for_an_http_date_retry_after(clock):
+    sleeps = []
+    clock.sleep = lambda seconds: sleeps.append(seconds) or asyncio.sleep(0)
+    when = (clock.now() + timedelta(seconds=3)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(429, headers={"Retry-After": when})
+        return httpx.Response(200, text=read(FIXTURES / "nws" / "tsunami_warning.geojson"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await nws.NwsSource(clock).fetch(client, None)
+    assert sleeps == [3.0]
+
+
 async def test_jma_source_skips_old_reports_and_chains_references():
     entry = json.loads(read(FIXTURES / "jma" / "list.json"))[0]
     detail = read(FIXTURES / "jma" / "detail.json")
@@ -253,6 +334,30 @@ async def test_jma_source_skips_old_reports_and_chains_references():
         assert [a.id for a in batch.alerts] == [f"jma:{entry['json']}", "jma:newer.json"]
         assert batch.alerts[1].references == (f"jma:{entry['json']}",)
         assert (await source.fetch(client, None)).alerts == ()
+
+
+async def test_jma_source_tolerates_missing_event_id_and_odd_payloads():
+    entry = json.loads(read(FIXTURES / "jma" / "list.json"))[0]
+    detail = read(FIXTURES / "jma" / "detail.json")
+    issued = datetime(2026, 10, 10, 3, 37, tzinfo=UTC)
+    no_eid = {k: v for k, v in entry.items() if k != "eid"}
+
+    def handler(request):
+        if request.url.path.endswith("list.json"):
+            return httpx.Response(200, json=["junk", 5, no_eid])
+        return httpx.Response(200, text=detail)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        source = jma.JmaSource(ReplayClock(issued + timedelta(hours=1), real=lambda: 0.0))
+        assert [a.id for a in (await source.fetch(client, None)).alerts] == [f"jma:{entry['json']}"]
+        not_list = httpx.MockTransport(lambda r: httpx.Response(200, json={"oops": 1}))
+    async with httpx.AsyncClient(transport=not_list) as client:
+        with pytest.raises(ValueError):
+            await source.fetch(client, None)
+    odd = httpx.MockTransport(lambda r: httpx.Response(200, json=[entry] if r.url.path.endswith("list.json") else [1]))
+    async with httpx.AsyncClient(transport=odd) as client:
+        fresh = jma.JmaSource(ReplayClock(issued + timedelta(hours=1), real=lambda: 0.0))
+        assert (await fresh.fetch(client, None)).alerts == ()  # a detail that is not an object is skipped
 
 
 # --- merge: dedupe, supersede, cancel, expiry, quake link ---------------------------------------------------------
@@ -296,17 +401,116 @@ def test_higher_level_wins_across_sources(kclock):
     assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.ADVISORY
 
 
+def jma_warning(**kwargs) -> TsunamiAlert:
+    """A JMA-style warning for the Kamchatka quake: it names its origin, as the JMA parser does."""
+    base = replace(kam(1), id="jma:w1", dedupe_key="jma:w1", source="jma", references=(), areas=("ALEUTIAN ISLANDS",))
+    return replace(base, **kwargs)
+
+
 def test_quake_and_areas_fallback_dedupe(kclock):
+    # The fallback needs a quake link, which only products naming their origin (CAP, JMA) get; NWS repeats of a
+    # tsunami.gov product match on the WMO header instead (test_same_product_from_two_sources_is_one_alert).
     store = Store()
     store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
-    cap = replace(kam(1), dedupe_key="other-header")
+    cap = replace(kam(1), dedupe_key="other-header", areas=("Aleutian Islands", "Hawaii"))
     merge(store, kclock, cap)
-    local = replace(nws_alert(), dedupe_key="another-header", areas=("ALEUTIAN ISLANDS",), origin=cap.origin)
-    merge(store, kclock, local, source="nws")
+    merge(store, kclock, jma_warning(areas=("ALEUTIAN ISLANDS",)), source="jma")
     assert len(store.alerts()) == 1
-    elsewhere = replace(local, id="x2", dedupe_key="k3", areas=("Hawaii",))
-    merge(store, kclock, elsewhere, source="nws")
+    elsewhere = jma_warning(id="jma:w2", dedupe_key="jma:w2", areas=("Japan",))
+    merge(store, kclock, elsewhere, source="jma")
     assert len(store.alerts()) == 2
+    assert nws_alert().origin is None  # the NWS parser gives no origin, so it never takes the fallback
+
+
+def test_cancellations_and_information_never_merge_into_a_warning(kclock):
+    store = Store()
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    merge(store, kclock, kam(1))
+    cancel = jma_warning(id="jma:c", dedupe_key="jma:c", level=levels.CANCELLATION)
+    info = jma_warning(id="jma:i", dedupe_key="jma:i", level=levels.INFORMATION)
+    merge(store, kclock, cancel, info, source="jma")
+    assert len(store.alerts()) == 3
+    assert [a.id for a in store.active_alerts(kclock, actionable_only=True)] == [kam(1).id]
+
+
+def test_same_level_replacement_still_raises_changed_and_keeps_the_alarm(kclock):
+    store, tracker = Store(), AttentionTracker(kclock)
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    second = kam(1)
+    third = replace(
+        second, id="PAAQ-4-kam004", dedupe_key="WEAK51 PAAQ 300010|2025-07", references=(second.id,), issued=NOW
+    )
+    events = merge(store, kclock, kam(0), second)
+    tracker.observe(events)
+    again = merge(store, kclock, third)
+    assert [type(e) for e in again] == [TsunamiChanged]  # identical level and areas, still a replacement
+    tracker.observe(again)
+    tracker.tsunami_sync({a.id for a in store.active_alerts(kclock, actionable_only=True)})
+    assert store.alert_status(second, kclock) == "superseded"
+    assert tracker.tsunami_unacked() == 1
+
+
+def test_bare_cancel_closes_only_matching_open_alerts_of_its_quake(kclock):
+    store = Store()
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    merge(store, kclock, kam(1))
+    elsewhere = replace(kam(2), references=(), areas=("Hawaii",))
+    assert merge(store, kclock, elsewhere) == []  # other region: nothing to close, no event
+    assert [a.id for a in store.active_alerts(kclock)] == [kam(1).id]
+    bare = replace(kam(2), id="c2", dedupe_key="c2", references=())
+    events = merge(store, kclock, bare)
+    assert [type(e) for e in events] == [TsunamiCancelled]
+    assert store.active_alerts(kclock) == []
+    assert store.alert_status(kam(1), kclock) == "cancelled"
+
+
+def test_bare_cancel_leaves_information_alone(kclock):
+    store = Store()
+    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
+    info = replace(kam(1), id="info1", dedupe_key="info1", level=levels.INFORMATION, references=())
+    merge(store, kclock, info)
+    assert merge(store, kclock, replace(kam(2), references=())) == []
+    assert store.alert_status(info, kclock) == "active"
+
+
+def test_cancel_naming_an_unknown_alert_closes_nothing(kclock):
+    store = Store()
+    merge(store, kclock, kam(1))
+    ghost = replace(kam(2), references=("no-such-alert",), quake_ref=None, origin=None)
+    assert merge(store, kclock, ghost) == []
+    assert [a.id for a in store.active_alerts(kclock)] == [kam(1).id]
+
+
+def test_cancel_with_a_past_expiry_still_closes_its_target(kclock):
+    store = Store()
+    merge(store, kclock, kam(1))
+    cancel = replace(kam(2), expires=NOW - timedelta(minutes=1))
+    events = merge(store, kclock, cancel)
+    assert [type(e) for e in events] == [TsunamiCancelled]
+    assert store.alert_status(kam(1), kclock) == "cancelled"
+
+
+def test_information_referencing_a_warning_does_not_end_it(kclock):
+    store = Store()
+    merge(store, kclock, kam(1))
+    info = replace(kam(1), id="info2", dedupe_key="info2", level=levels.INFORMATION, references=(kam(1).id,))
+    assert [type(e) for e in merge(store, kclock, info)] == [TsunamiIssued]
+    assert store.alert_status(kam(1), kclock) == "active"
+    assert [a.id for a in store.active_alerts(kclock, actionable_only=True)] == [kam(1).id]
+
+
+def test_alerts_without_an_expiry_lapse_after_the_default_ttl(kclock):
+    store = Store()
+    open_ended = replace(kam(1), expires=None)
+    bare = replace(open_ended, id="bare", dedupe_key="bare", issued=None, updated=None, areas=("Hawaii",))
+    merge(store, kclock, open_ended, bare)
+    assert store.alert_status(open_ended, kclock) == "active" and store.alert_status(bare, kclock) == "active"
+    kclock.advance(13 * 3600)
+    assert store.alert_status(open_ended, kclock) == "expired" and store.alert_status(bare, kclock) == "expired"
+    assert store.active_alerts(kclock) == []
+    kclock.advance(4 * 86400)
+    merge(store, kclock)
+    assert store.alerts() == ()  # an alert with neither issued nor updated is pruned from when it was first seen
 
 
 def test_alert_links_to_usgs_quake_in_either_order(kclock):
@@ -358,15 +562,6 @@ def test_old_alerts_are_pruned(kclock):
     kclock.advance(4 * 86400)
     store.merge(Batch("usgs", kclock.now()), kclock)
     assert store.alerts() == ()
-
-
-def test_cancel_without_references_closes_the_quakes_open_alerts(kclock):
-    store = Store()
-    store.merge(Batch("usgs", kclock.now(), quakes=(kam_quake(),)), kclock)
-    merge(store, kclock, kam(1))
-    bare = replace(kam(2), references=())
-    events = merge(store, kclock, bare)
-    assert [type(e) for e in events] == [TsunamiCancelled]
 
 
 # --- rules, notifiers, attention --------------------------------------------------------------------------------
@@ -462,6 +657,78 @@ def test_tsunami_attention_until_acked_or_cancelled(clock):
     assert tracker.tsunami_unacked() == 0
 
 
+BS = chr(92)
+TITLE = 'Tsunami "Warning"'
+BODY = f'Back{BS}slash "quoted"'
+
+
+def note(**kwargs) -> Notification:
+    return Notification(**{"key": "k", "title": TITLE, "body": BODY, "urgency": "critical", **kwargs})
+
+
+async def test_notify_send_builds_the_command(monkeypatch):
+    calls = []
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append((cmd, kw)))
+    await NotifySend().send(note())
+    await NotifySend().send(note(urgency="warning"))
+    assert calls[0][0] == ["notify-send", "-u", "critical", "-a", "earthwave", TITLE, BODY]
+    assert calls[1][0][2] == "normal" and calls[0][1]["timeout"] == 10
+
+
+async def test_osascript_escapes_quotes_and_backslashes(monkeypatch):
+    calls = []
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    await Osascript().send(note())
+    assert calls[0][:2] == ["osascript", "-e"]
+    body = f'"Back{BS}{BS}slash {BS}"quoted{BS}""'
+    title = f'"Tsunami {BS}"Warning{BS}""'
+    assert calls[0][2] == f"display notification {body} with title {title}"
+
+
+async def test_windows_toast_shows_a_long_toast(monkeypatch):
+    import sys
+    import types
+
+    shown = []
+
+    class FakeToast:
+        def __init__(self, **kwargs):
+            shown.append(kwargs)
+
+        def show(self):
+            shown.append("show")
+
+    monkeypatch.setitem(sys.modules, "winotify", types.SimpleNamespace(Notification=FakeToast))
+    await WindowsToast().send(note())
+    assert shown == [{"app_id": "earthwave", "title": TITLE, "msg": BODY, "duration": "long"}, "show"]
+
+
+def test_rules_forget_old_toast_keys(monkeypatch):
+    monkeypatch.setattr("earthwave.state.rules.SENT_LIMIT", 3)
+    rules = AlertRules(AlertsConfig())
+    for n in range(6):
+        rules.evaluate([TsunamiIssued(replace(kam(0), id=f"a{n}"))])
+    assert len(rules._sent) == 3
+    assert rules.evaluate([TsunamiIssued(replace(kam(0), id="a0"))])  # forgotten, so it may toast again
+    assert rules.evaluate([TsunamiIssued(replace(kam(0), id="a5"))]) == []  # recent: still deduped
+
+
+def test_pulse_gate_drops_expired_entries(clock):
+    gate = PulseGate(clock, cooldown=120)
+    for n in range(10):
+        gate.allow(f"q{n}", "updated")
+    clock.advance(121)
+    gate.allow("fresh", "updated")
+    assert len(gate._last) == 1
+
+
+def test_ack_tsunami_leaves_quake_attention_alone(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeNew(make_quake("q1")), TsunamiIssued(kam(1))])
+    tracker.ack_tsunami()
+    assert tracker.tsunami_unacked() == 0 and tracker.unseen() == 1
+
+
 # --- UI ---------------------------------------------------------------------------------------------------------
 
 
@@ -495,11 +762,80 @@ async def test_banner_panel_and_status_follow_the_alert():
 async def test_information_statements_stay_blue_without_banner():
     app = kam_app()
     info = tsunamigov.parse_cap(read(TG / "PAAQ_0.cap.xml"), read(TG / "PAAQ_0.txt"))
+    assert info.level == levels.INFORMATION
+    app.store = Store(app.config.alerts, app.config.home)  # only the statement: no watch or warning in force
     app.clock.advance_to(info.issued + timedelta(minutes=5))
-    app.store.merge(Batch("tsunamigov", app.clock.now(), alerts=(replace(info, id="i1"),)), app.clock)
+    events = app.store.merge(Batch("tsunamigov", app.clock.now(), alerts=(info,)), app.clock)
+    assert [type(e) for e in events] == [TsunamiIssued]
+    assert AlertRules(app.config.alerts).evaluate(events) == []  # no toast
     async with app.run_test(size=(120, 40)) as pilot:
+        app.tracker.observe(events)
+        app.sync_tsunami()
+        app.dashboard.refresh_view()
         await pilot.pause()
-        assert app.dashboard.tsunami_state()[3] in ("info", "none")
+        assert app.tracker.tsunami_unacked() == 0
+        assert app.dashboard.tsunami_state()[3] == "info"
+        assert not app.dashboard.query_one("#banner").display
+        assert not app.dashboard.query_one("#status").has_class("alert-alarm")
+
+
+async def test_tsunami_state_is_a_pure_read_and_the_tick_syncs():
+    app = kam_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.tracker.observe([TsunamiIssued(replace(kam(1), id="gone"))])  # attention for an alert not in the store
+        app.dashboard.tsunami_state()
+        assert app.tracker.tsunami_unacked() == 1  # reading the state does not prune
+        app._tick()
+        await pilot.pause()
+        assert app.tracker.tsunami_unacked() == 0
+
+
+async def test_tick_leaves_the_tsunami_screen_table_alone():
+    app = kam_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, TsunamiScreen)
+        calls = []
+        screen.refresh_alerts = lambda: calls.append(1)
+        app._tick()
+        app._tick()
+        assert calls == []
+        app.on_poll_done(type("M", (), {"result": type("R", (), {"events": ()})()})())
+        assert calls == [1]  # refreshed on a poll
+
+
+async def test_tsunami_screen_ack_only_acknowledges_tsunami_attention():
+    app = kam_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.tracker.observe([QuakeNew(kam_quake()), TsunamiIssued(kam(1))])
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.tracker.tsunami_unacked() == 0 and app.tracker.unseen() == 1
+
+
+async def test_desktop_notifications_go_out_one_at_a_time_in_order():
+    running, peak, order = 0, 0, []
+
+    class Slow:
+        async def send(self, note):
+            nonlocal running, peak
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.01)
+            order.append(note.key)
+            running -= 1
+
+    app = kam_app(notifier=Slow())
+    async with app.run_test(size=(120, 40)) as pilot:
+        events = [TsunamiIssued(replace(kam(0), id=f"t{n}")) for n in range(4)]
+        app._notify_desktop(events)
+        await wait_for(lambda: len(order) == 4)
+        await pilot.pause()
+    assert peak == 1 and order == [f"tsunami:t{n}:WATCH" for n in range(4)]
 
 
 async def test_tsunami_screen_lists_alerts_and_shows_text():
@@ -530,9 +866,11 @@ async def test_replay_walks_watch_warning_cancellation():
     app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock), notifier=fake)
     async with app.run_test(size=(120, 40)) as pilot:
         await wait_for(lambda: any(a.level == levels.WARNING for a in app.store.alerts()))
+        await wait_for(
+            lambda: all(a.quake_ref == "us6000qw60" for a in app.store.alerts() if a.level == levels.WARNING)
+        )
         await pilot.pause()
         warning = next(a for a in app.store.alerts() if a.level == levels.WARNING)
-        assert warning.quake_ref == "us6000qw60"
         assert app.store.alert_status(warning, clock) in ("active", "cancelled")  # live, not expired
         await wait_for(lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()))
         await pilot.pause()

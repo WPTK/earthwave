@@ -17,6 +17,7 @@ from earthwave.state.events import (
 
 PAGER_RANK = {"green": 0, "yellow": 1, "orange": 2, "red": 3}
 BURST = 3  # this many quake toasts at once collapse into one summary
+SENT_LIMIT = 500  # toast keys remembered; the oldest are forgotten first
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,7 @@ def _quake_line(quake: Earthquake) -> str:
 class AlertRules:
     def __init__(self, alerts: AlertsConfig):
         self._config = alerts
-        self._sent: set[str] = set()
+        self._sent: dict[str, None] = {}
 
     def evaluate(self, events: list[Event] | tuple[Event, ...]) -> list[Notification]:
         quakes: list[Notification] = []
@@ -74,7 +75,9 @@ class AlertRules:
     def _first(self, note: Notification) -> bool:
         if note.key in self._sent:
             return False
-        self._sent.add(note.key)
+        self._sent[note.key] = None
+        while len(self._sent) > SENT_LIMIT:
+            del self._sent[next(iter(self._sent))]
         return True
 
     def _pager_qualifies(self, quake: Earthquake) -> bool:

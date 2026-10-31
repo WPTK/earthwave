@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from earthwave.clock import Clock
@@ -29,6 +29,10 @@ DEPTH_DELTA_KM = 10.0
 ALERT_RETAIN = timedelta(days=3)
 LINK_SECONDS = 300.0  # an alert names its quake within 5 minutes ...
 LINK_KM = 200.0  # ... and 200 km of the USGS origin
+DEFAULT_TTL = timedelta(hours=12)  # an alert that states no expiry lapses this long after it was issued or updated
+
+
+QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
 
 
 class SortKey(StrEnum):
@@ -74,6 +78,7 @@ class Store:
         self._coverage: list[tuple[float, float]] = []
         self.warm = False
         self._tsunamis: dict[str, TsunamiAlert] = {}
+        self._first_seen: dict[str, datetime] = {}
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
         self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded"
@@ -166,9 +171,16 @@ class Store:
             return "cancellation"
         if alert.id in self._closed:
             return self._closed[alert.id]
-        if alert.expires is not None and alert.expires <= clock.now():
+        if self.expiry(alert) <= clock.now():
             return "expired"
         return "active"
+
+    def expiry(self, alert: TsunamiAlert) -> datetime:
+        """When the alert lapses: its own expiry, else DEFAULT_TTL after it was last issued, updated or first seen."""
+        if alert.expires is not None:
+            return alert.expires
+        base = alert.updated or alert.issued or self._first_seen.get(alert.id)
+        return (base + DEFAULT_TTL) if base else datetime.max.replace(tzinfo=UTC)
 
     def active_alerts(self, clock: Clock, actionable_only: bool = False) -> list[TsunamiAlert]:
         """Alerts in force on the injected clock, highest level first."""
@@ -194,11 +206,11 @@ class Store:
         for known_id in (self._alias.get(alert.id, alert.id), self._by_key.get(alert.dedupe_key)):
             if known_id and known_id in self._tsunamis:
                 return self._tsunamis[known_id]
-        if alert.quake_ref is None:
+        if alert.quake_ref is None or alert.level in (levels.CANCELLATION, levels.INFORMATION):
             return None
         wanted = {a.lower() for a in alert.areas}
         for other in self._tsunamis.values():
-            if other.source == alert.source or other.id in self._closed or other.level == levels.CANCELLATION:
+            if other.source == alert.source or other.id in self._closed or other.level in QUIET:
                 continue
             if other.quake_ref == alert.quake_ref and wanted & {a.lower() for a in other.areas}:
                 return other
@@ -236,33 +248,46 @@ class Store:
                     events.append(TsunamiChanged(merged, old.level))
                 continue
             self._tsunamis[alert.id] = alert
+            self._first_seen[alert.id] = clock.now()
             self._by_key[alert.dedupe_key] = alert.id
             closed = self._close_referenced(alert)
-            if silent or not self._live(alert, clock):
+            if silent:
                 continue
             if alert.level == levels.CANCELLATION:
-                events.extend(TsunamiCancelled(c) for c in closed)
+                # A cancellation closes its targets even when it carries its own, already-passed expiry.
+                events.extend(TsunamiCancelled(c) for c in closed if self._live(c, clock))
+            elif not self._live(alert, clock):
+                continue
             elif closed:
-                previous = max(closed, key=lambda c: levels.RANK[c.level])
-                if previous.level != alert.level or previous.areas != alert.areas:
-                    events.append(TsunamiChanged(alert, previous.level))
+                # Every replacement carries the attention over, even at the same level and areas.
+                events.append(TsunamiChanged(alert, max(closed, key=lambda c: levels.RANK[c.level]).level))
             else:
                 events.append(TsunamiIssued(alert))
         return events
 
     def _live(self, alert: TsunamiAlert, clock: Clock) -> bool:
         """Products already expired when first merged (a restart reading old feed entries) raise no events."""
-        return alert.expires is None or alert.expires > clock.now()
+        return self.expiry(alert) > clock.now()
 
     def _close_referenced(self, alert: TsunamiAlert) -> list[TsunamiAlert]:
-        """Close the open alerts this product cancels or supersedes; returns those that were still open."""
+        """Close the open alerts this product cancels or supersedes; returns those that were still open.
+
+        An INFORMATION statement closes nothing. A cancel that names no known alert closes only the open,
+        actionable alerts of its own quake and source whose areas overlap its own.
+        """
+        if alert.level == levels.INFORMATION:
+            return []
         targets = [self.get_alert(ref) for ref in alert.references]
         if alert.level == levels.CANCELLATION and not any(targets) and alert.quake_ref:
-            # A cancel that names nothing closes the open alerts of its own quake and source.
+            wanted = {a.lower() for a in alert.areas}
             targets = [
                 a
                 for a in self._tsunamis.values()
-                if a.quake_ref == alert.quake_ref and a.source == alert.source and a.id != alert.id
+                if a.quake_ref == alert.quake_ref
+                and a.source == alert.source
+                and a.id != alert.id
+                and a.level not in QUIET
+                and wanted & {x.lower() for x in a.areas}
             ]
         status = "cancelled" if alert.level == levels.CANCELLATION else "superseded"
         closed = []
@@ -301,9 +326,15 @@ class Store:
         for quake_id in [q.id for q in self._quakes.values() if q.time < cutoff]:
             del self._quakes[quake_id]
         alert_cutoff = clock.now() - ALERT_RETAIN
-        for alert in [a for a in self._tsunamis.values() if (a.issued or a.updated or alert_cutoff) < alert_cutoff]:
+        stale = [
+            a
+            for a in self._tsunamis.values()
+            if (a.issued or a.updated or self._first_seen.get(a.id) or alert_cutoff) < alert_cutoff
+        ]
+        for alert in stale:
             del self._tsunamis[alert.id]
             self._closed.pop(alert.id, None)
+            self._first_seen.pop(alert.id, None)
             self._by_key = {k: v for k, v in self._by_key.items() if v != alert.id}
             self._alias = {k: v for k, v in self._alias.items() if v != alert.id}
 

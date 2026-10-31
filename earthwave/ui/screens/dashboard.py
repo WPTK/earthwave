@@ -104,7 +104,6 @@ class DashboardScreen(Screen):
         app = self.earthwave
         active = app.store.active_alerts(app.clock)
         actionable = [a for a in active if a.level in levels.ACTIONABLE]
-        app.tracker.tsunami_sync({a.id for a in actionable})
         unacked = app.tracker.tsunami_unacked()
         state = "alarm" if unacked else "active" if actionable else "info" if active else "none"
         return active, actionable, unacked, state

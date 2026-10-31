@@ -24,7 +24,7 @@ from earthwave.sources.nws import NwsSource
 from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
 from earthwave.state.events import QuakeMajor, SourceDegraded, SourceRecovered
-from earthwave.state.rules import AlertRules
+from earthwave.state.rules import AlertRules, Notification
 from earthwave.state.store import SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.screens.dashboard import DashboardScreen
@@ -76,7 +76,8 @@ class EarthwaveApp(App):
         self.rules = AlertRules(config.alerts)
         self.notifier = notifier
         self.bell_enabled = bell
-        self._sending: set[asyncio.Task] = set()
+        self._outbox: asyncio.Queue[Notification] = asyncio.Queue()
+        self._sender: asyncio.Task | None = None
         self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
         self.scheduler_running = run_scheduler
         self.ticking = ticks
@@ -97,6 +98,8 @@ class EarthwaveApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(self.dashboard)
+        if self.notifier is not None:
+            self._sender = asyncio.get_running_loop().create_task(self._send_loop(self.notifier))
         if self.ticking:
             self.set_interval(TICK_SECONDS, self._tick)
         if self.scheduler_running:
@@ -114,12 +117,20 @@ class EarthwaveApp(App):
         finally:
             await self.client.aclose()
 
+    async def _send_loop(self, notifier: Notifier) -> None:
+        """Desktop notifications go out one at a time, in order, so a burst cannot pile up threads."""
+        while True:
+            await notifier.send(await self._outbox.get())
+
     async def on_unmount(self) -> None:
+        if self._sender is not None:
+            self._sender.cancel()
         await self.client.aclose()
 
     def _tick(self) -> None:
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
         self.tracker.prune()
+        self.sync_tsunami()
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
             visible = quake_list.visible_ids()
@@ -130,8 +141,6 @@ class EarthwaveApp(App):
             self.dashboard.refresh_status()
         else:
             self._previous_visible = set()
-            if isinstance(self.screen, TsunamiScreen):
-                self.screen.refresh_alerts()
 
     # --- polling ------------------------------------------------------------------------------------------------
 
@@ -151,9 +160,16 @@ class EarthwaveApp(App):
         if not self.usgs.starting and not self._coverage_checked:
             self._coverage_checked = True
             self._backfill_if_needed(force=False)
-        self.dashboard.refresh_view()
+        self.sync_tsunami()
+        if self.dashboard.is_mounted:  # a fast replay can deliver a poll before the dashboard has composed
+            self.dashboard.refresh_view()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
+
+    def sync_tsunami(self) -> None:
+        """Forget tsunami attention for alerts that expired or were closed since the last look."""
+        active = self.store.active_alerts(self.clock, actionable_only=True)
+        self.tracker.tsunami_sync({a.id for a in active})
 
     def _notify_desktop(self, events: list) -> None:
         """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
@@ -161,9 +177,7 @@ class EarthwaveApp(App):
             if self.bell_enabled and note.bell:
                 self.bell()
             if self.notifier is not None:
-                task = asyncio.get_running_loop().create_task(self.notifier.send(note))
-                self._sending.add(task)
-                task.add_done_callback(self._sending.discard)
+                self._outbox.put_nowait(note)
 
     # --- view changes -------------------------------------------------------------------------------------------
 
@@ -210,6 +224,7 @@ class EarthwaveApp(App):
             self.push_screen(TsunamiScreen())
 
     def refresh_tsunami(self) -> None:
+        self.sync_tsunami()
         self.dashboard.refresh_tsunami()
         self.dashboard.refresh_status()
         if isinstance(self.screen, TsunamiScreen):
