@@ -42,7 +42,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
         text.append(f" {glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
         text.append(" feeds ok", "grey70")
     for line in unhealthy:
-        age = f" {fmt_age(line.age)}" if line.age is not None else ""
+        age = f", last ok {fmt_age(line.age)}" if line.age is not None else ""
         text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
         text.append(f" {line.name} {FRESHNESS_WORDS[line.freshness]}{age}", "grey70")
     text.append(f" {glyphs.bar} ", "grey42")

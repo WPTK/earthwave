@@ -14,7 +14,7 @@ from earthwave.ui.labels import filter_summary
 from earthwave.ui.widgets.banner import Banner
 from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
-from earthwave.ui.widgets.status_bar import SourceLine, StatusBar, StatusInfo
+from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusBar, StatusInfo
 from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import TooSmall, is_too_small
 from earthwave.ui.widgets.tsunami_panel import TsunamiPanel
@@ -94,7 +94,7 @@ class DashboardScreen(Screen):
         app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
-        empty.display = not rows
+        empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
         empty.update(f"No quakes match {filter_summary(app.view)}. Press f to change filters.")
         self.refresh_ticker()
         self.refresh_tsunami()
@@ -122,7 +122,10 @@ class DashboardScreen(Screen):
         blink = int(app.clock.monotonic() * 2) % 2 == 0
         self.query_one(Banner).show(actionable, unacked)
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
-        self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=bool(unacked) and blink)
+        overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
+        down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in app.tsunami_feeds_down())
+        pulse = bool(unacked) and blink
+        self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=pulse, overdue=overdue, down=down)
 
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave

@@ -24,13 +24,21 @@ def fmt_countdown(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def fmt_time(dt: datetime, time_zone: str = "local") -> str:
-    """The one timestamp format, 2026-10-31 08:00:00 EDT; Windows spells the zone out, so long names become initials."""
-    shown = dt.astimezone() if time_zone == "local" else dt
+def zone_label(shown: datetime) -> str:
+    """EDT, UTC; Windows spells zones out ('Central Europe Standard Time'), which shows as the offset, UTC+01:00."""
     zone = shown.tzname() or ""
-    if " " in zone:
-        zone = "".join(word[0] for word in zone.split()).upper()
-    return f"{shown:%Y-%m-%d %H:%M:%S} {zone}".strip()
+    offset = shown.utcoffset()
+    if " " in zone and offset is not None:
+        minutes = int(offset.total_seconds() // 60)
+        sign = "-" if minutes < 0 else "+"
+        zone = f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+    return zone
+
+
+def fmt_time(dt: datetime, time_zone: str = "local") -> str:
+    """The one timestamp format, 2026-10-31 08:00:00 EDT."""
+    shown = dt.astimezone() if time_zone == "local" else dt
+    return f"{shown:%Y-%m-%d %H:%M:%S} {zone_label(shown)}".strip()
 
 
 def fmt_distance(quake: Earthquake, lat: float, lon: float) -> str:

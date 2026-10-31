@@ -17,7 +17,7 @@ from earthwave.models import Earthquake
 from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
-from earthwave.poll import PollResult, Scheduler
+from earthwave.poll import Freshness, PollResult, Scheduler
 from earthwave.sources.anomaly import threshold_m
 from earthwave.sources.base import Source
 from earthwave.sources.coops import CoopsSource
@@ -43,6 +43,7 @@ from earthwave.ui.widgets.quake_list import QuakeList
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+TSUNAMI_FEEDS = (TsunamiGovSource.name, NwsSource.name, JmaSource.name)
 SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
 GAUGE_REFRESH_TICKS = 20  # the open gauge strip redraws every 10 s (ages and 'last batch' text move with the clock)
 
@@ -214,6 +215,16 @@ class EarthwaveApp(App):
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
         self.refresh_gauges()
+
+    def tsunami_feeds_down(self) -> list[tuple[str, Freshness]]:
+        """Tsunami feeds not answering (loading, late or failing); while any is, silence is not an all-clear."""
+        if not self.scheduler_running:
+            return []
+        return [
+            (name, fresh)
+            for name in TSUNAMI_FEEDS
+            if name in self.scheduler.statuses and (fresh := self.scheduler.freshness(name)) is not Freshness.FRESH
+        ]
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""

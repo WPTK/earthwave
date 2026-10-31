@@ -4,7 +4,8 @@ import asyncio
 import json
 import re
 import time
-from datetime import UTC, datetime
+from collections import Counter
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -22,7 +23,7 @@ from earthwave.sources.usgs import parse_collection
 from earthwave.state.events import QuakeNew
 from earthwave.state.store import SortKey, Store
 from earthwave.ui.glyphs import ASCII, UNICODE, resolve_glyphs
-from earthwave.ui.labels import filter_summary, fmt_age, fmt_countdown, fmt_distance, fmt_hours, fmt_time
+from earthwave.ui.labels import filter_summary, fmt_age, fmt_countdown, fmt_distance, fmt_hours, fmt_time, zone_label
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen, parse_filters
@@ -30,7 +31,7 @@ from earthwave.ui.screens.help import HELP_TEXT, HelpScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import mag_color
 from earthwave.ui.widgets.quake_list import QuakeList
-from earthwave.ui.widgets.status_bar import SourceLine, StatusInfo, build_status
+from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusInfo, build_status
 from earthwave.ui.widgets.too_small import is_too_small
 
 WEEK = load_json("usgs/4.5_week.geojson")
@@ -315,7 +316,11 @@ async def test_live_replay_session_runs_through_the_app():
         await pilot.pause()
         assert app.tracker.kind_of("replay_new1") == "major"
         assert app.scheduler.freshness("usgs") is Freshness.FRESH
-        assert "tsunamigov failed" in str(app.dashboard.query_one("#status").render())
+        status = str(app.dashboard.query_one("#status").render())
+        unhealthy = [n for n in app.scheduler.statuses if app.scheduler.freshness(n) is not Freshness.FRESH]
+        assert unhealthy  # the recording has no tsunami traffic, so those feeds fail
+        for name in unhealthy:
+            assert f"{name} {FRESHNESS_WORDS[app.scheduler.freshness(name)]}" in status
         assert "Replay Test Region" in str(app.dashboard.query_one("Ticker").render())
 
 
@@ -366,6 +371,8 @@ def test_status_bar_text():
     )
     plain = build_status(info, UNICODE).plain
     assert "usgs" not in plain and "nws failed" in plain and "10 shown of 40" in plain
+    aged = StatusInfo((SourceLine("nws", Freshness.ERROR, 180),), 1, 1, None, "x", 0)
+    assert "nws failed, last ok 3m" in build_status(aged, UNICODE).plain  # not 'failed 3m'
     assert "next 0:47" in plain and "3 unseen" in plain and "M2.5+ 24h" in plain
     assert "unseen" not in build_status(StatusInfo((), 0, 0, None, "x", 0), ASCII).plain
 
@@ -376,11 +383,12 @@ def test_status_bar_healthy_feeds_are_one_indicator():
     assert "feeds ok" in plain and "usgs" not in plain
     stale = (fresh[0], SourceLine("nws", Freshness.STALE, 900))
     plain = build_status(StatusInfo(stale, 1, 1, None, "x", 0), ASCII).plain
-    assert "nws stale 15m" in plain and "feeds ok" not in plain and "usgs" not in plain
+    assert "nws stale, last ok 15m" in plain and "feeds ok" not in plain and "usgs" not in plain
 
 
 async def test_empty_list_says_what_to_do():
     app = week_app()
+    app.store.merge(Batch("usgs", WEEK_NOW, quakes=()), app.clock)  # the first steady poll has landed
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         empty = app.dashboard.query_one("#empty")
@@ -390,7 +398,28 @@ async def test_empty_list_says_what_to_do():
         assert empty.display and "No quakes match" in str(empty.render()) and "Press f" in str(empty.render())
 
 
-async def test_help_lists_every_visible_binding_on_one_line_each():
+async def test_empty_hint_waits_for_the_first_poll():
+    app = week_app()  # backfilled only: no steady poll has answered, so an empty list proves nothing
+    assert not app.store.warm
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.set_query("zzzz-no-such-place")
+        await pilot.pause()
+        assert not app.dashboard.query_one("#empty").display
+
+
+def test_zone_label_spells_long_windows_names_as_an_offset():
+    def at(name: str, hours: float) -> datetime:
+        return T0.astimezone(timezone(timedelta(hours=hours), name))
+
+    assert zone_label(at("Central Europe Standard Time", 1)) == "UTC+01:00"
+    assert zone_label(at("GMT Standard Time", 0)) == "UTC+00:00"
+    assert zone_label(at("China Standard Time", 8)) == "UTC+08:00"
+    assert zone_label(at("India Standard Time", 5.5)) == "UTC+05:30"
+    assert zone_label(at("Pacific Standard Time", -8)) == "UTC-08:00"
+    assert zone_label(at("EDT", -4)) == "EDT" and zone_label(at("UTC", 0)) == "UTC"
+
+
+async def test_help_lists_every_visible_binding_exactly_once():
     names = {"slash": "/", "question_mark": "?", "escape": "Esc"}
     keys = {
         names.get(key, key)
@@ -400,8 +429,17 @@ async def test_help_lists_every_visible_binding_on_one_line_each():
         for key in binding.key.split(",")
     }
     assert keys
+    # Each row is "key  what it does" pairs; a key is what stands where a key should, never a word of a description.
+    listed: Counter[str] = Counter()
+    for row in HELP_TEXT.split("[b]Keys[/b]")[1].split("[b]Colors[/b]")[0].splitlines():
+        if row.startswith("  Detail:"):
+            listed.update(re.findall(r"(\S+) (?:open page|copy URL|back)", row))
+            continue
+        cells = re.split(r"\s{2,}", row.strip())
+        for cell in cells[::2]:
+            listed.update([cell] if cell == "/" else (part.strip() for part in cell.split("/") if part.strip()))
     for key in keys:
-        assert re.search(rf"(?<!\w){re.escape(key)}(?!\w)", HELP_TEXT), key
+        assert listed[key] == 1, (key, listed[key])
     assert all(len(Text.from_markup(line).plain) <= 74 for line in HELP_TEXT.splitlines())
 
 
