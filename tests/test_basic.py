@@ -44,6 +44,21 @@ def test_usgs_detail_has_products():
 
 
 def test_dart_rows():
-    rows = [r for r in (FIXTURES / "ndbc" / "46402.dart").read_text(encoding="utf-8").splitlines() if r[0] != "#"]
+    rows = [r for r in (FIXTURES / "ndbc" / "46402.dart").read_text(encoding="utf-8").splitlines() if r[:1] != "#"]
     assert rows
     assert re.match(r"^\d{4} \d\d \d\d \d\d \d\d \d\d [123] ", rows[0])
+
+
+def test_selftest_fails_on_empty_fixture(tmp_path, capsys):
+    import shutil
+
+    root = tmp_path / "fixtures"
+    shutil.copytree(FIXTURES, root)
+    (root / "jma" / "list.json").write_text("[]", encoding="utf-8")
+    assert selftest(root) == 1
+    assert "FAILED" in capsys.readouterr().err
+
+
+def test_selftest_reports_skip(tmp_path, capsys):
+    assert selftest(tmp_path / "missing") == 0
+    assert "SKIPPED" in capsys.readouterr().out

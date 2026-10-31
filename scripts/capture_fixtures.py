@@ -32,7 +32,10 @@ def main() -> int:
     with httpx.Client(headers={"User-Agent": UA}, timeout=30, follow_redirects=True) as c:
         for feed in ("PAAQ", "PHEB"):
             raw = save(c, f"https://www.tsunami.gov/events/xml/{feed}Atom.xml", f"tsunamigov/{feed}Atom.xml")
-            for n, entry in enumerate(ET.fromstring(raw).findall(f"{ATOM}entry")):
+            entries = ET.fromstring(raw).findall(f"{ATOM}entry")
+            if not entries:
+                print(f"warning: {feed} Atom feed has no entries; no CAP or bulletin captured", file=sys.stderr)
+            for n, entry in enumerate(entries):
                 for link in entry.findall(f"{ATOM}link"):
                     rel, href = link.get("rel"), link.get("href")
                     if rel == "related":
@@ -50,7 +53,7 @@ def main() -> int:
                 save(c, feat["properties"]["detail"], "usgs/detail.geojson")
                 break
         else:
-            print("no significant event with losspager+shakemap", file=sys.stderr)
+            print("no significant event with losspager+shakemap; earlier files were already written", file=sys.stderr)
             return 1
 
         save(c, "https://www.ndbc.noaa.gov/activestations.xml", "ndbc/activestations.xml")

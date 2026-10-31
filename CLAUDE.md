@@ -10,7 +10,7 @@ The design, data sources and milestone list are in `docs/plan.md`; read it and i
 - **One session per milestone.** Each milestone (M0-M6 in `docs/plan.md`) is one fresh session, one branch
   (`m0-bootstrap`, `m1-earthquake-core`, ...) and one PR. Implement only that milestone; out-of-scope findings go in the
   "Deferred" list in `docs/plan.md`, never into the session. Do not start the next milestone.
-- **No GitHub repo, push, tag or release without Bill's explicit word.** The `WPTK/earthwave` repo does not exist yet.
+- **No tags or releases without Bill's explicit word.** The public repo `WPTK/earthwave` exists; pushing branches and opening PRs is fine.
 - **ZeroVer.** Major stays 0 forever; minor for features, patch for fixes. `__version__` lives in
   `earthwave/__init__.py`; tags are `v0.y.z` and must match it and the changelog section.
 - **Common Changelog** (https://common-changelog.org/). `CHANGELOG.md` starts with `# Changelog`, no Unreleased section,
