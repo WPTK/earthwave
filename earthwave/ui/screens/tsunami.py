@@ -1,4 +1,4 @@
-"""Tsunami screen: alert table, the selected alert's text, and a slot for the gauge strip (M4)."""
+"""Tsunami screen: alert table, the selected alert's text, and the gauge strip."""
 
 from typing import TYPE_CHECKING
 
@@ -13,6 +13,7 @@ from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import LEVEL_COLORS
+from earthwave.ui.widgets.gauge_strip import GaugeStrip
 from earthwave.ui.widgets.tsunami_panel import fmt_until
 
 if TYPE_CHECKING:
@@ -73,7 +74,8 @@ class TsunamiScreen(Screen):
             yield DataTable(id="alert_table", cursor_type="row", zebra_stripes=False)
             with VerticalScroll(id="alert_text_scroll"):
                 yield Static("", id="alert_text")
-            yield Vertical(id="gauges")
+            with Vertical(id="gauges"):
+                yield GaugeStrip(id="gauge_strip")
         yield Static(" j/k move   a acknowledge   Esc back", id="tsunami_footer")
 
     def on_mount(self) -> None:
@@ -81,6 +83,7 @@ class TsunamiScreen(Screen):
         table.add_columns("LEVEL", "SOURCE", "AREAS", "ISSUED", "EXPIRES", "STATUS")
         table.focus()
         self.refresh_alerts()
+        self.refresh_gauges()
 
     def selected(self) -> TsunamiAlert | None:
         table = self.query_one(DataTable)
@@ -112,6 +115,10 @@ class TsunamiScreen(Screen):
                 if alert.id == keep.id:
                     table.move_cursor(row=index)
         self._show_selected()
+
+    def refresh_gauges(self) -> None:
+        app = self.earthwave
+        self.query_one(GaugeStrip).show(app.gauge_rows(), app.clock.now())
 
     def _show_selected(self) -> None:
         app = self.earthwave

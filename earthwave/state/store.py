@@ -1,17 +1,20 @@
 """Canonical in-memory quake store: merge and dedupe, material-update rules, filtered views, coverage tracking."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from earthwave.clock import Clock
 from earthwave.config import AlertsConfig, HomeConfig
-from earthwave.models import Batch, Earthquake, TsunamiAlert
-from earthwave.sources import levels
+from earthwave.models import Batch, Earthquake, GaugeReading, Station, TsunamiAlert
+from earthwave.sources import coops, levels, ndbc
+from earthwave.sources.anomaly import find_anomaly
 from earthwave.sources.geo import haversine_km
 from earthwave.state.events import (
     Event,
+    GaugeAnomaly,
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
@@ -31,6 +34,13 @@ LINK_SECONDS = 300.0  # an alert names its quake within 5 minutes ...
 LINK_KM = 200.0  # ... and 200 km of the USGS origin
 DEFAULT_TTL = timedelta(hours=12)  # an alert that states no expiry lapses this long after it was issued or updated
 
+
+GAUGE_SOURCES = frozenset({"dart", "coops"})  # their batches carry no quakes and never warm the quake store
+GAUGE_KEEP = timedelta(hours=24)  # readings kept per station, measured back from the newest one
+GAUGE_MAX_ROWS = 4000  # 15-second event-mode data for 12 hours is 2880 rows
+GAUGE_FRESH = timedelta(minutes=30)  # the first look at a station only reports exceedances this recent
+EPISODE_GAP = timedelta(minutes=30)  # exceedances further apart than this are separate anomaly episodes
+ALERT_HINT = frozenset({levels.WARNING, levels.ADVISORY, levels.WATCH})  # levels that speed the gauge polling up
 
 QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
 
@@ -82,6 +92,13 @@ class Store:
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
         self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded"
+        self._gauge_stations: dict[str, Station] = {}
+        self._readings: dict[str, dict[datetime, GaugeReading]] = {}
+        self._residuals: dict[str, dict[datetime, ndbc.Residual | coops.Residual]] = {}
+        self._predictions: dict[str, list[coops.Prediction]] = {}
+        self._evaluated: dict[str, datetime] = {}  # station -> newest residual already judged for an anomaly
+        self._episode_end: dict[str, datetime] = {}  # station -> latest exceedance of its current anomaly episode
+        self.predictions_for: Callable[[str], list[coops.Prediction]] = lambda station_id: []
 
     def __len__(self) -> int:
         return len(self._quakes)
@@ -150,12 +167,93 @@ class Store:
                 events.extend(self._threshold_events(old, quake))
         if batch.coverage and batch.coverage not in self._coverage:
             self._coverage.append(batch.coverage)
-        if not batch.backfill and not (batch.alerts and not batch.quakes):
+        if not batch.backfill and batch.source not in GAUGE_SOURCES and not (batch.alerts and not batch.quakes):
             self.warm = True
         events.extend(self._merge_alerts(batch, clock))
+        events.extend(self._merge_gauges(batch, clock, silent=batch.backfill or bool(batch.meta.get("silent"))))
         self._link_alerts()
         self._prune(clock)
         return events
+
+    # --- gauges -------------------------------------------------------------------------------------------------
+
+    def gauge_station(self, station_id: str) -> Station | None:
+        return self._gauge_stations.get(station_id)
+
+    def gauge_readings(self, station_id: str) -> list[GaugeReading]:
+        """Stored readings for a station, oldest first."""
+        return [r for _, r in sorted(self._readings.get(station_id, {}).items())]
+
+    def gauge_residuals(self, station_id: str) -> list:
+        """Residuals (observed minus the detided or predicted level) for a station, oldest first."""
+        return [r for _, r in sorted(self._residuals.get(station_id, {}).items())]
+
+    def gauge_alert_active(self, clock: Clock) -> bool:
+        """A Warning, Advisory or Watch is in force: the gauge sources poll at their alert cadence."""
+        return any(a.level in ALERT_HINT for a in self.active_alerts(clock))
+
+    def _merge_gauges(self, batch: Batch, clock: Clock, silent: bool) -> list[Event]:
+        for station in batch.stations:
+            self._gauge_stations[station.id] = station
+        by_station: dict[str, list[GaugeReading]] = {}
+        for reading in batch.readings:
+            by_station.setdefault(reading.station_id, []).append(reading)
+        events: list[Event] = []
+        for station_id, rows in by_station.items():
+            kind = rows[0].kind
+            stored = self._readings.setdefault(station_id, {})
+            fresh = [r.ts for r in rows if r.ts not in stored or stored[r.ts] != r]
+            for r in rows:
+                stored[r.ts] = r
+            newest = max(stored)
+            for ts in [t for t in stored if t < newest - GAUGE_KEEP]:
+                del stored[ts]
+            for ts in sorted(stored)[: max(0, len(stored) - GAUGE_MAX_ROWS)]:
+                del stored[ts]
+            if fresh:
+                self._refresh_residuals(station_id, kind, min(fresh))
+            events.extend(self._judge_gauge(station_id, kind, clock, silent))
+        return events
+
+    def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
+        """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""
+        rows = self.gauge_readings(station_id)
+        if kind == "dart":
+            new = ndbc.detrend(rows, since=since)  # type: ignore[arg-type]
+        else:
+            self._predictions[station_id] = self.predictions_for(station_id) or self._predictions.get(station_id, [])
+            new = coops.residuals(rows, self._predictions[station_id])  # type: ignore[arg-type]
+            since = datetime.min.replace(tzinfo=UTC)
+        kept = {ts: r for ts, r in self._residuals.get(station_id, {}).items() if ts < since}
+        kept.update({r.ts: r for r in new})
+        floor = rows[0].ts
+        self._residuals[station_id] = {ts: r for ts, r in kept.items() if ts >= floor}
+
+    def _judge_gauge(self, station_id: str, kind: str, clock: Clock, silent: bool) -> list[Event]:
+        """An anomaly event at the start of each episode; the rest of an episode only extends it.
+
+        Each station remembers the newest residual it judged, so a restart or a new selection (which reads hours of
+        history at once) does not replay old exceedances; the first look only counts the last GAUGE_FRESH minutes.
+        """
+        residuals = self.gauge_residuals(station_id)
+        if not residuals:
+            return []
+        fresh = clock.now() - GAUGE_FRESH
+        evaluated = self._evaluated.get(station_id)
+        since = fresh if evaluated is None else max(evaluated, fresh)  # a re-selected station has old history too
+        self._evaluated[station_id] = residuals[-1].ts
+        decision = find_anomaly(station_id, kind, residuals, self._alerts, since)
+        if decision is None:
+            return []
+        over = [r.ts for r in residuals if r.ts > since and abs(r.residual_m) >= decision.threshold_m]
+        last = self._episode_end.get(station_id)
+        starts = last is None or min(over) - last > EPISODE_GAP
+        self._episode_end[station_id] = max(over)
+        if not starts or silent:
+            return []
+        station = self._gauge_stations.get(station_id)
+        name = station.name.strip() if station and station.name else station_id
+        return [GaugeAnomaly(station_id, decision.residual_m, decision.ts, name, decision.threshold_m)]
 
     # --- tsunami alerts -----------------------------------------------------------------------------------------
 

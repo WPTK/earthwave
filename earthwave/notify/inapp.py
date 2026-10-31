@@ -7,6 +7,7 @@ from earthwave.clock import Clock
 from earthwave.sources import levels
 from earthwave.state.events import (
     Event,
+    GaugeAnomaly,
     QuakeMajor,
     QuakeNew,
     QuakeUpdated,
@@ -20,6 +21,8 @@ UPDATED_FLASH_SECONDS = 1.0
 MAJOR_PULSE_SECONDS = 60.0
 PULSE_COOLDOWN_SECONDS = 120.0
 TSUNAMI_PREFIX = "tsunami:"
+GAUGE_PREFIX = "gauge:"
+GAUGE_SECONDS = 300.0  # a gauge anomaly stays on the ticker this long unless acknowledged
 
 
 class AttentionKind(StrEnum):
@@ -27,6 +30,7 @@ class AttentionKind(StrEnum):
     UPDATED = "updated"
     MAJOR = "major"
     TSUNAMI = "tsunami"
+    GAUGE = "gauge"
 
 
 _RANK = {AttentionKind.UPDATED: 1, AttentionKind.NEW: 2, AttentionKind.MAJOR: 3, AttentionKind.TSUNAMI: 4}
@@ -88,6 +92,8 @@ class AttentionTracker:
             return item.acked and elapsed >= NEW_FLASH_SECONDS
         if item.kind is AttentionKind.TSUNAMI:
             return item.acked
+        if item.kind is AttentionKind.GAUGE:
+            return item.acked or elapsed >= GAUGE_SECONDS
         return item.acked and elapsed >= MAJOR_PULSE_SECONDS
 
     def observe(self, events: list[Event]) -> None:
@@ -104,6 +110,8 @@ class AttentionTracker:
                     self._items[TSUNAMI_PREFIX + event.alert.id] = Attention(AttentionKind.TSUNAMI, self._now())
             elif isinstance(event, TsunamiCancelled):
                 self._items.pop(TSUNAMI_PREFIX + event.alert.id, None)
+            elif isinstance(event, GaugeAnomaly):
+                self._items[GAUGE_PREFIX + event.station_id] = Attention(AttentionKind.GAUGE, self._now())
 
     def _now(self) -> float:
         return self._clock.monotonic()
@@ -111,6 +119,14 @@ class AttentionTracker:
     def tsunami_unacked(self) -> int:
         """Actionable tsunami alerts nobody has acknowledged: drives the banner, panel pulse and red status bar."""
         return sum(1 for k, i in self._items.items() if k.startswith(TSUNAMI_PREFIX) and not i.acked)
+
+    def gauge_active(self) -> list[str]:
+        """Station ids with an anomaly that is neither acknowledged nor older than GAUGE_SECONDS."""
+        return [
+            k[len(GAUGE_PREFIX) :]
+            for k, i in self._items.items()
+            if k.startswith(GAUGE_PREFIX) and not self._finished(i)
+        ]
 
     def tsunami_sync(self, active_ids: set[str]) -> None:
         """Forget tsunami attention for alerts no longer in force (expired, cancelled or superseded)."""
@@ -145,14 +161,15 @@ class AttentionTracker:
 
     def retain(self, quake_ids: set[str]) -> None:
         """Drop attention for quakes outside the current view (filtered out or aged out): they can never be seen."""
-        for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(TSUNAMI_PREFIX)]:
+        keep = (TSUNAMI_PREFIX, GAUGE_PREFIX)
+        for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]
 
     def unseen(self) -> int:
         return sum(
             1
             for item in self._items.values()
-            if item.kind not in (AttentionKind.UPDATED, AttentionKind.TSUNAMI) and not item.acked
+            if item.kind not in (AttentionKind.UPDATED, AttentionKind.TSUNAMI, AttentionKind.GAUGE) and not item.acked
         )
 
     def kind_of(self, quake_id: str) -> AttentionKind | None:

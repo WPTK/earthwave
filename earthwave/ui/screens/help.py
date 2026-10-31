@@ -16,7 +16,8 @@ HELP_TEXT = """\
   M  full-screen map         z      zoom map
   t  tsunami alerts          a      acknowledge alerts, new rows
   r  refresh now             ?      this help
-  q  quit                    Tab    focus map; arrows pan
+  o  tide gauges near quake  Tab    focus map; arrows pan
+  q  quit
   Detail: b open page, y copy URL, Esc back
 
 [b]Colors[/b]
