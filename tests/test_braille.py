@@ -158,6 +158,7 @@ def test_polyline_outside_viewport_draws_nothing():
 
 def test_known_landmarks_have_dots():
     c = coastline_canvas(160, 40)
+
     # Florida and Tokyo bay have coastline dots nearby; the mid Atlantic does not.
     def has_dots(lon, lat, r=1):
         x, y = project(lon, lat, WORLD, c.width, c.height)

@@ -12,7 +12,7 @@ from textual.widgets import Input, Static
 from earthwave.sources import levels
 from earthwave.ui.labels import filter_summary
 from earthwave.ui.widgets.banner import Banner
-from earthwave.ui.widgets.map_panel import MapPanel
+from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
 from earthwave.ui.widgets.status_bar import SourceLine, StatusBar, StatusInfo
 from earthwave.ui.widgets.ticker import Ticker
@@ -31,6 +31,8 @@ class DashboardScreen(Screen):
         Binding("s", "sort", "Sort"),
         Binding("slash", "search", "Search"),
         Binding("m", "toggle_map", "Map"),
+        Binding("M", "fullscreen_map", "Full map", show=False),
+        Binding("z", "zoom_map", "Zoom", show=False),
         Binding("t", "tsunami", "Tsunami"),
         Binding("a", "ack_all", "Ack all"),
         Binding("r", "refresh_now", "Refresh"),
@@ -54,7 +56,7 @@ class DashboardScreen(Screen):
                 yield Static("", id="header")
                 yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="quakes")
             with Vertical(id="right"):
-                yield MapPanel(id="map")
+                yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
                 yield TsunamiPanel(id="tsunami")
         yield Input(placeholder="search place, Enter to apply, Esc to clear", id="search")
         yield StatusBar(app.glyphs, id="status")
@@ -86,6 +88,7 @@ class DashboardScreen(Screen):
         quake_list = self.query_one(QuakeList)
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
+        self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
         app.tracker.retain({q.id for q in rows})
         self.query_one("#header", Static).update(header_text(quake_list.size.width, app.config.home.enabled))
         self.refresh_ticker()
@@ -113,6 +116,7 @@ class DashboardScreen(Screen):
         active, actionable, unacked, _ = self.tsunami_state()
         blink = int(app.clock.monotonic() * 2) % 2 == 0
         self.query_one(Banner).show(actionable, unacked)
+        self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=bool(unacked) and blink)
 
     def refresh_status(self, shown: int | None = None) -> None:
@@ -155,8 +159,20 @@ class DashboardScreen(Screen):
 
     def action_toggle_map(self) -> None:
         self.show_map = not self.show_map
+        if not self.show_map:
+            self.remove_class("map-full")
+            self.query_one(QuakeList).focus()
         self._layout(self.size.width, self.size.height)
         self.call_after_refresh(self.refresh_view)
+
+    def action_fullscreen_map(self) -> None:
+        full = not self.has_class("map-full")
+        self.set_class(full, "map-full")
+        (self.query_one(MapPanel) if full else self.query_one(QuakeList)).focus()
+        self.call_after_refresh(self.refresh_view)
+
+    def action_zoom_map(self) -> None:
+        self.query_one(MapPanel).action_cycle_zoom()
 
     def action_ack_all(self) -> None:
         self.earthwave.tracker.ack_all()
@@ -190,6 +206,9 @@ class DashboardScreen(Screen):
         app = self.earthwave
         app.set_query(query)
         self.query_one(QuakeList).focus()
+
+    def on_quake_list_highlighted(self, event: QuakeList.Highlighted) -> None:
+        self.query_one(MapPanel).select(event.quake)
 
     def on_quake_list_selected(self, event: QuakeList.Selected) -> None:
         self.earthwave.open_detail(event.quake)

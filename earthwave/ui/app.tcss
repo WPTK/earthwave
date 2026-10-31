@@ -30,8 +30,10 @@ Screen {
 #map {
     height: 1fr;
     border: round $primary-darken-2;
-    content-align: center middle;
-    color: $text-muted;
+}
+
+#map:focus {
+    border: round $primary;
 }
 
 #tsunami {
@@ -136,6 +138,22 @@ Screen.no-map #map {
 
 Screen.narrow #right {
     display: none;
+}
+
+/* Full-screen map: hide the list and the tsunami panel. These come after the narrow and no-map rules at the same
+   specificity, so the map shows even in a terminal narrower than the auto-hide width. */
+Screen.map-full #left,
+Screen.map-full #tsunami {
+    display: none;
+}
+
+Screen.map-full #right {
+    display: block;
+    width: 1fr;
+}
+
+Screen.map-full #map {
+    display: block;
 }
 
 FiltersScreen, HelpScreen {

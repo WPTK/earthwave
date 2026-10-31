@@ -14,8 +14,9 @@ HELP_TEXT = """\
   f   filters                   s       cycle sort (time, magnitude, distance)
   t   tsunami alerts            a       acknowledge tsunami banner and new rows
   /   search place              m       show or hide the map
-  r   refresh now              ?       this help
-  q   quit
+  M   full-screen map           z       zoom map (world, region, home)
+  r   refresh now               ?       this help
+  q   quit                      Map focused (Tab): arrows pan
   In detail:  b open USGS page, y copy URL, Esc back
 
 [b]Colors[/b]
