@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from conftest import FIXTURES
+from conftest import FIXTURES, wait_until
 from test_observations import drive
 from test_tsunami import kam
 
@@ -52,9 +52,14 @@ async def test_state_warning_banner_then_acknowledge_clears_it(size):
     app = kam_alert_app(0, 1)
     async with app.run_test(size=size) as pilot:
         observe(app, 1)
-        await pilot.pause()
+        # The banner blinks and the footer fills in late: wait for a frame that shows both.
+        await wait_until(
+            pilot,
+            lambda: "TSUNAMI WARNING" in screen_text(app) and "Quit" in screen_text(app).splitlines()[-1],
+            what="the banner and the footer row",
+        )
         text = screen_text(app)
-        assert "TSUNAMI WARNING" in text and "TSUNAMI" in text.splitlines()[-1]  # banner and status bar
+        assert "TSUNAMI WARNING" in text and "TSUNAMI" in text.splitlines()[-2]  # banner and status bar
         banner = app.dashboard.query_one("#banner")
         assert banner.display
         await pilot.press("a")

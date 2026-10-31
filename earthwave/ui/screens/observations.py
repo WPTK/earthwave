@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
@@ -31,7 +31,7 @@ class ObservationsScreen(Screen):
         with Vertical(id="observations_body"):
             yield Static("", id="observations_header")
             yield GaugeStrip(id="observations_strip")
-        yield Static(" Esc back", id="observations_footer")
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         self.refresh_gauges()

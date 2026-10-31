@@ -195,4 +195,5 @@ class QuakeList(ScrollView, can_focus=True):
             self.post_message(self.Selected(quake))
 
     def on_click(self, event: Click) -> None:
-        self._move(self.scroll_offset.y + event.y)
+        if (index := self.scroll_offset.y + event.y) < len(self.rows):  # the empty area below the rows is not a row
+            self._move(index)

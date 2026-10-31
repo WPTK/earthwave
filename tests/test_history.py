@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 
-from conftest import T0, make_quake
+from conftest import T0, footer_keys, make_quake
 
 from earthwave.app import EarthwaveApp, PollDone
 from earthwave.clock import ReplayClock
@@ -166,6 +166,13 @@ async def test_relaunch_offline_keeps_yesterday_and_acks_but_never_alerts(tmp_pa
         screen = app2.screen
         assert isinstance(screen, HistoryScreen)
         await app2.workers.wait_for_complete()
+        assert [k.description for k in await footer_keys(pilot)] == [
+            "Previous day",
+            "Next day",
+            "Detail",
+            "Back",
+            "Quit",
+        ]
         assert screen.query_one(QuakeList).rows == []  # today (a day later) is empty ...
         await pilot.press("left")
         await app2.workers.wait_for_complete()
@@ -374,6 +381,33 @@ async def test_sort_change_keeps_the_cursor_quake_on_screen():
         top = quake_list.scroll_offset.y
         assert quake_list.selected.id == "low" and quake_list.cursor == 39
         assert top <= quake_list.cursor < top + quake_list.size.height
+
+
+# --- quake list: clicks ---------------------------------------------------------------------
+
+
+def _list_app(count=40):
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    config = with_overrides(Config(), 0.0, 24, None, "unicode")
+    store = Store(config.alerts, config.home)
+    rows = [make_quake(f"q{i:02d}", 4.0, minutes_ago=10 + i) for i in range(count)]
+    store.merge(Batch("usgs", T0, quakes=tuple(rows), backfill=True), clock)
+    return EarthwaveApp(config, store=store, clock=clock, run_scheduler=False, ticks=False), store, clock
+
+
+async def test_a_click_below_the_last_row_does_nothing():
+    app, *_ = _list_app(count=5)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        quake_list = app.dashboard.query_one(QuakeList)
+        last = quake_list.rows[-1].id
+        assert quake_list.cursor == 0
+        await pilot.click(QuakeList, offset=(5, 15))  # well below the five rows
+        await pilot.pause()
+        assert quake_list.cursor == 0 and quake_list.selected.id != last
+        await pilot.click(QuakeList, offset=(5, 3))  # a real row still works
+        await pilot.pause()
+        assert quake_list.cursor == 3
 
 
 # --- command line ---------------------------------------------------------------------------------------------
