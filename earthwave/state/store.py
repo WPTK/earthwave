@@ -238,7 +238,9 @@ class Store:
         residuals = self.gauge_residuals(station_id)
         if not residuals:
             return []
-        since = self._evaluated.get(station_id) or clock.now() - GAUGE_FRESH
+        fresh = clock.now() - GAUGE_FRESH
+        evaluated = self._evaluated.get(station_id)
+        since = fresh if evaluated is None else max(evaluated, fresh)  # a re-selected station has old history too
         self._evaluated[station_id] = residuals[-1].ts
         decision = find_anomaly(station_id, kind, residuals, self._alerts, since)
         if decision is None:

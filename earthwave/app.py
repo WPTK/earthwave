@@ -238,7 +238,12 @@ class EarthwaveApp(App):
                 source.set_alert_active(hint)
                 self.scheduler.reschedule(source.name)
         key = (
-            tuple(sorted(a.id for a in self.store.active_alerts(self.clock))),
+            tuple(
+                sorted(
+                    (a.id, a.origin, a.geometry, a.quake_ref, self._linked_position(a))
+                    for a in self.store.active_alerts(self.clock)
+                )
+            ),
             self._gauge_quake.id if self._gauge_quake else None,
             self.dart.unavailable,
             len(self.dart.stations),
@@ -257,6 +262,11 @@ class EarthwaveApp(App):
         if chosen.coops_ids != old.coops_ids:
             self.coops.set_selection(chosen.coops_ids)
             self.scheduler.reschedule(self.coops.name, immediate=True)
+
+    def _linked_position(self, alert) -> tuple[float, float] | None:
+        """Where the linked quake is now; it can move when a later USGS revision relocates it."""
+        quake = self.store.quake_for(alert)
+        return (quake.lat, quake.lon) if quake else None
 
     def gauge_rows(self) -> list[GaugeRowData]:
         """One strip row per selected station, DART first; a station with no readings yet shows 'no data'."""

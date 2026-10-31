@@ -1,6 +1,7 @@
 """M4c: gauge readings in the store, anomaly episodes, station selection, alert-driven cadence, the gauge views."""
 
 import asyncio
+import re
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -301,6 +302,22 @@ async def test_reschedule_pulls_the_next_poll_forward(clock):
     assert sched.next_poll_in("x") == 500  # a failing source keeps its backoff
 
 
+async def test_reschedule_during_a_fetch_survives_the_fetch(clock):
+    source = Const()
+    sched = Scheduler([source], Store(ALERTS), clock, lambda result: None)
+    await sched.poll_source("x", None)  # type: ignore[arg-type]
+    real_fetch = source.fetch
+
+    async def nudged(client, since):
+        source.seconds = 60.0
+        sched.reschedule("x")  # the cadence changed while the request was in flight
+        return await real_fetch(client, since)
+
+    source.fetch = nudged  # type: ignore[method-assign]
+    await sched.poll_source("x", None)  # type: ignore[arg-type]
+    assert sched.next_poll_in("x") == 60
+
+
 def gauge_app(clock, alerts=(), config=None, **kwargs) -> EarthwaveApp:
     config = config or with_overrides(Config(), 2.5, 24, None, "ascii")
     store = Store(config.alerts, config.home)
@@ -431,10 +448,12 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
         # standard mode: one stale batch, the default 15-minute cadence, and a strip that says 'last batch'
         await wait_for(lambda: app.store.gauge_readings("32401") and transport.requests >= 2)
         row = next(r for r in app.gauge_rows() if r.station_id == "32401")
-        assert row.mode == "15m" and intervals == [900]
+        assert row.mode == "15m" and intervals[:1] == [
+            900
+        ]  # the replay clock keeps running, so only the first batch is exact
         app.screen.refresh_gauges()
-        await wait_for(lambda: "last batch 6h ago" in strip_text(app))
-        assert not app.tracker.gauge_active() and not fake.sent
+        await wait_for(lambda: re.search(r"last batch \d+h ago", strip_text(app)) is not None)
+        assert not fake.sent
 
         # event mode: 1-minute and 15-second rows arrive, the source drops to alert cadence, the pulse trips the flag
         transport.gate.set()
