@@ -144,15 +144,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def open_history(config: Config, clock: Clock) -> History | None:
-    """The saved-history database, or None (with a log line) if it cannot be opened: the app still runs."""
+def open_history(config: Config, clock: Clock) -> tuple[History | None, str | None]:
+    """The saved-history database and None, or None and the reason it could not be opened (the app still runs)."""
     history = History(default_path(), config.history.retain_days, clock)
     try:
         history.open()
     except (sqlite3.Error, OSError) as exc:
         logging.getLogger(__name__).warning("history unavailable (%s): %r", history.path, exc)
-        return None
-    return history
+        return None, f"{type(exc).__name__}: {exc}"
+    return history, None
 
 
 def run(args: argparse.Namespace) -> int:
@@ -188,9 +188,17 @@ def run(args: argparse.Namespace) -> int:
     notifying = args.notify or (config.notify.desktop and not args.replay)
     bell = args.notify or (config.notify.bell and not args.replay)
     notifier = default_notifier() if notifying else None
-    history = None if args.replay else open_history(config, clock)  # a replayed past must not enter the real history
+    # a replayed past must not enter the real history
+    history, history_error = (None, None) if args.replay else open_history(config, clock)
     EarthwaveApp(
-        config, clock=clock, transport=transport, notifier=notifier, bell=bell, history=history, offline=args.offline
+        config,
+        clock=clock,
+        transport=transport,
+        notifier=notifier,
+        bell=bell,
+        history=history,
+        offline=args.offline,
+        history_error=history_error,
     ).run()
     return 0
 

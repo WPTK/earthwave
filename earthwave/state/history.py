@@ -11,7 +11,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import fields
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 
 import platformdirs
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS alerts_at ON alerts (at);
 """
+SCHEMA_VERSION = 1  # PRAGMA user_version; bump with a migration when a table changes
 
 _DATETIME_FIELDS = {f.name for f in fields(Earthquake) if "datetime" in str(f.type)}
 
@@ -58,22 +59,27 @@ def encode_quake(quake: Earthquake) -> str:
 
 
 def decode_quake(text: str) -> Earthquake:
+    """Tolerant of other versions: unknown keys are ignored and missing optional ones take the model's defaults.
+    Raises KeyError or ValueError when a required field is missing or malformed."""
     data = json.loads(text)
-    for name in _DATETIME_FIELDS:
-        if data[name] is not None:
-            data[name] = datetime.fromisoformat(data[name])
-    data["also_ids"] = tuple(data["also_ids"])
-    return Earthquake(**data)
+    known = {f.name for f in fields(Earthquake)}
+    kwargs = {k: v for k, v in data.items() if k in known}
+    for name in _DATETIME_FIELDS & kwargs.keys():
+        if kwargs[name] is not None:
+            kwargs[name] = datetime.fromisoformat(kwargs[name])
+    if "also_ids" in kwargs:
+        kwargs["also_ids"] = tuple(kwargs["also_ids"])
+    return Earthquake(**kwargs)
 
 
-def day_bounds(day: date, time_zone: str = "local") -> tuple[datetime, datetime]:
-    """[start, end) of a calendar day as UTC instants: local midnight to local midnight, or UTC midnight to midnight."""
-    if time_zone == "local":
+def day_bounds(day: date, zone: tzinfo | None = None) -> tuple[datetime, datetime]:
+    """[start, end) of a calendar day as UTC instants, midnight to midnight in `zone` (None: this machine's zone)."""
+    if zone is None:
         start = datetime.combine(day, time.min).astimezone(UTC)
         end = datetime.combine(day + timedelta(days=1), time.min).astimezone(UTC)
     else:
-        start = datetime.combine(day, time.min, tzinfo=UTC)
-        end = start + timedelta(days=1)
+        start = datetime.combine(day, time.min, tzinfo=zone).astimezone(UTC)
+        end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
     return start, end
 
 
@@ -87,20 +93,20 @@ class History:
         self._queue: asyncio.Queue[Callable[[sqlite3.Connection], None] | None] = asyncio.Queue()
         self._writer: asyncio.Task | None = None
         self._db: sqlite3.Connection | None = None
-        self._unseen: set[str] = set()  # ids whose seen_at is still null
 
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
     def open(self) -> None:
-        """Create the file and schema, trim old rows and load the unseen set. Raises sqlite3.Error or OSError."""
+        """Create the file and schema and trim old rows. Raises sqlite3.Error or OSError."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, check_same_thread=False, timeout=5.0)
         try:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+                db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._trim(db)
             db.commit()
-            self._unseen = {r[0] for r in db.execute("SELECT id FROM quakes WHERE seen_at IS NULL")}
         except Exception:
             db.close()
             raise
@@ -110,15 +116,19 @@ class History:
         if self._writer is None:
             self._writer = asyncio.get_running_loop().create_task(self._write_loop())
 
+    def close_now(self) -> None:
+        """Close the connection without writing (the startup load failed and the history is being dropped)."""
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
     async def close(self) -> None:
         """Finish queued writes, then close the connection."""
         if self._writer is not None:
             self._queue.put_nowait(None)
             await self._writer
             self._writer = None
-        if self._db is not None:
-            self._db.close()
-            self._db = None
+        self.close_now()
 
     async def _write_loop(self) -> None:
         while (job := await self._queue.get()) is not None:
@@ -145,45 +155,47 @@ class History:
     # --- writes -------------------------------------------------------------------------------------------------
 
     def record(
-        self, quakes: Iterable[Earthquake], new_ids: set[str], alerts: Iterable[TsunamiAlert], fetched_at: datetime
+        self,
+        quakes: Iterable[Earthquake],
+        unseen_ids: set[str],
+        alerts: Iterable[TsunamiAlert],
+        fetched_at: datetime,
     ) -> None:
-        """Queue a merged batch. Rows for ids in `new_ids` (announced live) start unseen; the rest start seen."""
-        stamp = _iso(self._clock.now())
-        quake_rows = [(q.id, _iso(q.time), encode_quake(q), None if q.id in new_ids else stamp) for q in quakes]
-        alert_rows = [(a.id, _iso(a.issued or a.updated or fetched_at), a.level, a.headline) for a in alerts]
-        if not quake_rows and not alert_rows:
+        """Queue a merged batch. Quakes in `unseen_ids` (announced live, or just made major) are saved unseen,
+        even if already stored; the rest start seen. Encoding happens in the writer job, off the event loop."""
+        quakes, alerts = tuple(quakes), tuple(alerts)
+        if not quakes and not alerts:
             return
-        self._unseen.update(i for i, _, _, seen in quake_rows if seen is None)
+        stamp = _iso(self._clock.now())
 
         def write(db: sqlite3.Connection) -> None:
             db.executemany(
                 "INSERT INTO quakes (id, time, data, seen_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET time = excluded.time, data = excluded.data "
-                "WHERE data != excluded.data",
-                quake_rows,
+                "ON CONFLICT(id) DO UPDATE SET time = excluded.time, data = excluded.data, "
+                "seen_at = CASE WHEN excluded.seen_at IS NULL THEN NULL ELSE seen_at END "
+                "WHERE data != excluded.data OR excluded.seen_at IS NULL",
+                [(q.id, _iso(q.time), encode_quake(q), None if q.id in unseen_ids else stamp) for q in quakes],
             )
             db.executemany(
                 "INSERT INTO alerts (id, at, level, headline) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET level = excluded.level, headline = excluded.headline",
-                alert_rows,
+                [(a.id, _iso(a.issued or a.updated or fetched_at), a.level, a.headline) for a in alerts],
             )
 
         self._queue.put_nowait(write)
 
-    def sync_seen(self, is_unseen: Callable[[str], bool]) -> None:
-        """Persist acknowledgements: any id the caller no longer counts as unseen gets a `seen_at`."""
-        done = {i for i in self._unseen if not is_unseen(i)}
-        if not done:
+    def mark_seen(self, ids: set[str]) -> None:
+        """Persist acknowledgements. Idempotent: only rows still unseen change."""
+        if not ids:
             return
-        self._unseen -= done
         stamp = _iso(self._clock.now())
 
         def write(db: sqlite3.Connection) -> None:
-            db.executemany("UPDATE quakes SET seen_at = ? WHERE id = ? AND seen_at IS NULL", [(stamp, i) for i in done])
+            db.executemany("UPDATE quakes SET seen_at = ? WHERE id = ? AND seen_at IS NULL", [(stamp, i) for i in ids])
 
         self._queue.put_nowait(write)
 
-    # --- reads --------------------------------------------------------------------------------------------------
+    # --- reads (raise sqlite3.Error, KeyError or ValueError; callers show the failure) --------------------------
 
     def _read(self, sql: str, params: tuple) -> list[tuple]:
         db = sqlite3.connect(self.path, timeout=5.0)
@@ -192,16 +204,12 @@ class History:
         finally:
             db.close()
 
-    def quakes_between(self, start: datetime, end: datetime) -> list[Earthquake]:
-        """Quakes with start <= time < end, newest first."""
-        rows = self._read(
-            "SELECT data FROM quakes WHERE time >= ? AND time < ? ORDER BY time DESC", (_iso(start), _iso(end))
-        )
-        return [decode_quake(r[0]) for r in rows]
-
-    def alert_levels_between(self, start: datetime, end: datetime) -> Counter[str]:
-        rows = self._read("SELECT level FROM alerts WHERE at >= ? AND at < ?", (_iso(start), _iso(end)))
-        return Counter(r[0] for r in rows)
+    def day(self, start: datetime, end: datetime) -> tuple[list[Earthquake], Counter[str]]:
+        """Quakes with start <= time < end, newest first, and the day's alerts counted by level. Safe off-thread."""
+        bounds = (_iso(start), _iso(end))
+        rows = self._read("SELECT data FROM quakes WHERE time >= ? AND time < ? ORDER BY time DESC", bounds)
+        alerts = self._read("SELECT level FROM alerts WHERE at >= ? AND at < ?", bounds)
+        return [decode_quake(r[0]) for r in rows], Counter(r[0] for r in alerts)
 
     def load_since(self, since: datetime) -> tuple[list[Earthquake], set[str]]:
         """Quakes at or after `since` (to refill the Store) and the ids among them never acknowledged."""
