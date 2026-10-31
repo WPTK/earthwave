@@ -101,12 +101,14 @@ TsunamiScreen {
 
 #alert_text_scroll {
     height: 1fr;
+    min-height: 3;  /* the bulletin keeps some rows however many gauges are shown */
     border-top: solid $primary-darken-2;
     padding: 0 1;
 }
 
 #gauges {
     height: auto;
+    max-height: 40%;  /* more rows than this scroll instead of squeezing out the bulletin or falling off the bottom */
 }
 
 #search {

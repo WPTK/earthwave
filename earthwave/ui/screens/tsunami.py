@@ -82,7 +82,7 @@ class TsunamiScreen(Screen):
             yield DataTable(id="alert_table", cursor_type="row", zebra_stripes=False)
             with VerticalScroll(id="alert_text_scroll"):
                 yield Static("", id="alert_text")
-            with Vertical(id="gauges"):
+            with VerticalScroll(id="gauges"):
                 yield GaugeStrip(id="gauge_strip")
         yield Footer(compact=True, show_command_palette=False)
 

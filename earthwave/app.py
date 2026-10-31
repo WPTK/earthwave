@@ -214,7 +214,7 @@ class EarthwaveApp(App):
             return
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
-            visible = quake_list.visible_ids()
+            visible = quake_list.visible_ids() if self.dashboard.list_shown else set()  # a hidden list is not seen
             self.tracker.mark_seen(visible & self._previous_visible)
             self._previous_visible = visible
             quake_list.refresh()

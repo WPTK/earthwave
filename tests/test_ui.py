@@ -33,6 +33,7 @@ from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import mag_color
 from earthwave.ui.widgets.quake_list import QuakeList
 from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusInfo, build_status
+from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import is_too_small
 
 WEEK = load_json("usgs/4.5_week.geojson")
@@ -504,3 +505,34 @@ def test_detail_opens_only_web_urls(monkeypatch, url, opens):
     monkeypatch.setattr("earthwave.ui.screens.detail.webbrowser.open", opened.append)
     DetailScreen.action_open_browser(SimpleNamespace(quake=SimpleNamespace(url=url)))
     assert opened == ([url] if opens else [])
+
+
+async def test_the_pager_column_is_drawn_inside_the_list_scrollbar():
+    app = week_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        quake_list = app.dashboard.query_one(QuakeList)
+        width = quake_list.scrollable_content_region.width
+        assert width < quake_list.size.width  # the rows overflow, so the scrollbar takes the last column
+        line = quake_list.render_line(0)
+        assert line.cell_length == width
+        pager = [q for q in quake_list.rows if q.pager_alert]
+        assert pager
+        index = quake_list.rows.index(pager[0])
+        assert quake_list.render_line(index).text.rstrip()[-1] == pager[0].pager_alert[0].upper()
+
+
+async def test_the_ticker_waits_for_data_and_keeps_the_gauge_value_on_a_long_line():
+    app = week_app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        ticker = app.dashboard.query_one(Ticker)
+        ticker.show(None, 0.0, warm=False)
+        assert "Waiting for USGS" in str(ticker.render())
+        ticker.show(None, 0.0, warm=True)
+        assert "No major quakes in the loaded data" in str(ticker.render())
+        quake = make_quake("big", 7.2, place="267 km ESE of Petropavlovsk-Kamchatsky, Russia " * 2)
+        ticker.show(quake, 12 * 3600.0, "180 NM West of Iquique, Chile -0.03 m")
+        text = str(ticker.render())
+        assert text.endswith("180 NM West of Iquique, Chile -0.03 m") and "12h ago" in text and "…" in text
+        assert len(text) <= ticker.size.width

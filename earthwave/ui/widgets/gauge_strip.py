@@ -15,6 +15,7 @@ from earthwave.ui.labels import fmt_age
 
 MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
 NAME_WIDTH = 20
+RECENT_SAMPLES = {"15s": 120, "1m": 30, "6m": 5, "15m": 2}  # samples in GAUGE_FRESH (30 min) at each cadence
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
 STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
 
@@ -77,14 +78,23 @@ def row_label(row: GaugeRowData, now: datetime) -> Text:
     return text
 
 
+def is_over_now(row: GaugeRowData, now: datetime) -> bool:
+    """A live row with a residual at or past the threshold in the last GAUGE_FRESH; an older peak does not count."""
+    recent = shown_residuals(row.residuals)[-RECENT_SAMPLES.get(row.mode, 5) :]
+    return not is_stale(row, now) and any(abs(r) >= row.threshold_m for r in recent)
+
+
 def max_text(row: GaugeRowData, now: datetime) -> Text:
     peak = max_residual(shown_residuals(row.residuals))
     if peak is None:
         return Text("no residual", style="grey50", no_wrap=True)
     if is_stale(row, now):  # old data is never flagged or coloured as if it were live
         return Text(f"{peak:+.3f} m stale", style="grey50", no_wrap=True)
-    over = abs(peak) >= row.threshold_m
-    return Text(f"{peak:+.3f} m{' !' if over else ''}", style="bold red" if over else "green", no_wrap=True)
+    if is_over_now(row, now):
+        return Text(f"{peak:+.3f} m !", style="bold red", no_wrap=True)
+    if abs(peak) >= row.threshold_m:  # it settled: the peak is history, not a current exceedance
+        return Text(f"{peak:+.3f} m peak", style="grey70", no_wrap=True)
+    return Text(f"{peak:+.3f} m", style="green", no_wrap=True)
 
 
 class GaugeRow(Horizontal):
@@ -101,9 +111,7 @@ class GaugeRow(Horizontal):
         self._now = now
 
     def compose(self) -> ComposeResult:
-        over = not is_stale(self.row, self._now) and any(
-            abs(r) >= self.row.threshold_m for r in shown_residuals(self.row.residuals)
-        )
+        over = is_over_now(self.row, self._now)
         yield Static(row_label(self.row, self._now), classes="gauge-label")
         yield Sparkline(
             sparkline_data(self.row.residuals, self.row.threshold_m),

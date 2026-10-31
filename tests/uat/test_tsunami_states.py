@@ -16,6 +16,7 @@ from earthwave.notify.desktop import RecordingNotifier
 from earthwave.sources import levels
 from earthwave.state.events import TsunamiIssued
 from earthwave.ui.screens.tsunami import TsunamiScreen
+from earthwave.ui.widgets.gauge_strip import GaugeRowData
 from uat.harness import info_alert, kam_alert_app, screen_text
 
 
@@ -156,3 +157,21 @@ async def test_replay_drives_banner_up_and_back_down(terminal):
         await pilot.pause()
         assert "t details, a acknowledge" not in screen_text(app)
         assert app.store.active_alerts(clock) == []
+
+
+async def test_many_gauge_rows_scroll_and_leave_the_bulletin_its_rows(monkeypatch):
+    app = kam_alert_app(1)
+    now = app.clock.now()
+    rows = [GaugeRowData(f"s{i}", f"Station {i}", 100.0 + i, "6m", now, (0.0, 0.01), 0.05, "coops") for i in range(18)]
+    monkeypatch.setattr(app, "gauge_rows", lambda: rows)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("t")
+        screen = app.screen
+        assert isinstance(screen, TsunamiScreen)
+        await wait_until(pilot, lambda: len(screen.query("GaugeRow")) == 18, what="the gauge rows")
+        text = screen.query_one("#alert_text_scroll")
+        gauges = screen.query_one("#gauges")
+        body = screen.query_one("#tsunami_body")
+        assert text.size.height >= 3
+        assert gauges.size.height <= body.size.height * 0.4 + 1
+        assert gauges.virtual_size.height >= 18 and gauges.max_scroll_y > 0  # the rest is reachable by scrolling

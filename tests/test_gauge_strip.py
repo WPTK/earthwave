@@ -13,6 +13,7 @@ from earthwave.ui.widgets.gauge_strip import (
     GaugeRowData,
     GaugeStrip,
     age_text,
+    is_over_now,
     is_stale,
     max_residual,
     max_text,
@@ -106,8 +107,10 @@ def test_label_and_max_text():
     assert row_label(_row(distance_km=None), NOW).plain.count("km") == 0
     quiet = max_text(_row(), NOW)
     assert quiet.plain == "-0.012 m" and "green" in str(quiet.style)
-    loud = max_text(_row(residuals=(0.01, -0.081, 0.02)), NOW)
+    loud = max_text(_row(residuals=(0.01, -0.081, 0.02)), NOW)  # 15-minute samples: the last two cover 30 min
     assert loud.plain == "-0.081 m !" and "red" in str(loud.style)
+    settled = max_text(_row(residuals=(-0.081, 0.01, 0.02)), NOW)  # the peak is older than that
+    assert settled.plain == "-0.081 m peak" and "red" not in str(settled.style) and not is_over_now(_row(), NOW)
     assert max_text(_row(residuals=()), NOW).plain == "no residual"
     assert max_residual(()) is None and max_residual((0.01, -0.02, 0.015)) == -0.02
 
@@ -116,7 +119,7 @@ def test_a_row_with_old_data_says_stale_instead_of_flagging_it():
     old = _row(mode="1m", newest=NOW - timedelta(hours=20), residuals=(0.01, -0.081, 0.02))
     text = max_text(old, NOW)
     assert text.plain == "-0.081 m stale" and "!" not in text.plain and "red" not in str(text.style)
-    live = _row(mode="1m", newest=NOW - timedelta(minutes=2), residuals=(0.01, -0.081, 0.02))
+    live = _row(mode="1m", newest=NOW - timedelta(minutes=2), residuals=(0.01, 0.02, -0.081))
     assert max_text(live, NOW).plain == "-0.081 m !"
     # a 15-minute DART file arrives in batches, so hours-old data is normal for it, a day is not
     assert not is_stale(_row(), NOW) and is_stale(_row(newest=NOW - timedelta(hours=20)), NOW)

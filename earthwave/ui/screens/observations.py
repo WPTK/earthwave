@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Static
 
@@ -28,7 +28,7 @@ class ObservationsScreen(Screen):
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="observations_body"):
+        with VerticalScroll(id="observations_body"):
             yield Static("", id="observations_header")
             yield GaugeStrip(id="observations_strip")
         yield Footer(compact=True, show_command_palette=False)
