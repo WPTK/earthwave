@@ -10,6 +10,8 @@ from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_countdown
 from earthwave.ui.theme import FRESHNESS_COLORS
 
+ALERT_STATES = ("info", "active", "alarm")
+
 
 @dataclass(frozen=True, slots=True)
 class SourceLine:
@@ -27,10 +29,13 @@ class StatusInfo:
     filter_text: str
     unseen: int
     sort: str = "time"
+    alert_state: str = "none"  # none | info | active | alarm
 
 
 def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
+    if info.alert_state == "alarm":
+        text.append(" TSUNAMI ", "bold white on #7f1d1d")
     for line in info.sources:
         text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
         age = f" {fmt_age(line.age)}" if line.age is not None else ""
@@ -55,4 +60,6 @@ class StatusBar(Static):
         self._glyphs = glyphs
 
     def show(self, info: StatusInfo) -> None:
+        for state in ALERT_STATES:
+            self.set_class(info.alert_state == state, f"alert-{state}")
         self.update(build_status(info, self._glyphs))

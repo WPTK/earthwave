@@ -58,6 +58,8 @@ class TsunamiAlert:
     geometry: tuple | None = None  # ("circle", lat, lon, radius_km) | ("polygon", ((lon, lat), ...)) | None
     text: str = ""
     quake_ref: str | None = None
+    references: tuple[str, ...] = ()  # ids of the alerts this one updates or cancels
+    origin: tuple[datetime, float, float] | None = None  # (time, lat, lon) of the quake the product names
 
 
 @dataclass(frozen=True, slots=True)

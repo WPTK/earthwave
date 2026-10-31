@@ -4,20 +4,49 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from earthwave.clock import Clock
-from earthwave.state.events import Event, QuakeMajor, QuakeNew, QuakeUpdated
+from earthwave.sources import levels
+from earthwave.state.events import (
+    Event,
+    QuakeMajor,
+    QuakeNew,
+    QuakeUpdated,
+    TsunamiCancelled,
+    TsunamiChanged,
+    TsunamiIssued,
+)
 
 NEW_FLASH_SECONDS = 3.0
 UPDATED_FLASH_SECONDS = 1.0
 MAJOR_PULSE_SECONDS = 60.0
+PULSE_COOLDOWN_SECONDS = 120.0
+TSUNAMI_PREFIX = "tsunami:"
 
 
 class AttentionKind(StrEnum):
     NEW = "new"
     UPDATED = "updated"
     MAJOR = "major"
+    TSUNAMI = "tsunami"
 
 
-_RANK = {AttentionKind.UPDATED: 1, AttentionKind.NEW: 2, AttentionKind.MAJOR: 3}
+_RANK = {AttentionKind.UPDATED: 1, AttentionKind.NEW: 2, AttentionKind.MAJOR: 3, AttentionKind.TSUNAMI: 4}
+
+
+class PulseGate:
+    """Cooldown per (id, kind): a repeated minor update does not re-flash a row that just flashed."""
+
+    def __init__(self, clock: Clock, cooldown: float = PULSE_COOLDOWN_SECONDS):
+        self._clock = clock
+        self._cooldown = cooldown
+        self._last: dict[tuple[str, str], float] = {}
+
+    def allow(self, key: str, kind: str) -> bool:
+        now = self._clock.monotonic()
+        last = self._last.get((key, kind))
+        if last is not None and now - last < self._cooldown:
+            return False
+        self._last[(key, kind)] = now
+        return True
 
 
 @dataclass(slots=True)
@@ -45,6 +74,7 @@ class AttentionTracker:
     def __init__(self, clock: Clock):
         self._clock = clock
         self._items: dict[str, Attention] = {}
+        self._gate = PulseGate(clock)
 
     def _elapsed(self, item: Attention) -> float:
         return self._clock.monotonic() - item.started
@@ -55,6 +85,8 @@ class AttentionTracker:
             return elapsed >= UPDATED_FLASH_SECONDS
         if item.kind is AttentionKind.NEW:
             return item.acked and elapsed >= NEW_FLASH_SECONDS
+        if item.kind is AttentionKind.TSUNAMI:
+            return item.acked
         return item.acked and elapsed >= MAJOR_PULSE_SECONDS
 
     def observe(self, events: list[Event]) -> None:
@@ -62,9 +94,29 @@ class AttentionTracker:
             if isinstance(event, QuakeNew):
                 self._start(event.quake.id, AttentionKind.NEW)
             elif isinstance(event, QuakeUpdated):
-                self._start(event.quake.id, AttentionKind.UPDATED)
+                if self._gate.allow(event.quake.id, AttentionKind.UPDATED):
+                    self._start(event.quake.id, AttentionKind.UPDATED)
             elif isinstance(event, QuakeMajor):
                 self._start(event.quake.id, AttentionKind.MAJOR)
+            elif isinstance(event, TsunamiIssued | TsunamiChanged):
+                if event.alert.level in levels.ACTIONABLE:
+                    self._items[TSUNAMI_PREFIX + event.alert.id] = Attention(AttentionKind.TSUNAMI, self._now())
+            elif isinstance(event, TsunamiCancelled):
+                self._items.pop(TSUNAMI_PREFIX + event.alert.id, None)
+
+    def _now(self) -> float:
+        return self._clock.monotonic()
+
+    def tsunami_unacked(self) -> int:
+        """Actionable tsunami alerts nobody has acknowledged: drives the banner, panel pulse and red status bar."""
+        return sum(1 for k, i in self._items.items() if k.startswith(TSUNAMI_PREFIX) and not i.acked)
+
+    def tsunami_sync(self, active_ids: set[str]) -> None:
+        """Forget tsunami attention for alerts no longer in force (expired, cancelled or superseded)."""
+        for key in [
+            k for k in self._items if k.startswith(TSUNAMI_PREFIX) and k[len(TSUNAMI_PREFIX) :] not in active_ids
+        ]:
+            del self._items[key]
 
     def _start(self, quake_id: str, kind: AttentionKind) -> None:
         current = self._items.get(quake_id)
@@ -86,11 +138,15 @@ class AttentionTracker:
 
     def retain(self, quake_ids: set[str]) -> None:
         """Drop attention for quakes outside the current view (filtered out or aged out): they can never be seen."""
-        for quake_id in [k for k in self._items if k not in quake_ids]:
+        for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(TSUNAMI_PREFIX)]:
             del self._items[quake_id]
 
     def unseen(self) -> int:
-        return sum(1 for item in self._items.values() if item.kind is not AttentionKind.UPDATED and not item.acked)
+        return sum(
+            1
+            for item in self._items.values()
+            if item.kind not in (AttentionKind.UPDATED, AttentionKind.TSUNAMI) and not item.acked
+        )
 
     def kind_of(self, quake_id: str) -> AttentionKind | None:
         item = self._items.get(quake_id)

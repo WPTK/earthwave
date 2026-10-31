@@ -26,3 +26,13 @@ FRESHNESS_COLORS = {
     Freshness.STALE: "yellow",
     Freshness.ERROR: "red",
 }
+
+# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue.
+LEVEL_COLORS = {
+    "WARNING": "bold red",
+    "ADVISORY": "dark_orange",
+    "WATCH": "yellow",
+    "THREAT": "dodger_blue2",
+    "INFORMATION": "dodger_blue2",
+    "CANCELLATION": "grey62",
+}
