@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from conftest import make_quake
+from conftest import make_quake, wait_until
 from test_observations import REPLAY, GatedReplay, drive, gauge_app
 
 from earthwave.app import EarthwaveApp
@@ -40,9 +40,10 @@ async def test_observations_view_for_a_flagged_quake(clock, size):
         await pilot.press("o")
         await pilot.pause()
         assert isinstance(app.screen, ObservationsScreen) and len(app.screen_stack) == 3
+        await wait_until(pilot, lambda: "esc Back" in screen_text(app), what="the footer")
         text = screen_text(app)
         assert "somewhere" in text and "Stations nearest this quake" in text.replace("\n", " ")
-        assert "has not flagged" not in text and "Esc back" in text
+        assert "has not flagged" not in text and "esc Back" in text
         await pilot.press("o")  # `o` toggles back, like Esc
         await pilot.pause()
         assert app.screen is app.dashboard

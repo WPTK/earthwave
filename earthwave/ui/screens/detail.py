@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake, QuakeDetail
 from earthwave.ui.labels import fmt_age, fmt_distance, fmt_time
@@ -72,7 +72,6 @@ def render_detail(
     _row(text, "Event page", quake.url, "underline")
     if note:
         text.append(f"\n{note}\n", "yellow")
-    text.append("\n[b] open in browser   [y] copy URL   [esc] back", "grey50")
     return text
 
 
@@ -96,6 +95,7 @@ class DetailScreen(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="detail_scroll"):
             yield Static("", id="detail")
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         self._show()
