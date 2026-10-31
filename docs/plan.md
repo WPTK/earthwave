@@ -7,8 +7,8 @@ Bill wants a terminal app that tracks earthquakes and tsunamis worldwide from fr
 Decisions already made (Oct 31 2026):
 
 - Stack: Python + Textual, mirroring the conventions of the existing `WPTK/cfbtui` repo (Textual 8.x, httpx, platformdirs, TOML config under `%LOCALAPPDATA%`, pytest + respx + saved fixtures, ruff, vulture, PyInstaller one-file exe, `CLAUDE.md`, GitHub Actions CI on three OSes).
-- Python 3.13, like cfbtui. Only 3.12.10 is on this PC, so step one installs 3.13.
-- Location and name: `C:\Users\BK\TUI\earthwave`, package and command `earthwave`.
+- Python 3.13, like cfbtui. Python 3.13 is installed on the build machine (Gilead), so no install step is needed.
+- Location and name: `C:\earthwave`, package and command `earthwave`.
 - v1 must-haves beyond the core list/detail/filters/tsunami panel: in-app live notifications (flashing, color changes), terminal world map, desktop notifications, tsunami observations (DART buoys, tide gauges), history and replay.
 
 Deviations from cfbtui, on purpose: ZeroVer versioning (major stays 0 forever; minor for features, patch for fixes; no FibVer bump tool), Common Changelog format for `CHANGELOG.md`, no self-updater in v1, SQLite added for history, no `tzdata` (only local/UTC display), no `pyperclip` (Textual's OSC 52 clipboard). A GitHub repo under WPTK was not chosen in the scoping answers, so it is an ask-first step at the end of M0, not an assumption.
@@ -229,14 +229,14 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 
 ## Execution: one session per milestone
 
-- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions run one at a time in the main checkout at `C:\Users\BK\TUI\earthwave` (no worktrees, since each worktree would need its own `.venv`). Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
+- Each milestone below is one session, one branch and one PR, started fresh with no shared transcript. Sessions run one at a time in the main checkout at `C:\earthwave` (no worktrees, since each worktree would need its own `.venv`). Branch names: `m0-bootstrap`, `m1-earthquake-core`, `m2-tsunami-alerts`, `m3-world-map`, `m4-observations`, `m5-history`, `m6-release`.
 - A session reads `CLAUDE.md` and its milestone section in `docs/plan.md` first, implements only that milestone, and stops. Anything discovered outside its scope goes into a GitHub issue or the "Deferred" list at the end of `docs/plan.md`, never into the session.
 - Before opening its PR, a session (1) ticks its milestone's checkbox in `docs/plan.md` and writes a short "State after Mn" note there (what exists, what was deviated from and why, what the next session must know), (2) appends its changelog draft lines to the "Changelog draft" list in `docs/plan.md` (not to `CHANGELOG.md`; see Versioning and changelog), (3) runs the full verification block. The next session starts after the PR is merged.
 - Brief template for starting a milestone session (fill in N and the slug):
 
-  > Implement milestone MN of `docs/plan.md` in `C:\Users\BK\TUI\earthwave`. Read `CLAUDE.md` and `docs/plan.md` first, including the "State after M(N-1)" note. Work on branch `mN-<slug>`, open a PR against `main`, and consider it done only when the MN acceptance checks and the verification block pass. Do not start other milestones; put anything out of scope in the Deferred list. No Claude attribution anywhere: no `Co-Authored-By` trailer in commits, no "Generated with Claude Code" footer in the PR, no mention of Claude or AI authorship in docs.
+  > Implement milestone MN of `docs/plan.md` in `C:\earthwave`. Read `CLAUDE.md` and `docs/plan.md` first, including the "State after M(N-1)" note. Work on branch `mN-<slug>`, open a PR against `main`, and consider it done only when the MN acceptance checks and the verification block pass. Do not start other milestones; put anything out of scope in the Deferred list. No Claude attribution anywhere: no `Co-Authored-By` trailer in commits, no "Generated with Claude Code" footer in the PR, no mention of Claude or AI authorship in docs.
 
-- M0's session brief differs only in that the repo does not exist yet: it installs Python 3.13, creates the folder and repo, and commits this plan as `docs/plan.md`.
+- M0's session brief differs only in that the repo has just the plan committed as `docs/plan.md`; M0 creates everything else.
 
 ### Versioning and changelog
 
@@ -252,7 +252,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 
 ## Milestones (one session, one branch, one PR each, in order)
 
-- [ ] M0 Bootstrap
+- [x] M0 Bootstrap
 - [ ] M1 Earthquake core and infrastructure
 - [ ] M2 Tsunami alerts and alerting
 - [ ] M3 World map
@@ -261,7 +261,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 - [ ] M6 Build and release
 
 ### M0: Bootstrap
-- `winget install -e --id Python.Python.3.13`, then `py -3.13 -m venv .venv` in `C:\Users\BK\TUI\earthwave`, `git init`.
+- `py -3.13 -m venv .venv` in `C:\earthwave` (Python 3.13 already installed; the repo already exists with the plan committed).
 - `pyproject.toml` (setuptools, `requires-python >=3.13`, dependencies above, version read from `earthwave.__version__ = "0.0.1"`), ruff/pytest config copied from cfbtui, `CLAUDE.md` (module layout, commands, the one-session-per-milestone rule, ZeroVer, Common Changelog rules, PR flow, and the no-Claude-attribution rule for commits, PRs and docs), `docs/plan.md` (this plan, with the milestone checklist and a "State after M0" note), `README.md` stub, `CHANGELOG.md` in Common Changelog form, MIT `LICENSE`, `.gitignore`, `.gitattributes` (`tests/fixtures/**` as `-text`, `.ps1` CRLF), `ci.yml` (ruff, vulture, pytest, `--version`, `--selftest` on Windows/Linux/macOS).
 - `__main__.py` with `--version` and `--selftest` (imports and fixture parsing in M0; the headless frame is added in M1 once an App exists).
 - Capture live fixtures now, before they roll off: both tsunami.gov Atom feeds, their CAP files and bulletins (the Oct 25 Bonin Islands statement), `all_hour`, `4.5_week`, `significant_month`, one detail payload with `losspager` and `shakemap`, `activestations.xml`, `46402.dart`, a CO-OPS `water_level` sample, and JMA `list.json` plus its detail.
@@ -313,6 +313,14 @@ Manual checks per milestone:
 - M5: quit, relaunch with `--offline`, yesterday's events and acks are still there; retention trims rows older than 90 days.
 - M6: the exe runs on a PC without Python (`docs/smoke-test.md`).
 
+## State after M0
+
+- Branch `m0-bootstrap`, committed locally only: no GitHub repo, push, PR or CI run yet (Bill has not given the repo go-ahead or visibility). `ci.yml` is written but untested.
+- Exists: `pyproject.toml` (ruff/pytest config mirrored from cfbtui; `pytest-textual-snapshot` and `pyshp` unpinned in the dev extra, Textual pinned only by the `<9` range, so pin it exactly when the first snapshot lands in M1), `CLAUDE.md`, README stub, title-only `CHANGELOG.md`, MIT `LICENSE`, `.gitignore`, `.gitattributes`, `earthwave/__init__.py` (`0.0.1`), `__main__.py` (`--version`, `--selftest`), `scripts/capture_fixtures.py`, `tests/test_basic.py`.
+- Fixtures under `tests/fixtures/` captured 2026-10-31, all sources: `tsunamigov/` (PAAQ and PHEB Atom, each with its one CAP and bulletin), `usgs/` (`all_hour`, `4.5_week`, `significant_month`, `detail` with losspager and shakemap), `ndbc/` (`activestations.xml`, `46402.dart`), `coops/water_level_9414290.json`, `jma/` (`list.json`, `detail.json`).
+- Deviations: repo root is `C:\earthwave` (built on Gilead, not the gaming PC); no winget install step; the plan was edited in place rather than re-committed. `--selftest` skips fixture parsing when `tests/fixtures` is absent (a packaged exe), so M6 can bundle or drop that.
+- Next session (M1): the repo has no `earthwave/` modules beyond the CLI; `.venv` is untracked and must be created with `py -3.13 -m venv .venv` then `pip install -e ".[dev]"`.
+
 ## Risks and mitigations
 
 - Tsunami feeds are quiet most of the time: capture the current information statement and archived warning products in M0/M2 and build everything from fixtures and replay with the replay clock.
@@ -326,12 +334,15 @@ Manual checks per milestone:
 
 ## Open items to confirm during execution
 
-- Create `WPTK/earthwave` on GitHub at the end of M0 (not chosen in scoping; ask first).
+- Create `WPTK/earthwave` on GitHub (not chosen in scoping; ask first). Not created yet: M0 is a local branch only, so `ci.yml` has never run and the User-Agent/Homepage URLs point at a repo that does not exist yet.
 - Default home location: none until set in `config.toml` or `--home`.
 
 ## Changelog draft
 
 Each milestone session appends its notable changes here as Common Changelog entry lines (imperative verb first, with PR reference), grouped under Changed / Added / Removed / Fixed. The release session turns this into the `CHANGELOG.md` entry and clears it.
+
+### Added
+- Add `--version` and `--selftest` commands and project scaffolding.
 
 ## Deferred
 

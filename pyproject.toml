@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "earthwave"
+dynamic = ["version"]
+description = "Earthquakes and tsunami alerts in your terminal. Live USGS quakes, tsunami warnings and sea-level readings."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+authors = [{ name = "Bill Kane" }]
+keywords = ["earthquake", "tsunami", "usgs", "tui", "terminal", "textual"]
+
+dependencies = [
+    "textual>=8.2,<9",
+    "httpx>=0.28,<1",
+    "platformdirs>=4,<5",
+    "tomli-w>=1,<2",
+    "winotify>=1.1; sys_platform == 'win32'",
+]
+
+[project.urls]
+Homepage = "https://github.com/WPTK/earthwave"
+Issues = "https://github.com/WPTK/earthwave/issues"
+Changelog = "https://github.com/WPTK/earthwave/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "pytest-xdist>=3.6",
+    "pytest-cov>=5",
+    "pytest-textual-snapshot",
+    "ruff>=0.8",
+    "vulture>=2.14",
+    "mypy>=1.13",
+    "pyinstaller>=6.22,<7",
+    "build>=1,<2",
+    "pyshp",
+]
+
+[project.scripts]
+earthwave = "earthwave.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "earthwave.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["earthwave*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+ignore = [
+    # Textual widgets declare BINDINGS/DEFAULT_CSS as plain class attributes by convention.
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Long lines in tests are inline fixture payloads; wrapping them hurts readability.
+"tests/**" = ["E501"]

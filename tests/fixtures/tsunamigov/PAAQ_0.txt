@@ -1,0 +1,53 @@
+
+WEAK53 PAAQ 250226
+TIBAK1
+
+Tsunami Information Statement Number 1
+NWS National Tsunami Warning Center Palmer AK
+726 PM PDT Sat Oct 24 2026
+
+...THIS IS A TSUNAMI INFORMATION STATEMENT FOR ALASKA, BRITISH
+   COLUMBIA, WASHINGTON, OREGON AND CALIFORNIA...
+
+EVALUATION
+----------
+ * There is no tsunami danger for the U.S. West Coast, British 
+   Columbia, or Alaska. 
+
+ * Based on the depth of the earthquake, a tsunami is not 
+   expected. 
+
+ * An earthquake has occurred with parameters listed below. 
+
+
+PRELIMINARY EARTHQUAKE PARAMETERS
+---------------------------------
+
+ * The following parameters are based on a rapid preliminary
+   assessment of the earthquake and changes may occur.
+
+ * Magnitude      7.0
+ * Origin Time    1809 AKDT Oct 24 2026
+                  1909  PDT Oct 24 2026
+                  0209  UTC Oct 25 2026
+ * Coordinates    28.0 North 139.9 East
+ * Depth          294 miles
+ * Location       in the Bonin Islands, Japan region
+
+
+ADDITIONAL INFORMATION AND NEXT UPDATE
+--------------------------------------
+ * Refer to the internet site tsunami.gov for more information. 
+
+ * Pacific coastal regions outside California, Oregon, Washington, 
+   British Columbia, and Alaska should refer to the Pacific Tsunami 
+   Warning Center messages at tsunami.gov. 
+
+ * This will be the only U.S. National Tsunami Warning Center 
+   message issued for this event unless additional information 
+   becomes available. 
+
+$$
+
+
+
