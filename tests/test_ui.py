@@ -461,3 +461,24 @@ def test_replay_fixture_is_valid_jsonl():
         json.loads(line) for line in (FIXTURES / "replay" / "usgs_short.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [r["status"] for r in rows] == [200, 200, 200, 200, 304, 200]
+
+
+@pytest.mark.parametrize(
+    ("url", "opens"),
+    [
+        ("https://earthquake.usgs.gov/earthquakes/eventpage/x", True),
+        ("http://example.org/x", True),
+        (r"C:\Windows\System32\calc.exe", False),
+        ("file:///C:/Windows/System32/calc.exe", False),
+        ("-flag", False),
+        ("calc.exe", False),
+        ("", False),
+    ],
+)
+def test_detail_opens_only_web_urls(monkeypatch, url, opens):
+    from types import SimpleNamespace
+
+    opened = []
+    monkeypatch.setattr("earthwave.ui.screens.detail.webbrowser.open", opened.append)
+    DetailScreen.action_open_browser(SimpleNamespace(quake=SimpleNamespace(url=url)))
+    assert opened == ([url] if opens else [])

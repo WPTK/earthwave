@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -730,7 +731,7 @@ async def test_notify_send_builds_the_command(monkeypatch):
     monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append((cmd, kw)))
     await NotifySend().send(note())
     await NotifySend().send(note(urgency="warning"))
-    assert calls[0][0] == ["notify-send", "-u", "critical", "-a", "earthwave", TITLE, BODY]
+    assert calls[0][0] == ["notify-send", "-u", "critical", "-a", "earthwave", "--", TITLE, BODY]
     assert calls[1][0][2] == "normal" and calls[0][1]["timeout"] == 10
 
 
@@ -744,22 +745,43 @@ async def test_osascript_escapes_quotes_and_backslashes(monkeypatch):
     assert calls[0][2] == f"display notification {body} with title {title}"
 
 
-async def test_windows_toast_shows_a_long_toast(monkeypatch):
-    import sys
-    import types
+HOSTILE = "Quake $(Start-Process calc) `whoami` \"quoted\" 'single' ]]> <b>x</b>\n\"@\nStart-Process calc\x00"
 
-    shown = []
 
-    class FakeToast:
-        def __init__(self, **kwargs):
-            shown.append(kwargs)
+async def test_windows_toast_keeps_feed_text_out_of_the_script(monkeypatch):
+    from earthwave.notify.desktop import TOAST_SCRIPT
 
-        def show(self):
-            shown.append("show")
+    calls = []
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append((cmd, kw)))
+    await WindowsToast().send(note(title=HOSTILE, body=HOSTILE))
+    ((cmd, kw),) = calls
+    assert cmd[0] == "powershell.exe" and cmd[-1] == TOAST_SCRIPT  # the script is the fixed constant
+    assert "Start-Process" not in " ".join(cmd) and "whoami" not in " ".join(cmd)
+    assert kw["env"]["EARTHWAVE_TOAST_TITLE"].startswith("Quake $(Start-Process calc)")  # the text rides in env
+    assert "\x00" not in kw["env"]["EARTHWAVE_TOAST_BODY"]
+    assert kw["timeout"] > 0
 
-    monkeypatch.setitem(sys.modules, "winotify", types.SimpleNamespace(Notification=FakeToast))
+
+async def test_windows_toast_times_out(monkeypatch, caplog):
+    def hang(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", hang)
     await WindowsToast().send(note())
-    assert shown == [{"app_id": "earthwave", "title": TITLE, "msg": BODY, "duration": "long"}, "show"]
+    assert "desktop notification failed" in caplog.text
+
+
+async def test_notify_send_ends_options_before_feed_text(monkeypatch):
+    calls = []
+    monkeypatch.setattr("earthwave.notify.desktop.subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    await NotifySend().send(note(title="--hint=x", body="-u critical"))
+    assert calls[0][-3:] == ["--", "--hint=x", "-u critical"]
+
+
+def test_missing_notify_send_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr("earthwave.notify.desktop.shutil.which", lambda name: None)
+    assert default_notifier("linux") is None
+    assert "no desktop notifier" in caplog.text
 
 
 def test_rules_forget_old_toast_keys(monkeypatch):

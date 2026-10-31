@@ -2,6 +2,7 @@
 
 import webbrowser
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -120,7 +121,8 @@ class DetailScreen(Screen):
         self.app.pop_screen()
 
     def action_open_browser(self) -> None:
-        if self.quake.url:
+        """Only web pages open: on Windows webbrowser.open hands any string to os.startfile (files, programs)."""
+        if urlsplit(self.quake.url).scheme in ("http", "https"):
             webbrowser.open(self.quake.url)
 
     def action_copy_url(self) -> None:
