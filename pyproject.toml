@@ -50,6 +50,9 @@ version = { attr = "earthwave.__version__" }
 [tool.setuptools.packages.find]
 include = ["earthwave*"]
 
+[tool.setuptools.package-data]
+earthwave = ["data/*.json"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
