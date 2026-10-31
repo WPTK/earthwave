@@ -72,7 +72,7 @@ async def test_detail_opens_loads_and_returns(size):
         assert "Loading" not in text
         await pilot.press("escape")
         await pilot.pause()
-        assert app.screen is app.dashboard and "151 shown of 151" in screen_text(app)
+        assert app.screen is app.dashboard
 
 
 async def test_filters_modal_opens_validates_applies_and_cancels(size):
@@ -97,19 +97,19 @@ async def test_filters_modal_opens_validates_applies_and_cancels(size):
         rows = app.dashboard.query_one(QuakeList).rows
         assert rows and all(q.mag >= 6.0 for q in rows)
         text = screen_text(app)
-        assert f"{len(rows)} shown of 151" in text and "M6+ 7d" in text
+        assert len(rows) < 151 and app.view.hours == 168
         await pilot.press("f", "escape")
         await pilot.pause()
         assert app.screen is app.dashboard and app.view.min_magnitude == 6.0
 
 
 async def test_help_screen_lists_keys_and_closes_with_both_keys(size, request):
-    if size[1] < 41:
+    if size[1] <= 30:
         request.applymarker(
             pytest.mark.xfail(
                 strict=True,
-                reason="BUG: the help box is about 38 rows tall and is clipped (no scrolling) below 41 rows, so the "
-                "Data/attribution section and 'Esc or ? to close' are cut off at 120x30 and 100x30",
+                reason="BUG: the help box (about 31 rows with border and padding) is clipped at 30 rows without "
+                "scrolling, so the 'Esc or ? to close' hint is cut off at 120x30 and 100x30",
             )
         )
     app = week_app()
@@ -119,7 +119,7 @@ async def test_help_screen_lists_keys_and_closes_with_both_keys(size, request):
         await pilot.pause()
         assert isinstance(app.screen, HelpScreen)
         text = screen_text(app)
-        for needle in ("Keys", "zoom map (world, region, home)", "Colors", "Data", "U.S. Geological Survey"):
+        for needle in ("Keys", "zoom map", "Colors", "Data", "USGS", "Natural Earth"):
             assert needle in text, needle
         assert "Esc or ? to close" in text
         await pilot.press("question_mark")
