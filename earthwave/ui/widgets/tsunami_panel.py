@@ -28,7 +28,7 @@ def build_panel(
     checking: bool = False,
     expiry: Callable[[TsunamiAlert], datetime | None] = lambda alert: alert.expires,
 ) -> Text:
-    """The alerts in force. `overdue` ids are past their expiry with no word from their feed; `down` names feeds
+    """The alerts in force. `overdue` ids are past their expiry, awaiting a follow-up; `down` names feeds
     that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear.
     `expiry` says when each alert lapses (the store's answer, which covers alerts that state no expiry)."""
     if not alerts and checking:
@@ -40,7 +40,7 @@ def build_panel(
         text.append(f"{alert.level:<11}", LEVEL_COLORS[alert.level])
         text.append(f" {alert.headline} ", "white")
         if alert.id in overdue:
-            text.append("OVERDUE, feed has not confirmed it ended", "bold red")
+            text.append("OVERDUE, awaiting follow-up", "bold red")
         else:
             text.append(fmt_until(expiry(alert), now), "grey62")
         text.append("\n")
