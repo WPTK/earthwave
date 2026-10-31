@@ -47,13 +47,17 @@ def build_panel(
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
     if not alerts and not unknown:
-        text.append("No tsunami alerts in force\n", "grey50")
+        text.append("No tsunami alerts received\n", "grey50")  # not "in force": a feed is not answering in full
     if down:
         if unknown:
             text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", "bold red")
         else:
             text.append(f"Partial: {', '.join(down)}", "yellow")
     return text
+
+
+def offline_panel() -> Text:
+    return Text("Tsunami feeds not checked (offline)", style="bold yellow")
 
 
 class TsunamiPanel(Static):
@@ -77,3 +81,7 @@ class TsunamiPanel(Static):
             build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking, expiry=expiry)
         )
         self.set_class(pulse, "pulse")
+
+    def show_offline(self) -> None:
+        self.update(offline_panel())
+        self.set_class(False, "pulse")

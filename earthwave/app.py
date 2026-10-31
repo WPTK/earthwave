@@ -280,7 +280,10 @@ class EarthwaveApp(App):
         names = [n for n in TSUNAMI_FEEDS if n in self.scheduler.statuses]
         state = [(n, self.scheduler.freshness(n)) for n in names]
         down = [(n, f) for n, f in state if f in (Freshness.STALE, Freshness.ERROR)]
-        return down, bool(names) and all(f is not Freshness.FRESH for _, f in state)
+        # A feed that answers but skipped something (one tsunami.gov feed down, a product it could not fetch) is
+        # partial: the list may be missing an alert, so it must not read as clear.
+        partial = [(n, f) for n, f in state if f is Freshness.FRESH and self.scheduler.statuses[n].health.incomplete]
+        return down + partial, bool(names) and all(f is not Freshness.FRESH for _, f in state)
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""

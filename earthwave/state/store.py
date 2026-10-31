@@ -398,6 +398,8 @@ class Store:
                 self._sources[alert.id] = {alert.source}
             self._by_key[alert.dedupe_key] = record.id
             closed = self._close_referenced(record)
+            if old is None and self._closed_by_stored(record):
+                continue  # arrived after the product that ends it: never in force
             if silent:
                 continue
             live = [
@@ -416,19 +418,24 @@ class Store:
             elif record.level != old.level:
                 events.append(TsunamiChanged(record, old.level))
         if batch.source in LISTING_SOURCES and answering and not batch.backfill:
-            self._withdraw_unlisted(batch)
+            relisted = self._withdraw_unlisted(batch)
+            if not silent:  # its attention went when it was withdrawn: raise it again
+                events.extend(TsunamiIssued(r) for r in relisted if self._live(r, clock, answering))
         return [
             e
             for e in events
             if not isinstance(e, TsunamiIssued | TsunamiChanged) or self._in_force(e.alert, clock, answering)
         ]
 
-    def _withdraw_unlisted(self, batch: Batch) -> None:
-        """A complete listing no longer names an alert the source held: the source has ended it, quietly."""
+    def _withdraw_unlisted(self, batch: Batch) -> list[TsunamiAlert]:
+        """A complete listing no longer names an alert the source held: the source has ended it, quietly.
+        Returns the alerts that were withdrawn earlier and are listed again."""
         listed = {self._alias.get(a.id, a.id) for a in batch.alerts}
+        relisted = []
         for rid in listed:
             if self._closed.get(rid) == "withdrawn":  # listed again: it never ended
                 del self._closed[rid]
+                relisted.append(self._tsunamis[rid])
         for held in self._tsunamis.values():
             # Only a record this source alone vouches for: one a second source also carries is not its to end.
             if (
@@ -437,6 +444,33 @@ class Store:
                 and self._sources.get(held.id) == {batch.source}
             ):
                 self._closed.setdefault(held.id, "withdrawn")
+        return relisted
+
+    def _closed_by_stored(self, alert: TsunamiAlert) -> bool:
+        """Close `alert` when a product already held ends it: one that names it and is not older, or (a snapshot
+        source such as JMA names the earlier reports of an event, not the later) a newer cancellation among the
+        reports it names. It was retried after its own cancellation or replacement, which found nothing to close."""
+        for ref in alert.references:
+            target = self.get_alert(ref)
+            if (
+                target is not None
+                and target.level == levels.CANCELLATION
+                and target.issued
+                and alert.issued
+                and target.issued > alert.issued
+            ):
+                self._closed[alert.id] = "cancelled"
+                return True
+        for other in self._tsunamis.values():
+            if other.id == alert.id or not any(self.get_alert(ref) is alert for ref in other.references):
+                continue
+            if other.level == levels.INFORMATION and not (other.source in SNAPSHOT_SOURCES and other.areas):
+                continue
+            if other.issued and alert.issued and other.issued < alert.issued:
+                continue
+            self._closed[alert.id] = "cancelled" if other.level == levels.CANCELLATION else "superseded"
+            return True
+        return False
 
     def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
         current = self.get_alert(alert.id)

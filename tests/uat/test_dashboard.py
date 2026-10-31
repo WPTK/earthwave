@@ -30,11 +30,12 @@ async def test_map_and_tsunami_panel_only_where_the_width_allows(size):
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
         text = screen_text(app)
+        assert "No tsunami alerts in force" in text  # at every width: the map goes first, never the tsunami text
         if size[0] >= 120:
-            assert "Map · world" in text and "No tsunami alerts in force" in text
+            assert "Map · world" in text
             assert not app.dashboard.has_class("no-map")
         else:
-            assert "Map ·" not in text and "No tsunami alerts in force" not in text
+            assert "Map ·" not in text
             assert app.dashboard.has_class("no-map")
 
 

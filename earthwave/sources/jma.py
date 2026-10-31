@@ -45,6 +45,24 @@ def parse_coordinate(text: str) -> tuple[float, float] | None:
     return (float(match["lat"]), float(match["lon"])) if match else None
 
 
+def fallback_alert(entry: dict) -> TsunamiAlert:
+    """An alert from the list entry alone, for a report whose detail file can never be read: better a headline
+    than a Warning nobody sees. The level is the entry's English title (INFORMATION when it names none)."""
+    title = entry.get("en_ttl") or "Tsunami report"
+    place, mag = entry.get("en_anm") or "", entry.get("mag")
+    reported = parse_time(entry.get("rdt"))
+    return TsunamiAlert(
+        id=f"jma:{entry['json']}",
+        dedupe_key=f"jma:{entry['json']}",
+        source="jma",
+        level=levels.level_from_text(title) or levels.INFORMATION,
+        headline=f"JMA {title}" + (f": {place}" if place else "") + (f" M{mag}" if mag else ""),
+        issued=reported,
+        updated=reported,
+        text="Details unavailable: the report could not be read.",
+    )
+
+
 def parse_detail(detail: dict, entry: dict) -> TsunamiAlert:
     """One detail file (with its list entry for the English title and file name) to a TsunamiAlert."""
     head, body = detail.get("Head", {}), detail.get("Body", {})
@@ -63,11 +81,11 @@ def parse_detail(detail: dict, entry: dict) -> TsunamiAlert:
     origin_time = parse_time(quake.get("OriginTime"))
     if coord and origin_time:
         origin = (origin_time, coord[0], coord[1])
-    areas = tuple(
-        i["Area"].get("enName") or i["Area"].get("Name", "")
-        for i in items
-        if i["Category"]["Kind"]["Code"] in KIND_LEVELS
-    )
+    # Only the areas at the report's own level: a lifted or forecast-only area is not covered by the warning. A
+    # report with nothing at that level (a lift, an all-forecast report) keeps every coded area.
+    coded = [i for i in items if i["Category"]["Kind"]["Code"] in KIND_LEVELS]
+    same = [i for i in coded if KIND_LEVELS[i["Category"]["Kind"]["Code"]] == level]
+    areas = tuple(i["Area"].get("enName") or i["Area"].get("Name", "") for i in same or coded)
     comment = (body.get("Comments") or {}).get("WarningComment") or {}
     title = entry.get("en_ttl") or head.get("enTitle") or "Tsunami report"
     place = entry.get("en_anm") or ""
@@ -131,16 +149,15 @@ class JmaSource:
                     raise ValueError("detail is not an object")
                 alert = parse_detail(payload, entry)
             except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
-                if permanent(exc):
-                    count = self._failures[name] = self._failures.get(name, 0) + 1
-                    if count >= MAX_ENTRY_FAILURES:
-                        log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
-                        self._failures.pop(name)
-                        self._remember(name)
-                        continue
-                log.debug("jma: skipping %s: %r", name, exc)
-                skipped = True
-                continue
+                count = self._failures.get(name, 0)
+                if permanent(exc):  # outages never count: a live report must not be dropped
+                    count = self._failures[name] = count + 1
+                if not permanent(exc) or count < MAX_ENTRY_FAILURES:
+                    log.debug("jma: skipping %s: %r", name, exc)
+                    skipped = True
+                    continue
+                log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
+                alert = fallback_alert(entry)
             earlier = self._ids_by_event.setdefault(str(entry.get("eid") or name), [])
             alert = replace(alert, references=tuple(earlier))
             earlier.append(alert.id)

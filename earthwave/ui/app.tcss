@@ -155,8 +155,19 @@ Screen.no-map #map {
     display: none;
 }
 
+/* Narrow: the map is gone (no-map) but the tsunami panel stays, as a strip under the list, so a state that has no
+   other text here (UNKNOWN, an acknowledged alert) is still readable. */
+Screen.narrow #main {
+    layout: vertical;
+}
+
+Screen.narrow #left {
+    height: 1fr;
+}
+
 Screen.narrow #right {
-    display: none;
+    width: 100%;
+    height: auto;
 }
 
 /* Full-screen map: hide the list and the tsunami panel. These come after the narrow and no-map rules at the same
@@ -169,6 +180,7 @@ Screen.map-full #tsunami {
 Screen.map-full #right {
     display: block;
     width: 1fr;
+    height: 1fr;
 }
 
 Screen.map-full #map {

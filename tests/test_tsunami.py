@@ -1295,7 +1295,7 @@ def test_panel_never_reads_as_an_all_clear_while_feeds_are_down(kclock):
     every = build_panel([], NOW, down=("tsunamigov failed", "nws stale"), unknown=True).plain
     assert "UNKNOWN" in every and "tsunamigov failed, nws stale" in every and "No tsunami alerts" not in every
     one = build_panel([], NOW, down=("jma failed",)).plain
-    assert "UNKNOWN" not in one and "Partial: jma failed" in one and "No tsunami alerts in force" in one
+    assert "UNKNOWN" not in one and "Partial: jma failed" in one and "in force" not in one
     late = build_panel([kam(1)], NOW + timedelta(hours=5), overdue=frozenset({kam(1).id}), down=("nws failed",)).plain
     assert "OVERDUE" in late and "Partial: nws failed" in late
 

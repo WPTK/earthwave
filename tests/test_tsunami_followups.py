@@ -80,6 +80,7 @@ async def test_jma_gives_up_on_a_report_that_never_parses(caplog):
     polls = [await feed.poll() for _ in range(jma.MAX_ENTRY_FAILURES + 3)]
     assert all(b.meta["incomplete"] for b in polls[: jma.MAX_ENTRY_FAILURES - 1])
     assert not any(b.meta["incomplete"] for b in polls[jma.MAX_ENTRY_FAILURES - 1 :])
+    assert len(polls[jma.MAX_ENTRY_FAILURES - 1].alerts) == 1  # a headline from the list entry, not a silent loss
     assert caplog.text.count("giving up") == 1 and caplog.text.count("skipping") == 0
 
 
