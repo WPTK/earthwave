@@ -377,6 +377,12 @@ def test_status_bar_text():
     assert "unseen" not in build_status(StatusInfo((), 0, 0, None, "x", 0), ASCII).plain
 
 
+def test_status_bar_names_a_feed_that_answers_but_skips_things():
+    lines = (SourceLine("usgs", Freshness.FRESH, 5), SourceLine("tsunamigov", Freshness.FRESH, 5, incomplete=True))
+    plain = build_status(StatusInfo(lines, 1, 1, None, "x", 0), UNICODE).plain
+    assert "tsunamigov incomplete, last ok 5s" in plain and "feeds ok" not in plain
+
+
 def test_status_bar_healthy_feeds_are_one_indicator():
     fresh = tuple(SourceLine(n, Freshness.FRESH, 5) for n in ("usgs", "nws", "jma"))
     plain = build_status(StatusInfo(fresh, 1, 1, None, "x", 0), UNICODE).plain

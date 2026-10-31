@@ -1211,11 +1211,13 @@ async def test_follow_up_of_an_overdue_alert_is_a_change_and_its_cancel_a_cancel
     )
     events = merge(store, kclock, later)
     assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.WARNING
+    early = ReplayClock(NOW, real=lambda: 0.0)
     store2 = Store()
     store2.answered_since = lambda source, when: False  # a feed that has said nothing since
-    merge(store2, kclock, kam(1))
-    assert store2.alert_status(kam(1), kclock) == "overdue"
-    events = merge(store2, kclock, replace(kam(2), expires=None))
+    merge(store2, early, kam(1))
+    early.advance(5 * 3600)
+    assert store2.alert_status(kam(1), early) == "overdue"
+    events = merge(store2, early, replace(kam(2), expires=None))
     assert [type(e) for e in events] == [TsunamiCancelled] and events[0].alert.id == kam(1).id
 
 
@@ -1243,7 +1245,7 @@ def failing_app(handler=None, start=NOW + timedelta(hours=5)) -> EarthwaveApp:
 async def test_offline_start_does_not_say_all_clear():
     app = failing_app()
     async with app.run_test(size=(120, 40)) as pilot:
-        await wait_for(lambda: app.tsunami_feeds_down()[1])
+        await wait_for(lambda: app.tsunami_feeds_down()[0] and app.tsunami_feeds_down()[1])
         app.dashboard.refresh_view()
         await pilot.pause()
         panel = str(app.dashboard.query_one("#tsunami").render())
@@ -1266,7 +1268,7 @@ async def test_one_failing_feed_is_a_partial_notice_not_an_unknown():
         await pilot.pause()
         down, every = app.tsunami_feeds_down()
         assert "nws" not in [n for n, _ in down]
-        assert not every
+        assert not every  # nws answered
         assert "UNKNOWN" not in str(app.dashboard.query_one("#tsunami").render())
 
 
@@ -1294,3 +1296,67 @@ async def test_warning_stays_on_screen_when_its_feed_dies_past_expiry():
         assert app.dashboard.query_one("#banner").display
         panel = str(app.dashboard.query_one("#tsunami").render())
         assert "WARNING" in panel and "OVERDUE" in panel
+
+
+async def test_restart_replay_in_an_incomplete_batch_raises_no_events(kclock):
+    kclock.advance(5 * 3600)  # the Warning expired long before this start
+    store = Store()
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),), meta={"incomplete": True})])
+    results = []
+    sched = Scheduler([feed], store, kclock, results.append)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        result = await sched.poll_source("tsunamigov", client)
+    assert result.events == ()
+    assert store.alert_status(kam(1), kclock) == "expired" and store.active_alerts(kclock) == []
+
+
+async def test_overdue_ends_even_if_the_feed_never_completes_a_poll(kclock):
+    store = Store()
+    incomplete = Batch("tsunamigov", NOW, meta={"incomplete": True})
+    feed = ScriptedFeed([Batch("tsunamigov", NOW, alerts=(kam(1),), meta={"incomplete": True}), incomplete, incomplete])
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        assert sched.statuses["tsunamigov"].health.incomplete
+        kclock.advance(5 * 3600)
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "overdue"
+        kclock.advance(7 * 3600)  # more than OVERDUE_MAX after the 03:51Z expiry
+        await sched.poll_source("tsunamigov", client)
+    assert store.alert_status(kam(1), kclock) == "expired"
+
+
+async def test_jma_advisory_retried_late_does_not_end_the_newer_warning():
+    feed = JmaFeed({"a.json": ("62", "2026-10-10T03:37:00+09:00"), "b.json": ("51", "2026-10-10T04:37:00+09:00")})
+    feed.fail = {"a.json"}
+    store, clock = jma_store()
+    first = await feed.poll()
+    store.merge(first, clock)
+    feed.fail = set()
+    retried = await feed.poll()
+    assert retried.alerts[0].level == levels.ADVISORY and retried.alerts[0].references == (first.alerts[0].id,)
+    store.merge(retried, clock)
+    assert store.alert_status(first.alerts[0], clock) == "active"
+    assert store.alert_status(retried.alerts[0], clock) == "active"
+
+
+def test_panel_checks_before_it_clears():
+    assert build_panel([], NOW, checking=True).plain == "Checking tsunami feeds"
+
+
+async def test_no_fresh_feed_never_reads_as_all_clear():
+    config = with_overrides(Config(), 2.5, 24, None, "ascii")
+    app = EarthwaveApp(config, clock=ReplayClock(NOW, real=lambda: 0.0), run_scheduler=False, ticks=False)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.scheduler_running = True  # polling is on, but nothing has answered yet
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "Checking tsunami feeds" in panel and "No tsunami alerts" not in panel
+        app.scheduler.statuses["nws"].health.failures = 1  # one feed fails while the others are still loading
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        panel = str(app.dashboard.query_one("#tsunami").render())
+        assert "UNKNOWN" in panel and "nws failed" in panel and "No tsunami alerts" not in panel

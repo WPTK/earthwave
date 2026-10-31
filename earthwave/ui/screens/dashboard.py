@@ -123,11 +123,17 @@ class DashboardScreen(Screen):
         self.query_one(Banner).show(actionable, unacked)
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
-        feeds, all_down = app.tsunami_feeds_down()
+        feeds, none_fresh = app.tsunami_feeds_down()
         down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in feeds)
         pulse = bool(unacked) and blink
         self.query_one(TsunamiPanel).show(
-            active, app.clock.now(), pulse=pulse, overdue=overdue, down=down, unknown=all_down
+            active,
+            app.clock.now(),
+            pulse=pulse,
+            overdue=overdue,
+            down=down,
+            unknown=none_fresh and bool(down),
+            checking=none_fresh and not down,
         )
 
     def refresh_status(self, shown: int | None = None) -> None:
@@ -135,7 +141,10 @@ class DashboardScreen(Screen):
         if shown is None:
             shown = len(self.query_one(QuakeList).rows)
         sched = app.scheduler
-        lines = tuple(SourceLine(name, sched.freshness(name), sched.age(name)) for name in sched.statuses)
+        lines = tuple(
+            SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
+            for name in sched.statuses
+        )
         next_poll = (
             min((sched.next_poll_in(n) for n in sched.statuses), default=None) if app.scheduler_running else None
         )

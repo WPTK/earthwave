@@ -24,9 +24,12 @@ def build_panel(
     overdue: frozenset[str] = frozenset(),
     down: tuple[str, ...] = (),
     unknown: bool = False,
+    checking: bool = False,
 ) -> Text:
     """The alerts in force. `overdue` ids are past their expiry with no word from their feed; `down` names feeds
     that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear."""
+    if not alerts and checking:
+        return Text("Checking tsunami feeds", style="grey50")
     if not alerts and not down:
         return Text("No tsunami alerts in force", style="grey50")
     text = Text(no_wrap=True, overflow="ellipsis")
@@ -64,6 +67,7 @@ class TsunamiPanel(Static):
         overdue: frozenset[str] = frozenset(),
         down: tuple[str, ...] = (),
         unknown: bool = False,
+        checking: bool = False,
     ) -> None:
-        self.update(build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown))
+        self.update(build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking))
         self.set_class(pulse, "pulse")

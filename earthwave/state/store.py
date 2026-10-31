@@ -43,6 +43,7 @@ EPISODE_GAP = timedelta(minutes=30)  # exceedances further apart than this are s
 ALERT_HINT = frozenset({levels.WARNING, levels.ADVISORY, levels.WATCH})  # levels that speed the gauge polling up
 
 QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
+OVERDUE_MAX = timedelta(hours=6)  # a feed that never completes a poll cannot hold an alert open longer
 IN_FORCE = ("active", "overdue")  # alert statuses that count as in force
 SNAPSHOT_SOURCES = frozenset({"jma"})  # each report restates the whole event, so a later one replaces its predecessors
 
@@ -281,9 +282,16 @@ class Store:
         return "overdue" if self._overdue(alert, clock) else "expired"
 
     def _overdue(self, alert: TsunamiAlert, clock: Clock) -> bool:
-        expiry = self.expiry(alert)
+        """Past its expiry with no complete poll since, for at most OVERDUE_MAX, and only if the store held it while
+        it was in force: an alert first merged already expired (a restart reading old entries) never was."""
+        expiry, now = self.expiry(alert), clock.now()
+        seen = self._first_seen.get(alert.id)
         return (
-            expiry <= clock.now() and alert.level in levels.ACTIONABLE and not self.answered_since(alert.source, expiry)
+            alert.level in levels.ACTIONABLE
+            and expiry <= now < expiry + OVERDUE_MAX
+            and seen is not None
+            and seen < expiry
+            and not self.answered_since(alert.source, expiry)
         )
 
     def expiry(self, alert: TsunamiAlert) -> datetime:
@@ -372,7 +380,9 @@ class Store:
             closed = self._close_referenced(record)
             if silent:
                 continue
-            live = [c for c in closed if self._live(c, clock)]
+            live = [
+                c for c in closed if self._live(c, clock)
+            ]  # no `answering` here, deliberately: this batch has not yet confirmed an alert it is closing
             if record.level == levels.CANCELLATION:
                 # A cancellation closes its targets even when it carries its own, already-passed expiry.
                 events.extend(TsunamiCancelled(c) for c in live)
@@ -433,8 +443,8 @@ class Store:
                 continue
             if target.level == levels.CANCELLATION:
                 continue
-            if snapshot and target.issued and alert.issued and alert.issued < target.issued:
-                continue  # a report retried late does not end what came after it
+            if alert.issued and target.issued and alert.issued < target.issued:
+                continue  # a product retried late does not end what came after it
             self._closed[target.id] = status
             closed.append(target)
         return closed

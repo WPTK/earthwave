@@ -166,7 +166,8 @@ class Scheduler:
                 events.append(SourceRecovered(name))
             health.failures = 0
             health.last_ok = self._clock.now()
-            if batch is not None and not batch.meta.get("incomplete"):
+            health.incomplete = bool(batch is not None and batch.meta.get("incomplete"))
+            if batch is not None and not health.incomplete:
                 health.last_complete = started
             health.last_error = None
             if batch is not None and batch.cursor is not None:

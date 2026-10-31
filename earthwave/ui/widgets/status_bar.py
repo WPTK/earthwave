@@ -19,6 +19,7 @@ class SourceLine:
     name: str
     freshness: Freshness
     age: float | None  # seconds since the last good poll
+    incomplete: bool = False  # answering, but the last poll skipped something
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,14 +38,15 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
     if info.alert_state == "alarm":
         text.append(" TSUNAMI ", "bold white on #7f1d1d")
-    unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH]
+    unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     if info.sources and not unhealthy:
         text.append(f" {glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
         text.append(" feeds ok", "grey70")
     for line in unhealthy:
         age = f", last ok {fmt_age(line.age)}" if line.age is not None else ""
         text.append(f" {glyphs.dot}", FRESHNESS_COLORS[line.freshness])
-        text.append(f" {line.name} {FRESHNESS_WORDS[line.freshness]}{age}", "grey70")
+        word = FRESHNESS_WORDS.get(line.freshness, "incomplete")
+        text.append(f" {line.name} {word}{age}", "grey70")
     text.append(f" {glyphs.bar} ", "grey42")
     text.append(f"{info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")
