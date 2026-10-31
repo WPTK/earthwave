@@ -15,6 +15,7 @@ class SourceHealth:
 
     failures: int = 0
     last_ok: datetime | None = None
+    last_complete: datetime | None = None  # start of the newest poll that skipped nothing
     last_error: str | None = None
     polls: int = 0
 

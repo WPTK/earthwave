@@ -178,12 +178,14 @@ class TsunamiGovSource:
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         alerts: list[TsunamiAlert] = []
         failures: list[Exception] = []
+        skipped = False  # something the feeds list could not be fetched: this poll is not a full answer
         for feed in FEEDS:
             try:
                 entries = parse_atom(await self._get_text(client, feed))
             except (httpx.HTTPError, ET.ParseError) as exc:
                 log.warning("tsunamigov: %s unavailable: %r", feed, exc)
                 failures.append(exc)
+                skipped = True
                 continue
             # Oldest first, so an update is merged after the product it supersedes.
             for entry in reversed(entries):
@@ -202,11 +204,13 @@ class TsunamiGovSource:
                     if not _permanent(exc):
                         # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
                         log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], exc)
+                        skipped = True
                         continue
                     count = self._failures.get(entry["id"], 0) + 1
                     self._failures[entry["id"]] = count
                     if count < MAX_ENTRY_FAILURES:
                         log.debug("tsunamigov: %s failed (%d): %r", entry["cap_url"], count, exc)
+                        skipped = True
                         continue
                     log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
                 self._failures.pop(entry["id"], None)
@@ -217,4 +221,4 @@ class TsunamiGovSource:
             raise failures[0]
         log.debug("tsunamigov: %d new products", len(alerts))
         alerts.sort(key=lambda a: a.issued or datetime.min.replace(tzinfo=UTC))
-        return Batch(self.name, self._clock.now(), alerts=tuple(alerts))
+        return Batch(self.name, self._clock.now(), alerts=tuple(alerts), meta={"incomplete": skipped})

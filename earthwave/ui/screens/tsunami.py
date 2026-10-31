@@ -113,7 +113,7 @@ class TsunamiScreen(Screen):
                 SOURCE_NAMES.get(alert.source, alert.source),
                 "; ".join(alert.areas)[:40],
                 fmt_time(alert.issued, tz) if alert.issued else "",
-                fmt_until(alert.expires, now) if status in IN_FORCE else "",
+                "overdue" if status == "overdue" else fmt_until(alert.expires, now) if status == "active" else "",
                 Text(status, STATUS_STYLE.get(status, "grey62")),
                 key=alert.id,
             )

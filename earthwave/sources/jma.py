@@ -110,6 +110,7 @@ class JmaSource:
             raise ValueError("jma: list.json is not a list")
         now = self._clock.now()
         alerts: list[TsunamiAlert] = []
+        skipped = False  # a report that could not be fetched: this poll is not a full answer
         # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
         for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
             name = entry.get("json")
@@ -125,6 +126,7 @@ class JmaSource:
                 alert = parse_detail(payload, entry)
             except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
                 log.warning("jma: skipping %s: %r", name, exc)
+                skipped = skipped or isinstance(exc, httpx.HTTPError)
                 continue
             earlier = self._ids_by_event.setdefault(str(entry.get("eid") or name), [])
             alert = replace(alert, references=tuple(earlier))
@@ -134,4 +136,4 @@ class JmaSource:
                 del self._seen[next(iter(self._seen))]
             alerts.append(alert)
         log.debug("jma: %d new reports", len(alerts))
-        return Batch(self.name, now, alerts=tuple(alerts))
+        return Batch(self.name, now, alerts=tuple(alerts), meta={"incomplete": skipped})

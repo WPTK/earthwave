@@ -276,12 +276,15 @@ class Store:
             return "cancellation"
         if alert.id in self._closed:
             return self._closed[alert.id]
+        if self.expiry(alert) > clock.now():
+            return "active"
+        return "overdue" if self._overdue(alert, clock) else "expired"
+
+    def _overdue(self, alert: TsunamiAlert, clock: Clock) -> bool:
         expiry = self.expiry(alert)
-        if expiry <= clock.now():
-            if alert.level in levels.ACTIONABLE and not self.answered_since(alert.source, expiry):
-                return "overdue"
-            return "expired"
-        return "active"
+        return (
+            expiry <= clock.now() and alert.level in levels.ACTIONABLE and not self.answered_since(alert.source, expiry)
+        )
 
     def expiry(self, alert: TsunamiAlert) -> datetime:
         """When the alert lapses: its own expiry, else DEFAULT_TTL after it was last issued, updated or first seen."""
@@ -353,6 +356,7 @@ class Store:
         """
         events: list[Event] = []
         silent = batch.backfill or bool(batch.meta.get("silent"))
+        answering = None if batch.meta.get("incomplete") else batch.source  # this batch is itself an answer
         for alert in batch.alerts:
             alert = self._link(alert)
             old = self._find_duplicate(alert)
@@ -372,7 +376,7 @@ class Store:
             if record.level == levels.CANCELLATION:
                 # A cancellation closes its targets even when it carries its own, already-passed expiry.
                 events.extend(TsunamiCancelled(c) for c in live)
-            elif not self._live(record, clock):
+            elif not self._live(record, clock, answering):
                 continue
             elif live:
                 # A replacement of a live alert carries the attention over, even at the same level and areas.
@@ -382,25 +386,33 @@ class Store:
             elif record.level != old.level:
                 events.append(TsunamiChanged(record, old.level))
         return [
-            e for e in events if not isinstance(e, TsunamiIssued | TsunamiChanged) or self._in_force(e.alert, clock)
+            e
+            for e in events
+            if not isinstance(e, TsunamiIssued | TsunamiChanged) or self._in_force(e.alert, clock, answering)
         ]
 
-    def _in_force(self, alert: TsunamiAlert, clock: Clock) -> bool:
+    def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
         current = self.get_alert(alert.id)
-        return current is not None and self.alert_status(current, clock) in IN_FORCE
+        return current is not None and self._live(current, clock, answering) and current.id not in self._closed
 
-    def _live(self, alert: TsunamiAlert, clock: Clock) -> bool:
-        """Products already expired when first merged (a restart reading old feed entries) raise no events."""
-        return self.expiry(alert) > clock.now()
+    def _live(self, alert: TsunamiAlert, clock: Clock, answering: str | None = None) -> bool:
+        """In force now. Products already expired when first merged (a restart reading old feed entries) raise no
+        events, but an overdue one is still in force, so its follow-up is a change and not a new alarm.
+        `answering` is the source whose complete batch is being merged: it has just confirmed what it holds."""
+        if self.expiry(alert) > clock.now():
+            return True
+        return alert.source != answering and self._overdue(alert, clock)
 
     def _close_referenced(self, alert: TsunamiAlert) -> list[TsunamiAlert]:
         """Close the open alerts this product cancels or supersedes; returns those that were still open.
 
-        An INFORMATION statement closes nothing, except from a snapshot source (JMA), where it is a lift report.
+        An INFORMATION statement closes nothing, except from a snapshot source (JMA) when it names areas (an
+        observation-only report names none) and then only reports that are not newer than itself: a lift report.
         A cancel that names no known alert closes only the open, actionable alerts of its own quake and source,
         narrowed to overlapping areas when it states any.
         """
-        if alert.level == levels.INFORMATION and alert.source not in SNAPSHOT_SOURCES:
+        snapshot = alert.level == levels.INFORMATION and alert.source in SNAPSHOT_SOURCES and bool(alert.areas)
+        if alert.level == levels.INFORMATION and not snapshot:
             return []
         targets = [self.get_alert(ref) for ref in alert.references]
         if alert.level == levels.CANCELLATION and not any(targets) and alert.quake_ref:
@@ -421,6 +433,8 @@ class Store:
                 continue
             if target.level == levels.CANCELLATION:
                 continue
+            if snapshot and target.issued and alert.issued and alert.issued < target.issued:
+                continue  # a report retried late does not end what came after it
             self._closed[target.id] = status
             closed.append(target)
         return closed

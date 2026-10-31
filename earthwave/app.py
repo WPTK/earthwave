@@ -216,15 +216,15 @@ class EarthwaveApp(App):
             self.screen.refresh_alerts()
         self.refresh_gauges()
 
-    def tsunami_feeds_down(self) -> list[tuple[str, Freshness]]:
-        """Tsunami feeds not answering (loading, late or failing); while any is, silence is not an all-clear."""
+    def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
+        """(tsunami feeds late or failing, whether every tsunami feed is). A feed that has not been polled yet is
+        not an outage. While all are down, an empty alert list says nothing."""
         if not self.scheduler_running:
-            return []
-        return [
-            (name, fresh)
-            for name in TSUNAMI_FEEDS
-            if name in self.scheduler.statuses and (fresh := self.scheduler.freshness(name)) is not Freshness.FRESH
-        ]
+            return [], False
+        names = [n for n in TSUNAMI_FEEDS if n in self.scheduler.statuses]
+        state = [(n, self.scheduler.freshness(n)) for n in names]
+        down = [(n, f) for n, f in state if f in (Freshness.STALE, Freshness.ERROR)]
+        return down, bool(names) and len(down) == len(names)
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""

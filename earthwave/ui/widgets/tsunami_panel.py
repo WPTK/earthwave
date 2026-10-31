@@ -23,9 +23,10 @@ def build_panel(
     max_lines: int = 8,
     overdue: frozenset[str] = frozenset(),
     down: tuple[str, ...] = (),
+    unknown: bool = False,
 ) -> Text:
     """The alerts in force. `overdue` ids are past their expiry with no word from their feed; `down` names feeds
-    that are not answering, in which case an empty list is not an all-clear."""
+    that are not answering and `unknown` says every one is, in which case an empty list is not an all-clear."""
     if not alerts and not down:
         return Text("No tsunami alerts in force", style="grey50")
     text = Text(no_wrap=True, overflow="ellipsis")
@@ -39,9 +40,13 @@ def build_panel(
         text.append("\n")
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
+    if not alerts and not unknown:
+        text.append("No tsunami alerts in force\n", "grey50")
     if down:
-        lead = "Feeds not answering" if alerts else "Tsunami status UNKNOWN, feeds not answering"
-        text.append(f"{lead}: {', '.join(down)}", "bold red")
+        if unknown:
+            text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", "bold red")
+        else:
+            text.append(f"Partial: {', '.join(down)}", "yellow")
     return text
 
 
@@ -58,6 +63,7 @@ class TsunamiPanel(Static):
         pulse: bool,
         overdue: frozenset[str] = frozenset(),
         down: tuple[str, ...] = (),
+        unknown: bool = False,
     ) -> None:
-        self.update(build_panel(alerts, now, overdue=overdue, down=down))
+        self.update(build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown))
         self.set_class(pulse, "pulse")

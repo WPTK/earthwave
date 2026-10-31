@@ -123,9 +123,12 @@ class DashboardScreen(Screen):
         self.query_one(Banner).show(actionable, unacked)
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
-        down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in app.tsunami_feeds_down())
+        feeds, all_down = app.tsunami_feeds_down()
+        down = tuple(f"{name} {FRESHNESS_WORDS[fresh]}" for name, fresh in feeds)
         pulse = bool(unacked) and blink
-        self.query_one(TsunamiPanel).show(active, app.clock.now(), pulse=pulse, overdue=overdue, down=down)
+        self.query_one(TsunamiPanel).show(
+            active, app.clock.now(), pulse=pulse, overdue=overdue, down=down, unknown=all_down
+        )
 
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave
