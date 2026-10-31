@@ -516,5 +516,5 @@ class MapPanel(Widget, can_focus=True):
                 self._by_row.setdefault(marker.row, []).append(marker)
         frame = self._frame
         if y >= frame.rows or y >= len(frame.base):
-            return Strip.blank(self.size.width)
+            return Strip.blank(self.size.width, Style())
         return Strip(row_segments(frame.base[y], self._by_row.get(y, ()), self._tint_by_row.get(y)))
