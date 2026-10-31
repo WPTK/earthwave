@@ -16,6 +16,9 @@ from pathlib import Path
 
 import shapefile
 
+# Source: Natural Earth 1:110m physical vectors, ne_110m_coastline, version 4.1.0 (public domain).
+# Simplification is planar Douglas-Peucker in degrees (default 0.5), so it is coarser in longitude at high
+# latitudes; regional zoom may need the 1:50m dataset and a smaller tolerance.
 URL = "https://naciscdn.org/naturalearth/110m/physical/ne_110m_coastline.zip"
 OUT = Path(__file__).resolve().parent.parent / "earthwave" / "data" / "coastline_110m.json"
 

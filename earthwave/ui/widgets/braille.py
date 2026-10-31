@@ -94,11 +94,11 @@ class BrailleCanvas:
         return False
 
     def line(self, x0: int, y0: int, x1: int, y1: int) -> None:
-        """Bresenham line between two dot coordinates (either end may be off canvas)."""
-        if (x0 < 0 and x1 < 0) or (y0 < 0 and y1 < 0) or (x0 >= self.width and x1 >= self.width) or (
-            y0 >= self.height and y1 >= self.height
-        ):
+        """Bresenham line between two dot coordinates; either end may be off canvas (clipped first)."""
+        clipped = self._clip(x0, y0, x1, y1)
+        if clipped is None:
             return
+        x0, y0, x1, y1 = clipped
         dx, dy = abs(x1 - x0), -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
         sy = 1 if y0 < y1 else -1
@@ -114,6 +114,32 @@ class BrailleCanvas:
             if e2 <= dx:
                 err += dx
                 y0 += sy
+
+    def _clip(self, x0: int, y0: int, x1: int, y1: int) -> tuple[int, int, int, int] | None:
+        """Liang-Barsky clip to the canvas; segments already inside are returned untouched."""
+        w, h = self.width - 1, self.height - 1
+        if 0 <= x0 <= w and 0 <= x1 <= w and 0 <= y0 <= h and 0 <= y1 <= h:
+            return x0, y0, x1, y1
+        dx, dy = x1 - x0, y1 - y0
+        t0, t1 = 0.0, 1.0
+        for p, q in ((-dx, x0), (dx, w - x0), (-dy, y0), (dy, h - y0)):
+            if p == 0:
+                if q < 0:
+                    return None
+                continue
+            t = q / p
+            if p < 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+            if t0 > t1:
+                return None
+        return (
+            round(x0 + t0 * dx),
+            round(y0 + t0 * dy),
+            round(x0 + t1 * dx),
+            round(y0 + t1 * dy),
+        )
 
     def cell_bits(self, col: int, row: int) -> int:
         return self._cells[row * self.cols + col]
@@ -169,14 +195,15 @@ def draw_polyline(canvas: BrailleCanvas, points: Sequence[tuple[float, float]], 
     pts = _unwrap(points)
     if len(pts) < 2:
         return
-    span = view.lon1 - view.lon0
     lo = min(p[0] for p in pts)
     hi = max(p[0] for p in pts)
+    if max(p[1] for p in pts) < view.lat0 or min(p[1] for p in pts) > view.lat1:
+        return
     k_min = int((view.lon0 - hi) // 360) - 1
     k_max = int((view.lon1 - lo) // 360) + 1
     for k in range(k_min, k_max + 1):
         shift = 360.0 * k
-        if hi + shift < view.lon0 - span or lo + shift > view.lon1 + span:
+        if hi + shift < view.lon0 or lo + shift > view.lon1:
             continue
         xy = [project(lon + shift, lat, view, canvas.width, canvas.height) for lon, lat in pts]
         for (xa, ya), (xb, yb) in itertools.pairwise(xy):

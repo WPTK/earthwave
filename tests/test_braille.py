@@ -39,8 +39,10 @@ def test_wrap_lon_and_project_cell():
     view = Viewport(150, -60, 210, 0)  # spans the antimeridian
     assert wrap_lon(-170, view) == pytest.approx(190)
     assert project_cell(-170, -30, view, 60, 15) is not None
-    assert project_cell(100, -30, view, 60, 15) is None
-    assert project_cell(180, 10, view, 60, 15) is None
+    assert project_cell(180, -30, view, 60, 15) is not None
+    assert project_cell(100, -30, view, 60, 15) is None  # west of lon0
+    assert project_cell(-149, -30, view, 60, 15) is None  # just east of lon1 (211)
+    assert project_cell(180, 10, view, 60, 15) is None  # north of lat1
     assert project_cell(-180, 90, WORLD, 80, 24) == (0, 0)
     assert project_cell(179.9, -90, WORLD, 80, 24) == (79, 23)
 
@@ -113,17 +115,39 @@ def test_coastline_data_shape():
 
 
 def test_coastline_cache_returns_private_copies():
+    before = coastline_canvas(40, 12).render()
     a = coastline_canvas(40, 12)
     a.set(0, 0)
-    a.clear()
-    b = coastline_canvas(40, 12)
-    assert any(any(ch != "\u2800" for ch in row) for row in b.render())
+    a.set(1, 1)
+    assert a.render() != before
+    assert coastline_canvas(40, 12).render() == before
+
+
+def test_huge_offcanvas_segment_is_clipped_fast():
+    view = Viewport(10, 10, 11, 11)
+    c = BrailleCanvas(20, 5)
+    # ~36 million dots long at this scale; unclipped stepping would take millions of iterations.
+    draw_polyline(c, [(-170, 10.5), (0, 10.5), (170, 10.5)], view)
+    y = round(project(0, 10.5, view, c.width, c.height)[1])
+    assert all(c.get(x, y) for x in range(c.width))
+    c.clear()
+    c.line(-10_000_000, 3, 10_000_000, 3)
+    assert all(c.get(x, 3) for x in range(c.width))
+    c.clear()
+    c.line(-10_000_000, -5, 10_000_000, -9)  # misses entirely
+    assert not any(c.cell_bits(i, j) for i in range(c.cols) for j in range(c.rows))
+
+
+def test_polyline_outside_viewport_draws_nothing():
+    c = BrailleCanvas(20, 5)
+    draw_polyline(c, [(100, 50), (110, 60)], Viewport(-10, -10, 10, 10))
+    assert not any(c.cell_bits(i, j) for i in range(c.cols) for j in range(c.rows))
 
 
 def test_known_landmarks_have_dots():
     c = coastline_canvas(160, 40)
-    # Sea off the Gulf of Guinea is empty, the Strait of Gibraltar region and Florida coast have dots.
-    def has_dots(lon, lat, r=3):
+    # Florida and Tokyo bay have coastline dots nearby; the mid Atlantic does not.
+    def has_dots(lon, lat, r=1):
         x, y = project(lon, lat, WORLD, c.width, c.height)
         return any(c.get(round(x) + dx, round(y) + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1))
 
@@ -156,5 +180,5 @@ def test_render_ascii_halves():
     c.set(2, 3)  # lower half only
     c.set(4, 0)
     c.set(4, 3)  # both halves
-    assert render_ascii(c) == [".. "[0] + "." + ":"]
+    assert render_ascii(c) == ["..:"]
     assert render_ascii(BrailleCanvas(2, 1)) == ["  "]
