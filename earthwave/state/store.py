@@ -43,6 +43,7 @@ EPISODE_GAP = timedelta(minutes=30)  # exceedances further apart than this are s
 ALERT_HINT = frozenset({levels.WARNING, levels.ADVISORY, levels.WATCH})  # levels that speed the gauge polling up
 
 QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
+LATE_GRACE = timedelta(minutes=30)  # a healthy feed's follow-up may run this late
 OVERDUE_MAX = timedelta(hours=6)  # a feed that never completes a poll cannot hold an alert open longer
 IN_FORCE = ("active", "overdue")  # alert statuses that count as in force
 ALERT_SOURCES = frozenset(
@@ -284,8 +285,9 @@ class Store:
     def alert_status(self, alert: TsunamiAlert, clock: Clock) -> str:
         """active | overdue | expired | cancelled (by a later product) | superseded (by an update) | cancellation.
 
-        An actionable alert past its expiry stays "overdue", and in force, until its source has answered a poll
-        after that moment: a feed that is down or late cannot have told us about a follow-up.
+        An actionable alert past its expiry stays "overdue", and in force, for LATE_GRACE (a follow-up from a healthy
+        feed can run late) and then until its source has answered a poll after that moment: a feed that is down or
+        late cannot have told us about a follow-up.
         """
         if alert.level == levels.CANCELLATION:
             return "cancellation"
@@ -295,17 +297,19 @@ class Store:
             return "active"
         return "overdue" if self._overdue(alert, clock) else "expired"
 
-    def _overdue(self, alert: TsunamiAlert, clock: Clock) -> bool:
-        """Past its expiry with no complete poll since, for at most OVERDUE_MAX, and only if the store held it while
-        it was in force: an alert first merged already expired (a restart reading old entries) never was."""
+    def _overdue(self, alert: TsunamiAlert, clock: Clock, answering: str | None = None) -> bool:
+        """Past its expiry, and only if the store held it while it was in force (an alert first merged already
+        expired, a restart reading old entries, never was): for LATE_GRACE regardless, then until its source
+        completes a poll that began after the expiry, for at most OVERDUE_MAX. `answering` is the source whose
+        complete batch is being merged; it has just confirmed what it holds, so past the grace it ends the wait."""
         expiry, now = self.expiry(alert), clock.now()
         seen = self._first_seen.get(alert.id)
+        if alert.level not in levels.ACTIONABLE or seen is None or seen >= expiry or not expiry <= now:
+            return False
+        if now < expiry + LATE_GRACE:
+            return True
         return (
-            alert.level in levels.ACTIONABLE
-            and expiry <= now < expiry + OVERDUE_MAX
-            and seen is not None
-            and seen < expiry
-            and not self.answered_since(alert.source, expiry)
+            now < expiry + OVERDUE_MAX and alert.source != answering and not self.answered_since(alert.source, expiry)
         )
 
     def expiry(self, alert: TsunamiAlert) -> datetime:
@@ -444,7 +448,7 @@ class Store:
         `answering` is the source whose complete batch is being merged: it has just confirmed what it holds."""
         if self.expiry(alert) > clock.now():
             return True
-        return alert.source != answering and self._overdue(alert, clock)
+        return self._overdue(alert, clock, answering)
 
     def _close_referenced(self, alert: TsunamiAlert) -> list[TsunamiAlert]:
         """Close the open alerts this product cancels or supersedes; returns those that were still open.

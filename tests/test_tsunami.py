@@ -30,7 +30,7 @@ from earthwave.state.events import (
     TsunamiIssued,
 )
 from earthwave.state.rules import AlertRules, Notification
-from earthwave.state.store import Store
+from earthwave.state.store import LATE_GRACE, Store
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.widgets.tsunami_panel import build_panel
 
@@ -595,7 +595,7 @@ def test_alert_expires_on_the_injected_clock(kclock):
     warning = kam(1)
     merge(store, kclock, warning)
     assert store.alert_status(warning, kclock) == "active"
-    kclock.advance(4 * 3600)
+    kclock.advance(5 * 3600)
     assert store.alert_status(warning, kclock) == "expired"
     assert store.active_alerts(kclock) == []
 
@@ -1429,3 +1429,52 @@ async def test_no_fresh_feed_never_reads_as_all_clear():
         await pilot.pause()
         panel = str(app.dashboard.query_one("#tsunami").render())
         assert "UNKNOWN" in panel and "nws failed" in panel and "No tsunami alerts" not in panel
+
+
+async def test_warning_survives_a_healthy_feed_answering_a_little_late_and_its_follow_up_is_a_change(kclock):
+    store = Store()
+    feed = ScriptedFeed(
+        [Batch("tsunamigov", NOW, alerts=(kam(1),)), Batch("tsunamigov", NOW), Batch("tsunamigov", NOW)]
+    )
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    expiry = store.expiry(kam(1))
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        kclock.advance((expiry - kclock.now()).total_seconds() + 300)  # five minutes past the expiry
+        await sched.poll_source("tsunamigov", client)  # the feed answers healthily; no follow-up yet
+        assert sched.freshness("tsunamigov") is Freshness.FRESH
+        assert store.alert_status(kam(1), kclock) == "overdue"
+        assert [a.id for a in store.active_alerts(kclock, actionable_only=True)] == [kam(1).id]
+        later = replace(
+            kam(1), id="w2", dedupe_key="w2", references=(kam(1).id,), expires=kclock.now() + timedelta(hours=1)
+        )
+        events = merge(store, kclock, later)
+        assert [type(e) for e in events] == [TsunamiChanged] and events[0].previous_level == levels.WARNING
+        assert store.alert_status(kam(1), kclock) == "superseded"
+
+
+async def test_warning_lapses_for_real_once_the_grace_has_passed(kclock):
+    store = Store()
+    feed = ScriptedFeed(
+        [Batch("tsunamigov", NOW, alerts=(kam(1),)), Batch("tsunamigov", NOW), Batch("tsunamigov", NOW)]
+    )
+    sched = Scheduler([feed], store, kclock, lambda result: None)
+    store.answered_since = sched.answered_since
+    expiry = store.expiry(kam(1))
+    async with httpx.AsyncClient() as client:
+        await sched.poll_source("tsunamigov", client)
+        kclock.advance((expiry - kclock.now()).total_seconds() + 60)
+        await sched.poll_source("tsunamigov", client)
+        assert store.alert_status(kam(1), kclock) == "overdue"
+        kclock.advance(LATE_GRACE.total_seconds())
+        await sched.poll_source("tsunamigov", client)  # healthy, answered, nothing followed up
+    assert store.alert_status(kam(1), kclock) == "expired" and store.active_alerts(kclock) == []
+
+
+def test_restart_replay_of_an_alert_first_merged_inside_the_grace_raises_nothing(kclock):
+    store = Store()
+    store.answered_since = lambda source, when: True
+    kclock.advance((store.expiry(kam(1)) - kclock.now()).total_seconds() + 300)  # replay lands 5 min past expiry
+    assert merge(store, kclock, kam(1)) == []
+    assert store.alert_status(kam(1), kclock) == "expired"
