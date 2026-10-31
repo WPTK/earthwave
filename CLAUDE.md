@@ -40,3 +40,6 @@ py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -e ".[dev]"
 `earthwave/` package (`__main__.py` CLI; the full module plan is in `docs/plan.md`), `scripts/`, `tests/` with saved
 live payloads under `tests/fixtures/<source>/` (`-text` in `.gitattributes`, never reformat them), `docs/`.
 Use `127.0.0.1`, not `localhost`, for local servers on Windows.
+
+## Data resolution
+Geographic and generated data (coastlines, borders, plate boundaries, tsunami zones, station lists) must be high resolution, not oversimplified; file size is not a constraint. linecast (github.com/ashuttl/linecast) is the minimum detail bar; Natural Earth 1:10m is the target (1:50m minimum).

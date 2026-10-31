@@ -97,7 +97,7 @@ earthwave/
               banner.py  gauge_strip.py  too_small.py
     screens/  dashboard.py  detail.py  tsunami.py  history.py  filters.py  help.py
   data/
-    coastline_110m.json  Natural Earth 1:110m coastline as simplified polylines (public domain)
+    coastline_10m.json   Natural Earth 1:10m coastline, little or no simplification (public domain; file name set by the M3 PR)
     dart_stations.json   snapshot of NDBC DART station metadata (fallback when NDBC is down)
 scripts/   build_exe.ps1  make_coastline.py  snapshot_stations.py  screenshot_terminal.ps1
 tests/     fixtures/{usgs,tsunamigov,nws,jma,ndbc,coops,replay}/  test_*.py  __snapshots__/  uat/
@@ -153,7 +153,7 @@ Replay and record live in the transport layer, so every source runs unchanged ag
 
 ### Map panel
 
-- `scripts/make_coastline.py` (dev-only, uses `pyshp`) downloads Natural Earth 1:110m coastline, simplifies with Douglas–Peucker (tolerance 0.5°), writes `data/coastline_110m.json` as `[[lon, lat], ...]` polylines, about 100 KB. Committed; the script is for regeneration.
+- `scripts/make_coastline.py` (dev-only, uses `pyshp`) downloads Natural Earth coastline at 1:10m (1:50m is the minimum), applies little or no simplification, and writes `data/coastline_10m.json` as `[[lon, lat], ...]` polylines. There is no file size target. Committed; the script is for regeneration. The M3 PR (#15) regenerates the data to this rule; no M1 code depends on the file name.
 - `braille.py`: `BrailleCanvas(cols, rows)` with a 2×4 dot grid per cell, Bresenham line plotting, equirectangular projection for a viewport `(lon0, lat0, lon1, lat1)`. Coastline raster cached per viewport+size; only markers redraw each tick.
 - Markers over the raster: `·` `•` `●` `◉` by magnitude band, colored, blinking while they have attention; `⌂` for home; a ring glyph at the source quake of any active tsunami alert, and alert geometry (NWS polygon or CAP circle) tinted along the coast.
 - `glyphs = "auto"` picks unicode except on Windows without `WT_SESSION` (conhost), where it picks ascii: a 1×1 cell coastline with `.`/`:` and ASCII markers. `--glyphs` overrides.
@@ -250,6 +250,10 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
   - A release with nothing to list uses a single emphasized notice such as `_First release._`.
   - `CHANGELOG.md` in M0 contains only the title; the first entry is written at the `0.1.0` release in M6.
 
+## Data resolution rule
+
+Geographic and generated data (coastlines, borders, plate boundaries, tsunami zones, station lists) must be high resolution, not oversimplified. File size is not a constraint. The linecast project (github.com/ashuttl/linecast) is the minimum detail bar; Natural Earth 1:10m is the target.
+
 ## Milestones (one session, one branch, one PR each, in order)
 
 - [x] M0 Bootstrap
@@ -278,7 +282,7 @@ Runtime: `textual>=8.2,<9`, `httpx>=0.28,<1`, `platformdirs>=4,<5`, `tomli-w>=1,
 - Fixtures: the captured Bonin Islands information statement; archived Warning/Advisory/Watch/Cancel products from tsunami.gov per-event URLs (the July 2025 Kamchatka M8.8 Pacific-wide warnings are a good set); one NWS tsunami alert GeoJSON; a JMA list + detail pair. A replay fixture that walks Watch → Warning → Cancellation drives the UI test and a tsunami-screen snapshot, since live feeds are quiet most days.
 
 ### M3: World map
-- `scripts/make_coastline.py`, `data/coastline_110m.json`, `ui/widgets/braille.py`, `map_panel.py`, zoom/pan, auto/ascii glyph selection, attention blinking on markers, tsunami geometry highlighting.
+- `scripts/make_coastline.py`, `data/coastline_10m.json`, `ui/widgets/braille.py`, `map_panel.py`, zoom/pan, auto/ascii glyph selection, attention blinking on markers, tsunami geometry highlighting.
 - Tests: projection math, canvas plotting of known segments, snapshots of the world view at 80×24 (ascii) and 160×40 (unicode).
 
 ### M4: Observations
