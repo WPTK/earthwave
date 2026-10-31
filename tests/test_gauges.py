@@ -133,8 +133,9 @@ def load(name: str) -> dict:
     return json.loads((FIX / "coops" / name).read_text())
 
 
-def test_stations_trimmed():
-    stations = coops.parse_stations((FIX / "coops" / "stations_trimmed.json").read_text())
+def test_stations_full():
+    stations = coops.parse_stations((FIX / "coops" / "stations.json").read_text())
+    assert len(stations) > 250
     by_id = {s.id: s for s in stations}
     assert by_id["9414290"].name == "San Francisco"
     assert by_id["9414290"].lon == pytest.approx(-122.4659, abs=1e-3)
@@ -203,6 +204,6 @@ def test_snapshot_script_matches_bundled_json(tmp_path):
     subprocess.run([sys.executable, str(ROOT / "scripts" / "snapshot_stations.py"), "--out", str(out)], check=True)
     data = json.loads(out.read_text())
     assert len(data["stations"]) == 76
-    assert data["stations"][0].keys() == {"id", "kind", "name", "lat", "lon"}
+    assert {"id", "kind", "name", "lat", "lon", "owner", "pgm", "type", "elev"} <= set().union(*data["stations"])
     bundled = ROOT / "earthwave" / "data" / "dart_stations.json"
     assert json.loads(bundled.read_text()) == data

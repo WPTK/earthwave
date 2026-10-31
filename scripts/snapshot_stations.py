@@ -7,24 +7,36 @@ import argparse
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from earthwave.sources.ndbc import STATIONS_URL, parse_active_stations  # noqa: E402
+from earthwave.sources.ndbc import STATIONS_URL  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "ndbc" / "activestations.xml"
 OUT = ROOT / "earthwave" / "data" / "dart_stations.json"
 
 
 def build(xml: bytes) -> dict:
+    """Every attribute of every ``type="dart"`` row, unpruned; coordinates become floats."""
     created = re.search(rb'created="([^"]+)"', xml)
-    stations = sorted(parse_active_stations(xml), key=lambda s: s.id)
+    stations = []
+    for el in ET.fromstring(xml).iter("station"):
+        if el.get("type") != "dart":
+            continue
+        row = {k: v.strip() for k, v in el.attrib.items()}
+        for key in ("lat", "lon"):
+            if key in row:
+                row[key] = float(row[key])
+        row["kind"] = "dart"
+        stations.append(row)
+    stations.sort(key=lambda r: r["id"])
     return {
         "source": STATIONS_URL,
         "created": created.group(1).decode() if created else None,
-        "stations": [s._asdict() for s in stations],
+        "stations": stations,
     }
 
 
