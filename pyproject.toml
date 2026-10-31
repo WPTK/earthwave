@@ -52,7 +52,7 @@ version = { attr = "earthwave.__version__" }
 include = ["earthwave*"]
 
 [tool.setuptools.package-data]
-earthwave = ["data/*.json"]
+earthwave = ["ui/*.tcss", "data/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -72,6 +72,3 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Long lines in tests are inline fixture payloads; wrapping them hurts readability.
 "tests/**" = ["E501"]
-
-[tool.setuptools.package-data]
-earthwave = ["ui/*.tcss", "data/*.json"]
