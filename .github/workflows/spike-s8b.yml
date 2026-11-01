@@ -63,6 +63,10 @@ jobs:
           PY=$(python -c 'import sys;print(sys.executable)')
           if [ "$RUNNER_OS" = Windows ]; then "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; else sudo -E "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; fi
           python -c "import socket;print(socket.getaddrinfo('earthquake.usgs.gov',443))"
+      - name: Pty size probe
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: python scripts/uat/s8b/size_probe.py
       - name: Run the exe through the fake origin
         shell: bash
         run: python -m pytest tests/uat/test_spike_s8b.py -p no:xdist -p no:cacheprovider -q -s

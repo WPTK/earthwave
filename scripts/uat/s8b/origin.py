@@ -41,11 +41,13 @@ DROP = {"content-encoding", "content-length", "transfer-encoding", "connection"}
 def load_recordings() -> dict[str, dict]:
     """url -> the first recorded exchange, from every replay file."""
     out: dict[str, dict] = {}
-    for path in sorted(REPLAY.glob("*.jsonl")):
+    paths = sorted(REPLAY.glob("*.jsonl"), key=lambda p: (p.name != "usgs_short.jsonl", p.name))  # quakes first
+    for path in paths:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 rec = json.loads(line)
-                out.setdefault(rec["url"], rec)
+                if rec["status"] == 200:  # a recorded 304 or error is not a body to serve
+                    out.setdefault(rec["url"], rec)
     return out
 
 
