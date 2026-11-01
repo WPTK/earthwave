@@ -1,7 +1,6 @@
 # Development
 
-earthwave needs Python 3.13. The design and milestone history are in [`plan.md`](plan.md); project rules are in
-[`CLAUDE.md`](../CLAUDE.md).
+earthwave needs Python 3.13.
 
 ## Setup
 
@@ -71,7 +70,7 @@ Only on the maintainer's word.
 
 1. In a release PR, set `__version__` in `earthwave/__init__.py` (ZeroVer: `0.y.z`, minor for features, patch for
    fixes) and add a `## [0.y.z] - YYYY-MM-DD` section to `CHANGELOG.md` in
-   [Common Changelog](https://common-changelog.org/) form, composed from the "Changelog draft" in `docs/plan.md`.
+   [Common Changelog](https://common-changelog.org/) form, composed from `git log` and the merged pull requests since the last tag.
 2. Merge it, then tag the merge commit and push the tag:
 
    ```powershell

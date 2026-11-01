@@ -10,3 +10,7 @@ build/
 dist/
 *.egg-info/
 *.log
+
+# Local working notes, not part of the repository
+CLAUDE.md
+docs/plan.md

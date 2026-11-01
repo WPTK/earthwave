@@ -2,21 +2,21 @@
 
 ## [0.1.0] - 2026-10-31
 
-_First release._
-
 ### Added
 
-- Add a live earthquake dashboard from the USGS feeds, with a quake list, detail screen (PAGER and nearby cities), filters, search, sorting and a status bar showing per-source freshness ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add `fdsnws` history backfill when the filters reach beyond what the feeds cover ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add flashing rows for new, updated and major quakes, an unseen badge and an in-app toast for major quakes ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add tsunami alerts from tsunami.gov, the NWS API and JMA, merged into one list with a panel, a tsunami screen, a red banner and status bar alert states ([#21](https://github.com/WPTK/earthwave/pull/21))
-- Add desktop notifications (Windows toast, `notify-send`, `osascript`) and a terminal bell for new alerts, with `--notify` to force them on ([#21](https://github.com/WPTK/earthwave/pull/21))
-- Add a world map with Natural Earth 1:10m coastlines in braille or ASCII glyphs, quake markers, zoom and pan ([#15](https://github.com/WPTK/earthwave/pull/15), [#19](https://github.com/WPTK/earthwave/pull/19))
-- Add sea-level observations from NOAA DART buoys and CO-OPS tide gauges, with a gauge strip on the tsunami screen and anomaly alerts ([#17](https://github.com/WPTK/earthwave/pull/17), [#20](https://github.com/WPTK/earthwave/pull/20), [#22](https://github.com/WPTK/earthwave/pull/22))
-- Add a SQLite history of quakes and acknowledgements, a day-by-day history screen and `--offline` to browse it without network ([#37](https://github.com/WPTK/earthwave/pull/37))
-- Add `--record` and `--replay` to capture and replay HTTP sessions on a replay clock ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add a commented first-run config file and `--config`, `--no-config`, `--min-mag`, `--hours`, `--home`, `--glyphs`, `--log` and `--debug` ([#18](https://github.com/WPTK/earthwave/pull/18))
-- Add one-file binaries for Windows, Linux and macOS, built from `earthwave.spec` and attached to each release ([#41](https://github.com/WPTK/earthwave/pull/41))
-- Add `--version` and `--selftest` ([#1](https://github.com/WPTK/earthwave/pull/1))
+- Add a live earthquake list from the USGS feeds with a detail screen (PAGER, nearby cities, links), filters, search, sorting and a status bar showing how fresh each feed is
+- Add history backfill from the USGS event service when the filters reach back further than the feeds do
+- Add flashing rows for new, updated and major quakes, an unseen counter and an in-app notice for major quakes
+- Add tsunami alerts from tsunami.gov, the National Weather Service and the Japan Meteorological Agency, merged into one list that follows watches, warnings, advisories, information statements, follow-ups and cancellations
+- Add a tsunami panel, a tsunami screen with the full bulletin text, a coloured banner and status bar for the alert in force, and acknowledgement of alerts
+- Add desktop notifications (Windows toast, `notify-send`, `osascript`) and a terminal bell for new alerts and major quakes, and `--notify` to force them on
+- Add a world map with Natural Earth 1:10m coastlines in braille or ASCII glyphs, quake and alert markers, zoom and pan
+- Add sea-level readings from NOAA DART buoys and CO-OPS tide gauges, with a gauge screen, a gauge strip on the tsunami screen and anomaly alerts
+- Add a SQLite history of quakes, alerts and acknowledgements, a day-by-day history screen and `--offline` to browse it without a network
+- Add `--record` and `--replay` to save and replay a session of feed responses, and `--speed` to change the replay speed
+- Add a commented config file, written on first run, and the options `--config`, `--no-config`, `--min-mag`, `--hours`, `--home`, `--glyphs`, `--log` and `--debug`
+- Add a help screen that lists the keys, and a notice when the terminal is too small
+- Add one-file binaries for Windows, Linux and macOS, attached to each GitHub release with checksums
+- Add `--version` and `--selftest`
 
 [0.1.0]: https://github.com/WPTK/earthwave/releases/tag/v0.1.0
