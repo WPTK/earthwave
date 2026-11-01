@@ -7,13 +7,13 @@ from datetime import timedelta
 from conftest import make_quake
 from test_observations import gauge_app
 from test_ui import WEEK_NOW, mock_transport, wait_for, week_app
+from uat.harness import screen_text
 
 from earthwave.models import Batch, QuakeDetail
 from earthwave.ui.screens.detail import GONE_NOTE, DetailScreen
 from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
-from uat.harness import screen_text
 
 
 async def test_detail_of_a_quake_older_than_the_store_loads_and_does_not_claim_usgs_dropped_it():
