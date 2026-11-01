@@ -3,15 +3,17 @@
 import asyncio
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 
 import httpx
-from textual import work
+from textual import events, work
 from textual.app import App
 from textual.binding import Binding
 from textual.filter import Monochrome
 from textual.message import Message
+from textual.timer import Timer
 
 from earthwave.clock import Clock, SystemClock
 from earthwave.config import Config
@@ -42,6 +44,7 @@ from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
+from earthwave.ui.graphics.probe import BRAILLE, GraphicsChoice, ReplyFilter
 from earthwave.ui.labels import fmt_age, fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
@@ -52,11 +55,13 @@ from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import LegibleMonochrome
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
+from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
 
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+REPLY_HOLD = 0.1  # seconds a run of keys that may be a terminal reply waits for its next key
 TSUNAMI_FEEDS = (TsunamiGovSource.name, NwsSource.name, JmaSource.name)
 SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
 GAUGE_REFRESH_TICKS = 20  # the open gauge strip redraws every 10 s (ages and 'last batch' text move with the clock)
@@ -88,6 +93,7 @@ class EarthwaveApp(App):
         history: History | None = None,
         offline: bool = False,
         history_error: str | None = None,
+        graphics: GraphicsChoice | None = None,
     ):
         super().__init__()
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
@@ -96,6 +102,10 @@ class EarthwaveApp(App):
         self.store = store if store is not None else Store(config.alerts, config.home, launched=self.clock.now())
         self.tracker = AttentionTracker(self.clock)
         self.glyphs = resolve_glyphs(config.view.glyphs)
+        self.graphics = graphics or BRAILLE
+        self._overlays: list[Callable[[Callable[[str], None]], None]] = []
+        self._replies = ReplyFilter()  # terminal answers re-issued as key presses; never reach the bindings
+        self._replies_flush: Timer | None = None
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
         # The steady feed must hold every quake that can alert, whatever magnitude the display filter hides.
@@ -127,6 +137,72 @@ class EarthwaveApp(App):
         self._previous_visible: set[str] = set()
         self._coverage_checked = False
         self._backfill: asyncio.Task | None = None
+
+    def add_overlay(self, emit: Callable[[Callable[[str], None]], None]) -> None:
+        """Register a widget that draws outside Textual's cell grid (the sixel map); it is called with the driver's
+        write function at the end of every screen update."""
+        self._overlays.append(emit)
+
+    def remove_overlay(self, emit: Callable[[Callable[[str], None]], None]) -> None:
+        if emit in self._overlays:
+            self._overlays.remove(emit)
+
+    def request_cell_probe(self) -> None:
+        """Ask the terminal for its cell size again (a font-size change keeps the window and moves the cell grid).
+
+        The answer comes back on Textual's input stream and `on_event` takes it out of the key events, as it does any
+        late answer to a query; nothing reads stdin here.
+        """
+        if self.graphics.renderer != "sixel" or self._driver is None:
+            return
+        self._driver.write("[16t")
+
+    async def on_event(self, event: events.Event) -> None:
+        if (
+            isinstance(event, events.Key)
+            and not event.is_forwarded
+            and (self.graphics.probed or self.graphics.renderer == "sixel")
+        ):
+            released, cell = self._replies.push((event.key, event.character or ""))
+            if self._replies_flush is not None:
+                self._replies_flush.stop()
+                self._replies_flush = None
+            if cell is not None:
+                log.debug("cell probe reply: %s", cell)
+                self._set_cell(cell)
+            if self._replies.held:  # maybe the start of a reply: wait for the next key, then decide
+                self._replies_flush = self.set_timer(REPLY_HOLD, self._release_held)
+            if released:
+                await self._type(event, released)
+            return
+        await super().on_event(event)
+
+    async def _type(self, event: events.Key, tokens: list[tuple[str, str]]) -> None:
+        """Hand keys the filter held back on to the app, in order, as if they had just been typed (the last one is
+        `event` itself)."""
+        for index, (key, char) in enumerate(tokens):
+            await super().on_event(event if index == len(tokens) - 1 else events.Key(key, char or None))
+
+    async def _release_held(self) -> None:
+        self._replies_flush = None
+        for key, char in self._replies.flush():
+            await super().on_event(events.Key(key, char or None))
+
+    def _set_cell(self, cell: tuple[int, int]) -> None:
+        if self.graphics.cell == cell:
+            return
+        log.info("cell size changed: %s -> %s", self.graphics.cell, cell)
+        self.graphics = replace(self.graphics, cell=cell)
+        for panel in self.dashboard.query(MapPanel):
+            panel.set_cell(cell)
+
+    def _end_update(self) -> None:
+        """Textual brackets each screen update in a synchronized update; overlays draw inside it, so the cells and the
+        image they sit on appear together."""
+        if self._driver is not None:
+            for emit in tuple(self._overlays):
+                emit(self._driver.write)
+        super()._end_update()
 
     def _enabled_sources(self, config: Config) -> list[Source]:
         poll, enabled = config.poll, config.sources

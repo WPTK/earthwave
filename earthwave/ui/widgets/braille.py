@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from functools import cache, lru_cache
 from pathlib import Path
 from typing import NamedTuple
@@ -186,17 +186,23 @@ def load_levels() -> tuple[tuple[float, Polylines], ...]:
     )
 
 
-def level_for(view: Viewport, cols: int, rows: int) -> int:
-    """Index of the coarsest level whose tolerance is under half a dot at this view; 0 (finest) when none is."""
-    dot = min(
-        (view.lon1 - view.lon0) / max(cols * 2 - 1, 1),
-        (view.lat1 - view.lat0) / max(rows * 4 - 1, 1),
-    )
+def level_for_dot(dot: float) -> int:
+    """Index of the coarsest level whose tolerance is under half a dot (`dot` degrees); 0 (finest) when none is."""
     best = 0
     for index, (tolerance, _) in enumerate(load_levels()):
         if tolerance <= dot / 2:
             best = index
     return best
+
+
+def level_for(view: Viewport, cols: int, rows: int) -> int:
+    """Level for a braille view of `cols` x `rows` cells (2x4 dots each)."""
+    return level_for_dot(
+        min(
+            (view.lon1 - view.lon0) / max(cols * 2 - 1, 1),
+            (view.lat1 - view.lat0) / max(rows * 4 - 1, 1),
+        )
+    )
 
 
 def _unwrap(points: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -311,6 +317,11 @@ def _prepared_coastline(level: int) -> tuple[tuple[list[tuple[float, float]], tu
     return tuple(out)
 
 
+def prepared_coastline(level: int):
+    """One level's unwrapped coastline polylines with bounding boxes (see `_prepared_coastline`)."""
+    return _prepared_coastline(level)
+
+
 def warm_coastline(level: int | None = None) -> None:
     """Load and prepare the coastline data (call off the UI thread to avoid a first-draw stall)."""
     for index in range(len(load_levels())) if level is None else (level,):
@@ -343,16 +354,16 @@ def _prepared_land(level: int) -> tuple[tuple[tuple[tuple[float, float], ...], t
     return tuple((ring, _bounds(ring)) for ring in load_land()[level])
 
 
-@lru_cache(maxsize=16)
-def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
-    """Land dots per cell as braille bits, row by row: even-odd scanline fill of the land rings, sampled at dot centres
-    (the same dot coordinates `project` gives the coastline). Only dot row `FILL_DOT_ROW` of each cell is filled:
-    land reads as a quiet horizontal hatch under the coast instead of a mesh of dots."""
-    width, height = cols * 2, rows * 4
+def land_spans(
+    width: int, height: int, view: Viewport, level: int, step: int = 1, offset: int = 0
+) -> Iterator[tuple[int, int, int]]:
+    """Land as (row, first dot, last dot) spans of a `width` x `height` dot grid, by even-odd scanline fill of the
+    land rings of one level, for the dot rows y with y % step == offset. Shared by the braille hatch and the pixel
+    renderer."""
     lon_scale = (width - 1) / (view.lon1 - view.lon0)
     lat_scale = (height - 1) / (view.lat1 - view.lat0)
     crossings: list[list[float]] = [[] for _ in range(height)]
-    for ring, (lo, hi, lat_lo, lat_hi) in _prepared_land(level_for(view, cols, rows)):
+    for ring, (lo, hi, lat_lo, lat_hi) in _prepared_land(level):
         if lat_hi < view.lat0 or lat_lo > view.lat1:
             continue
         for k in range(int((view.lon0 - hi) // 360) - 1, int((view.lon1 - lo) // 360) + 2):
@@ -370,22 +381,28 @@ def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
                 if first > last:
                     continue
                 x0, slope = xs[i], (xs[i + 1] - xs[i]) / (y1 - y0)
-                for y in range(first + (FILL_DOT_ROW - first) % 4, last + 1, 4):
+                for y in range(first + (offset - first) % step, last + 1, step):
                     crossings[y].append(x0 + (y - y0) * slope)
-    bits = [0] * (cols * rows)
-    for y in range(FILL_DOT_ROW, height, 4):
-        row = crossings[y]
+    for y, row in enumerate(crossings):
         if len(row) < 2:
             continue
         row.sort()
-        base, dy = (y >> 2) * cols, y & 3
-        left, right = _BITS[0][dy], _BITS[1][dy]
         for a, b in zip(row[::2], row[1::2], strict=False):
             i0, i1 = max(math.ceil(a), 0), min(math.floor(b), width - 1)
-            if i0 > i1:
-                continue
-            for col in range(i0 >> 1, (i1 >> 1) + 1):
-                bits[base + col] |= (left if i0 <= col * 2 else 0) | (right if i1 >= col * 2 + 1 else 0)
+            if i0 <= i1:
+                yield y, i0, i1
+
+
+@lru_cache(maxsize=16)
+def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
+    """Land dots per cell as braille bits, row by row, from the land spans of dot row `FILL_DOT_ROW` of each cell: land
+    reads as a quiet horizontal hatch under the coast instead of a mesh of dots."""
+    bits = [0] * (cols * rows)
+    for y, i0, i1 in land_spans(cols * 2, rows * 4, view, level_for(view, cols, rows), 4, FILL_DOT_ROW):
+        base, dy = (y >> 2) * cols, y & 3
+        left, right = _BITS[0][dy], _BITS[1][dy]
+        for col in range(i0 >> 1, (i1 >> 1) + 1):
+            bits[base + col] |= (left if i0 <= col * 2 else 0) | (right if i1 >= col * 2 + 1 else 0)
     return bytes(bits)
 
 
