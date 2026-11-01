@@ -34,6 +34,7 @@ MAG_DELTA = 0.2
 DEPTH_DELTA_KM = 10.0
 ALERT_RETAIN = timedelta(days=3)
 FEED_LAG = timedelta(minutes=10)  # a feed may not list a quake this fresh yet, nor drop one this old
+STEADY_WINDOW = timedelta(hours=24)  # the steady day feed lists a day: an unheld quake older than that is no news
 LINK_SECONDS = 300.0  # an alert names its quake within 5 minutes ...
 LINK_KM = 200.0  # ... and 200 km of the USGS origin
 DEFAULT_TTL = timedelta(hours=12)  # an alert that states no expiry lapses this long after it was issued or updated
@@ -228,9 +229,9 @@ class Store:
 
     @staticmethod
     def _published_since(quake: Earthquake, since: datetime | None) -> bool:
-        """True for a quake that happened (within the feed's lag) and was published after `since`; a long-past quake
-        merely revised since is not new."""
-        return since is not None and (quake.updated or quake.time) > since and quake.time > since - FEED_LAG
+        """True for a quake the store never held that was published after `since` and is no older than the steady feed's
+        window (a day), however long after its origin USGS listed it; an older one merely revised since is not new."""
+        return since is not None and (quake.updated or quake.time) > since and quake.time > since - STEADY_WINDOW
 
     @classmethod
     def _news_since(cls, old: Earthquake | None, quake: Earthquake, since: datetime | None) -> bool:
@@ -362,14 +363,17 @@ class Store:
     def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
         """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""
         rows = self.gauge_readings(station_id)
+        have: set[datetime] | None = None  # CO-OPS: the timestamps `new` reproduces
         if kind == "dart":
             new = ndbc.detrend(rows, since=since)  # type: ignore[arg-type]
         else:
             self._predictions[station_id] = self.predictions_for(station_id) or self._predictions.get(station_id, [])
             new = coops.remove_baseline(coops.residuals(rows, self._predictions[station_id]))  # type: ignore[arg-type]
-            # The prediction cache only reaches back a few hours: keep the residuals it can no longer reproduce.
-            since = min((r.ts for r in new), default=datetime.max.replace(tzinfo=UTC))
-        kept = {ts: r for ts, r in self._residuals.get(station_id, {}).items() if ts < since}
+            # Merge, never replace: the interval fetched last decides which readings can be judged (6-minute
+            # predictions reproduce none of a 1-minute run's off-mark readings): keep each old residual `new` lacks.
+            have = {r.ts for r in new}
+        old = self._residuals.get(station_id, {})
+        kept = {ts: r for ts, r in old.items() if (ts < since if have is None else ts not in have)}
         kept.update({r.ts: r for r in new})
         floor = rows[0].ts
         self._residuals[station_id] = {ts: r for ts, r in kept.items() if ts >= floor}

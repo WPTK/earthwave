@@ -41,7 +41,7 @@ from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
-from earthwave.ui.labels import fmt_time
+from earthwave.ui.labels import fmt_age, fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
@@ -284,6 +284,7 @@ class EarthwaveApp(App):
             and not result.error
             and not self.usgs.starting
             and (not self._coverage_checked or self.store.coverage_lapsed)
+            and self.scheduler.backfill_ready("usgs")  # a failed query backs off and a refused one is not repeated
         ):
             # the first good steady answer, or one after an outage longer than the feed's window: the network is up,
             # so the backfill can run. A lapse stays marked until a backfill lands, so a failed one retries on the
@@ -336,16 +337,17 @@ class EarthwaveApp(App):
         return down + partial, bool(names) and all(f is not Freshness.FRESH for _, f in state)
 
     def quake_feed_wait(self) -> str:
-        """Why the quake list is not loaded yet, in words ("" once a live USGS batch has arrived). An offline run or a
-        disabled USGS feed will never load it, and a failing feed is not "waiting"."""
-        if self.store.warm:
-            return ""
+        """Why the quake list cannot be trusted as it stands ("" when USGS is answering and a live batch has arrived).
+
+        An offline run or a disabled USGS feed never loads it. A USGS that is failing or late says so, with the age of
+        the last data, whether or not the store is warm: an empty list under a filter is then no answer about quakes.
+        """
         if self.offline or not self.config.sources.usgs:
             return "Quakes are not being fetched"
-        fresh = self.scheduler.freshness("usgs")
-        if fresh is Freshness.ERROR:
-            return "USGS is not answering"
-        return "Waiting for USGS"
+        if self.scheduler.freshness("usgs") in (Freshness.ERROR, Freshness.STALE):
+            age = self.scheduler.age("usgs")
+            return "USGS is not answering" + (f"; last data {fmt_age(age)} ago" if age is not None else "")
+        return "" if self.store.warm else "Waiting for USGS"
 
     def tsunami_feeds_loading(self) -> bool:
         """True while an enabled tsunami feed has not answered yet: an empty list says nothing until it has, because
@@ -383,7 +385,7 @@ class EarthwaveApp(App):
                     for a in self.store.active_alerts(self.clock)
                 )
             ),
-            self._gauge_quake.id if self._gauge_quake else None,
+            (self._gauge_quake.id, self._gauge_quake.lat, self._gauge_quake.lon) if self._gauge_quake else None,
             self.dart.unavailable,
             len(self.dart.stations),
             len(self.coops.stations),
@@ -518,12 +520,22 @@ class EarthwaveApp(App):
             self._gauge_quake = None
             self.sync_gauges()
 
+    def pin_gauge_quake(self, quake: Earthquake) -> None:
+        """Select the stations nearest `quake` once USGS has flagged it (or while it is already pinned), and follow it
+        to its newest stored revision, so a relocation re-selects. Safe to call on every refresh."""
+        if self.dart is None:
+            return
+        current = self.store.resolve(quake.id) or quake
+        pinned = self._gauge_quake
+        held = self.store.resolve(pinned.id) if pinned is not None else None  # a renamed quake is still the pinned one
+        if not (current.tsunami_flag or (pinned is not None and current.id in (pinned.id, held.id if held else None))):
+            return
+        self._gauge_quake = current
+        self.sync_gauges()
+
     def open_observations(self, quake: Earthquake) -> None:
         """`o`: select the stations nearest a USGS-flagged quake and show their gauges."""
-        new = self._gauge_quake is None or quake.id != self._gauge_quake.id
-        if self.dart is not None and quake.tsunami_flag and new:
-            self._gauge_quake = quake
-            self.sync_gauges()
+        self.pin_gauge_quake(quake)
         if not isinstance(self.screen, ObservationsScreen):
             self.push_screen(ObservationsScreen(quake))
 
