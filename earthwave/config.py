@@ -94,6 +94,8 @@ CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("view", "time_zone"): ("local", "UTC"),
     ("alerts", "pager_min"): ("green", "yellow", "orange", "red"),
 }
+MAX_VIEW_HOURS = 24 * 35  # the store keeps 35 days of quakes, so no view reaches further back
+
 # (minimum, maximum); None means unbounded. USGS is never polled faster than 60 s, and no feed is polled so rarely
 # that the status bar would call it fresh for hours.
 RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
@@ -103,7 +105,7 @@ RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
     ("poll", "coops_seconds"): (60, 3600),
     ("poll", "alert_gauge_seconds"): (30, 600),
     ("view", "min_magnitude"): (-2, 10),
-    ("view", "hours"): (1, 24 * 365),
+    ("view", "hours"): (1, MAX_VIEW_HOURS),
     ("home", "lat"): (-90, 90),
     ("home", "lon"): (-180, 180),
     ("home", "radius_km"): (1, 20_000),

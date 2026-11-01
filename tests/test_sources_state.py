@@ -2,7 +2,8 @@
 
 import asyncio
 import random
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -17,15 +18,19 @@ from earthwave.notify.inapp import (
     FLASH_NEW,
     FLASH_UPDATED,
     PULSE_MAJOR,
+    AttentionKind,
     AttentionTracker,
 )
 from earthwave.poll import Freshness, Scheduler, backoff_delay, freshness_of
 from earthwave.sources.base import SourceHealth
 from earthwave.sources.usgs import (
+    FDSN_LIMIT,
     FDSN_URL,
     FEED_BASE,
     UsgsSource,
     feed_coverage,
+    generated,
+    listing,
     parse_collection,
     parse_detail,
     parse_feature,
@@ -35,6 +40,8 @@ from earthwave.state.events import (
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
+    QuakeRemoved,
+    QuakeRenamed,
     QuakeUpdated,
     SourceDegraded,
     SourceRecovered,
@@ -131,6 +138,9 @@ async def test_fetch_chain_then_conditional_request_and_304(clock):
     assert [b.meta.get("feed") for b in batches[:4]] == ["4.5_week", "all_day", "significant_month", "2.5_day"]
     assert batches[0].coverage == (168.0, 4.5) and batches[3].coverage == (24.0, 2.5)
     assert batches[4].not_modified and batches[4].cursor == cursor
+    assert batches[4].coverage == (24.0, 2.5)  # a 304 still confirms the feed's claim ...
+    assert batches[4].generated == datetime(2026, 10, 31, 12, 0, tzinfo=UTC)  # ... as of when the feed was made
+    assert batches[3].listed is not None and batches[3].generated is not None and batches[0].listed is not None
     assert "If-Modified-Since" not in route.calls[0].request.headers
     assert route.calls[1].request.headers["If-Modified-Since"] == "Sat, 31 Oct 2026 12:00:00 GMT"
 
@@ -305,6 +315,217 @@ def test_coverage_tracking_and_pruning(clock):
     assert not store.is_covered(169, 4.5) and not store.is_covered(24, 2.5)
     store.merge(batch(make_quake("ancient", 5.0, minutes_ago=60 * 24 * 40), backfill=True), clock)
     assert store.get("ancient") is None
+
+
+def feed(*quakes, listed=None, at=T0, coverage=(24.0, 4.5), **kwargs) -> Batch:
+    """A steady summary feed: complete for its window, made at `at`, naming `listed` (default: the quakes' own ids)."""
+    names = frozenset(q.id for q in quakes) if listed is None else frozenset(listed)
+    return Batch("usgs", at, quakes=tuple(quakes), coverage=coverage, generated=at, listed=names, **kwargs)
+
+
+def test_coverage_lapses_after_an_outage_longer_than_the_steady_feed(clock):
+    store = Store()
+    store.merge(batch(make_quake("a"), backfill=True, coverage=(168.0, 4.5)), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=23), coverage=(24.0, 4.5)), clock)
+    assert store.is_covered(168, 4.5) and not store.coverage_lapsed
+    unchanged = Batch("usgs", T0 + timedelta(hours=40), coverage=(24.0, 4.5), not_modified=True)
+    store.merge(replace(unchanged, generated=T0 + timedelta(hours=40)), clock)  # a 304 confirms the claim up to then
+    store.merge(Batch("usgs", T0 + timedelta(hours=60), coverage=(24.0, 4.5)), clock)
+    assert store.is_covered(168, 4.5) and not store.coverage_lapsed
+    store.merge(Batch("usgs", T0 + timedelta(hours=100), coverage=(24.0, 4.5)), clock)
+    assert not store.is_covered(168, 4.5) and store.is_covered(24, 4.5) and store.coverage_lapsed
+    store.merge(batch(backfill=True, coverage=(168.0, 4.5)), clock)
+    assert store.is_covered(168, 4.5) and not store.coverage_lapsed  # the backfill closes the lapse
+
+
+def test_a_304_without_a_generation_time_confirms_nothing(clock):
+    store = Store()
+    store.merge(batch(backfill=True, coverage=(168.0, 4.5)), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=30), coverage=(24.0, 4.5), not_modified=True), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=50), coverage=(24.0, 4.5)), clock)
+    assert not store.is_covered(168, 4.5)  # the 304 did not count as "now"
+
+
+def fdsn_feature(i: int, broken: bool = False) -> dict:
+    feature = {"id": f"q{i}", "properties": {"mag": 3.0, "time": 0, "type": "earthquake"}}
+    if not broken:
+        feature["geometry"] = {"coordinates": [0, 0, 5]}
+    return feature
+
+
+@respx.mock
+async def test_fdsn_coverage_claims_the_exact_window(clock):
+    respx.get(url__regex=r".*fdsnws.*").mock(return_value=httpx.Response(200, json={"features": []}))
+    async with build_client() as client:
+        got = await UsgsSource(clock).fetch_range(client, T0, T0 + timedelta(hours=24.5), 3.0)
+    assert got.coverage == (24.5, 3.0) and got.listed is None
+
+
+@respx.mock
+async def test_fdsn_limit_counts_features_that_failed_to_parse(clock):
+    features = [fdsn_feature(i, broken=i < 3) for i in range(FDSN_LIMIT)]  # 4997 parse, but the reply is full
+    respx.get(url__regex=r".*fdsnws.*").mock(return_value=httpx.Response(200, json={"features": features}))
+    async with build_client() as client:
+        got = await UsgsSource(clock).fetch_range(client, T0, T0 + timedelta(hours=24), 3.0)
+    assert len(got.quakes) < FDSN_LIMIT and got.coverage is None
+
+
+def test_listing_names_every_id_and_distrusts_a_miscounted_reply():
+    features = [{"id": "us1", "properties": {"ids": ",ak1,us1,"}}, {"id": "us2", "properties": {}}]
+    assert listing({"features": features, "metadata": {"count": 2}}) == {"us1", "ak1", "us2"}
+    assert listing({"features": features, "metadata": {"count": 3}}) is None
+    assert listing({"features": [{"properties": {}}]}) is None
+    assert listing({}) is None
+
+
+def test_filter_hours_stop_at_what_the_store_keeps():
+    from earthwave.config import MAX_VIEW_HOURS
+    from earthwave.state.store import RETAIN
+    from earthwave.ui.screens.filters import parse_filters
+
+    assert timedelta(hours=MAX_VIEW_HOURS) == RETAIN
+    assert parse_filters("4.5", str(MAX_VIEW_HOURS)) == (4.5, MAX_VIEW_HOURS)
+    with pytest.raises(ValueError, match="between 1 and 840"):
+        parse_filters("4.5", str(MAX_VIEW_HOURS + 1))
+
+
+def alert_naming(quake_id: str):
+    from earthwave.models import TsunamiAlert
+
+    return TsunamiAlert("t", "t", "nws", "Warning", "x", quake_ref=quake_id)
+
+
+def test_ids_that_join_become_one_quake_and_one_rename_each(clock):
+    store = Store(AlertsConfig(major_magnitude=6.0))
+    store.merge(batch(make_quake("at1", 6.4), make_quake("us1", 6.4)), clock)  # warms the store, two rows, one event
+    store._tsunamis["t"] = alert_naming("at1")
+    events = store.merge(batch(make_quake("us1", 6.4, also_ids=("at1", "pt1"))), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+    assert [(type(e), e.old_id) for e in events] == [(QuakeRenamed, "at1")]  # no QuakeNew, no second QuakeMajor
+    assert store._tsunamis["t"].quake_ref == "us1"
+
+
+def test_a_new_preferred_id_replaces_the_old_row(clock):
+    store = Store(AlertsConfig(major_magnitude=6.0))
+    store.merge(batch(make_quake("ak1", 6.4)), clock)
+    events = store.merge(batch(make_quake("us1", 6.4, also_ids=("ak1",))), clock)
+    assert [q.id for q in store.all()] == ["us1"] and [type(e) for e in events] == [QuakeRenamed]
+
+
+def test_the_attention_for_a_renamed_quake_moves_with_it(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeNew(make_quake("ak1")), QuakeMajor(make_quake("ak1"))])
+    tracker.observe([QuakeRenamed("ak1", make_quake("us1"))])
+    assert tracker.is_unseen("us1") and not tracker.is_unseen("ak1")
+
+
+async def test_a_renamed_quake_leaves_one_saved_row(tmp_path, clock):
+    from earthwave.state.history import History
+
+    history = History(tmp_path / "h.db", 35, clock)
+    history.open()
+    history.start()
+    history.record([make_quake("ak1")], {"ak1"}, [], T0)
+    history.record([make_quake("us1")], {"us1"}, [], T0, replaced={"ak1"})
+    await history.close()
+    quakes, unseen = history.load_since(T0 - timedelta(days=1))
+    assert [q.id for q in quakes] == ["us1"] and unseen == {"us1"}
+
+
+def test_quakes_a_summary_feed_omits_are_removed_and_their_alerts_unlinked(clock):
+    store = Store()
+    keep = make_quake("keep", 5.0, minutes_ago=120)
+    gone = make_quake("gone", 6.5, minutes_ago=120)
+    below = make_quake("below", 2.0, minutes_ago=120)  # under the feed's floor: the feed says nothing about it
+    fresh = make_quake("fresh", 5.0, minutes_ago=2)  # inside the feed's lag
+    old = make_quake("old", 5.0, minutes_ago=60 * 24 * 3)  # outside the feed's window
+    store.merge(batch(keep, gone, below, fresh, old, backfill=True), clock)
+    store._tsunamis["t"] = alert_naming("gone")
+    store.merge(feed(keep), clock)
+    assert {q.id for q in store.all()} == {"keep", "below", "fresh", "old"}
+    assert store._tsunamis["t"].quake_ref is None
+
+
+def test_a_feed_never_removes_what_it_may_still_list(clock):
+    def stored() -> Store:
+        store = Store()
+        store.merge(batch(make_quake("a", 5.0, minutes_ago=120, also_ids=("alias",)), backfill=True), clock)
+        return store
+
+    cases = {
+        "an unparseable feature": feed(listed={"a"}),
+        "the quake's alias": feed(make_quake("b", 5.0, minutes_ago=100), listed={"b", "alias"}),
+        "an empty listing": feed(listed=set()),
+        "a query, which lists nothing": Batch("usgs", T0, backfill=True, coverage=(24.0, 4.5)),
+        "no generation time": replace(feed(make_quake("b", 5.0, minutes_ago=100)), generated=None),
+    }
+    for name, case in cases.items():
+        store = stored()
+        store.merge(case, clock)
+        assert store.get("a") is not None, name
+    store = stored()
+    store.merge(feed(make_quake("b", 5.0, minutes_ago=100)), clock)
+    assert store.get("a") is None
+
+
+def test_the_removal_window_counts_from_when_the_feed_was_made(clock):
+    store = Store()
+    store.merge(batch(make_quake("a", 5.0, minutes_ago=60), backfill=True), clock)
+    late = replace(feed(make_quake("b", 5.0, minutes_ago=100), at=T0 - timedelta(hours=3)), fetched_at=T0)
+    store.merge(late, clock)  # made 3 h ago: "a" (1 h old) happened after it, so it cannot have been listed
+    assert store.get("a") is not None
+
+
+def test_a_join_never_repeats_a_threshold_an_absorbed_id_already_crossed(clock):
+    store = Store(AlertsConfig(major_magnitude=6.0))
+    store.merge(batch(make_quake("at1", 6.1), make_quake("us1", 5.8)), clock)
+    events = store.merge(batch(make_quake("us1", 6.1, also_ids=("at1",))), clock)
+    assert QuakeMajor not in {type(e) for e in events}  # at1 was already major
+    assert QuakeRenamed in {type(e) for e in events}
+
+
+def test_the_strongest_attention_of_joined_ids_survives(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeMajor(make_quake("at1", 6.1)), QuakeNew(make_quake("us1", 5.8))])
+    tracker.observe([QuakeRenamed("at1", make_quake("us1", 6.1))])
+    assert tracker.kind_of("us1") is AttentionKind.MAJOR and tracker.kind_of("at1") is None
+
+
+def test_a_repeated_alias_cannot_lose_the_quake(clock):
+    store = Store()
+    store.merge(batch(make_quake("ak1")), clock)
+    store.merge(batch(make_quake("us1", also_ids=("ak1", "ak1"))), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+
+
+def test_a_stale_copy_under_a_replaced_id_is_not_stored_again(clock):
+    store = Store()
+    store.merge(batch(make_quake("us1", also_ids=("ak1",)), backfill=True), clock)
+    events = store.merge(batch(make_quake("ak1"), backfill=True), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+    assert [(type(e), e.old_id) for e in events] == [(QuakeRenamed, "ak1")]
+
+
+def test_a_summary_feed_reports_the_quakes_it_removed(clock):
+    store = Store()
+    store.merge(
+        batch(make_quake("gone", 6.5, minutes_ago=120), make_quake("keep", 5.0, minutes_ago=120), backfill=True), clock
+    )
+    events = store.merge(feed(make_quake("keep", 5.0, minutes_ago=120)), clock)
+    assert [(type(e), e.quake_id) for e in events] == [(QuakeRemoved, "gone")]
+
+
+def test_a_partial_backfill_still_closes_a_lapse(clock):
+    store = Store()
+    store.merge(batch(backfill=True, coverage=(168.0, 4.5)), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=70), coverage=(24.0, 4.5)), clock)
+    assert store.coverage_lapsed
+    store.merge(batch(backfill=True), clock)  # an fdsnws reply that hit its limit claims nothing but did land
+    assert not store.coverage_lapsed
+
+
+def test_a_malformed_generation_stamp_is_no_stamp():
+    assert generated({"metadata": {"generated": "soon"}}, "Sat, 31 Oct 2026 12:00:00 GMT") == T0
 
 
 # --- attention --------------------------------------------------------------------------------------------------
@@ -511,7 +732,8 @@ async def test_replayed_session_drives_scheduler_end_to_end():
             await sched.poll_source("usgs", client)
             assert not results[-1].error, results[-1].error
     assert [bool(r.batch.not_modified) for r in results] == [False, False, False, False, True, False]
-    assert all(not r.events for r in results[:4])  # backfill and the first steady batch are silent
+    # backfill and the first steady batch are silent; the canned day feed does not list the canned week feed's quakes
+    assert all(isinstance(e, QuakeRemoved) for r in results[:4] for e in r.events)
     assert store.warm and store.get("replay_new1") is not None
     last = results[-1].events
     assert {type(e) for e in last} == {QuakeNew, QuakeMajor, QuakeUpdated}

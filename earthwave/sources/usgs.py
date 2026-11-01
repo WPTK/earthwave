@@ -5,6 +5,7 @@ import math
 from collections import OrderedDict
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -53,6 +54,39 @@ def _ms(value: Any) -> datetime | None:
 
 def _ids(value: str | None) -> tuple[str, ...]:
     return tuple(part for part in (value or "").split(",") if part)
+
+
+def listing(data: dict) -> frozenset[str] | None:
+    """Every id (preferred and alias) a summary feed names, or None when the reply cannot be trusted as complete:
+    it is not a feature list, or its own count disagrees with it."""
+    features = data.get("features")
+    count = (data.get("metadata") or {}).get("count")
+    if not isinstance(features, list) or (count is not None and count != len(features)):
+        return None
+    ids: set[str] = set()
+    for feature in features:
+        if not isinstance(feature, dict) or "id" not in feature:
+            return None
+        ids.add(feature["id"])
+        aliases = (feature.get("properties") or {}).get("ids")
+        ids.update(_ids(aliases) if isinstance(aliases, str) else ())
+    return frozenset(ids)
+
+
+def generated(data: dict, modified: str | None) -> datetime | None:
+    """When a feed was made: its own metadata, else its Last-Modified header; a malformed stamp is no stamp."""
+    try:
+        made = _ms((data.get("metadata") or {}).get("generated"))
+    except (TypeError, ValueError, OverflowError, OSError):
+        made = None
+    return made or last_modified(modified)
+
+
+def last_modified(value: str | None) -> datetime | None:
+    try:
+        return parsedate_to_datetime(value).astimezone(UTC) if value else None
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_feature(feature: dict) -> Earthquake | None:
@@ -203,9 +237,18 @@ class UsgsSource:
             if response.status_code == 304:
                 self._done(feed, backfill)
                 log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
-                return Batch(self.name, self._clock.now(), not_modified=True, backfill=backfill, cursor=since)
+                return Batch(
+                    self.name,
+                    self._clock.now(),
+                    not_modified=True,
+                    backfill=backfill,
+                    cursor=since,
+                    coverage=feed_coverage(feed),
+                    generated=last_modified(since.partition("|")[2]) if same_feed and since else None,
+                )
             response.raise_for_status()
-            quakes = parse_collection(response.json())
+            data = response.json()
+            quakes = parse_collection(data)
         except Exception:
             if backfill:
                 self._startup_failures += 1
@@ -230,6 +273,8 @@ class UsgsSource:
             backfill=backfill,
             cursor=f"{feed}|{modified or ''}",
             coverage=feed_coverage(feed),
+            generated=generated(data, modified),
+            listed=listing(data),
             meta={"feed": feed, "silent": silent},
         )
 
@@ -253,11 +298,13 @@ class UsgsSource:
         }
         response = await client.get(FDSN_URL, params=params)
         response.raise_for_status()
-        quakes = parse_collection(response.json())
+        data = response.json()
+        quakes = parse_collection(data)
         log.debug("usgs fdsnws: %d quakes for %s", len(quakes), params)
-        hours = math.ceil((end - start) / timedelta(hours=1))
-        # A result that hit the limit is only partial, so claim no coverage for it.
-        coverage = None if len(quakes) >= FDSN_LIMIT else (float(hours), min_magnitude)
+        hours = (end - start) / timedelta(hours=1)
+        # A result that hit the limit is only partial, so claim no coverage for it. The raw count decides: features
+        # that failed to parse were still part of the answer. A query never lists ids: it never removes anything.
+        coverage = None if len(data.get("features", [])) >= FDSN_LIMIT else (hours, min_magnitude)
         return Batch(
             self.name, self._clock.now(), quakes=quakes, backfill=True, coverage=coverage, meta={"feed": "fdsnws"}
         )
