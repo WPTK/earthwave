@@ -16,6 +16,9 @@ from pathlib import Path
 
 import shapefile
 
+from earthwave import __version__
+
+UA = f"earthwave/{__version__} (+https://github.com/WPTK/earthwave; coastline build)"
 # Source: Natural Earth 1:10m physical vectors, ne_10m_coastline (public domain).
 # Simplification is planar Douglas-Peucker in degrees (default 0.01, about 1 km), so it is slightly coarser in
 # longitude at high latitudes. For comparison linecast uses the same 1:10m set at 0.012 degrees.
@@ -56,7 +59,8 @@ def douglas_peucker(points: list[Point], tolerance: float) -> list[Point]:
 
 
 def build(scale: str, tolerance: float) -> list[list[list[float]]]:
-    with urllib.request.urlopen(URL.format(scale=scale), timeout=120) as resp:
+    request = urllib.request.Request(URL.format(scale=scale), headers={"User-Agent": UA})
+    with urllib.request.urlopen(request, timeout=120) as resp:
         data = resp.read()
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         stem = next(n[:-4] for n in zf.namelist() if n.endswith(".shp"))

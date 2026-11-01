@@ -209,7 +209,7 @@ def test_baseline_removal_drops_a_steady_offset_and_keeps_a_pulse():
     pred = [coops.Prediction("S", t0 + timedelta(minutes=6 * i), 1.0) for i in range(60)]
     obs = [coops.GaugeReading("S", "coops", p.ts, 1.4 + (0.5 if i == 50 else 0), "6m") for i, p in enumerate(pred)]
     out = coops.remove_baseline(coops.residuals(obs, pred))
-    assert out[0].ts >= t0 + coops.BASELINE_MIN_SPAN  # no baseline, no residual, until there is an hour of history
+    assert out[0].ts >= t0 + coops.BASELINE_LAG  # no baseline, no residual, until there is an hour of history
     assert all(abs(r.residual_m) < 1e-9 for r in out if r.ts != pred[50].ts)
     pulse = next(r for r in out if r.ts == pred[50].ts)
     assert pulse.residual_m == pytest.approx(0.5) and pulse.observed_m - pulse.predicted_m == pytest.approx(0.5)

@@ -125,9 +125,13 @@ class DetailScreen(Screen):
         self.app.pop_screen()
 
     def action_open_browser(self) -> None:
-        """Only web pages open: on Windows webbrowser.open hands any string to os.startfile (files, programs)."""
-        if urlsplit(self.quake.url).scheme in ("http", "https"):
-            webbrowser.open(self.quake.url)
+        """Only web pages open: on Windows webbrowser.open hands any string to os.startfile (files, programs).
+
+        It runs in a thread: a console browser keeps webbrowser.open waiting until it exits.
+        """
+        url = self.quake.url
+        if urlsplit(url).scheme in ("http", "https"):
+            self.run_worker(lambda: webbrowser.open(url), thread=True, exit_on_error=False)
 
     def action_copy_url(self) -> None:
         if self.quake.url:

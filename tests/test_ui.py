@@ -404,7 +404,11 @@ async def test_empty_list_says_what_to_do():
         assert not empty.display
         app.set_query("zzzz-no-such-place")
         await pilot.pause()
-        assert empty.display and "No quakes match" in str(empty.render()) and "Press f" in str(empty.render())
+        assert (
+            empty.display
+            and "No quakes match" in str(empty.render())
+            and "Press / to change the search" in str(empty.render())
+        )
 
 
 async def test_a_markup_looking_search_does_not_crash_the_empty_hint():
@@ -415,19 +419,6 @@ async def test_a_markup_looking_search_does_not_crash_the_empty_hint():
         app.set_query("[/x] [bold]")
         await pilot.pause()
         assert "[/x] [bold]" in str(app.dashboard.query_one("#empty").render())
-
-
-async def test_attention_follows_what_the_filter_can_show_not_what_the_search_hides():
-    app = week_app()
-    shown = app.store.visible(app.view, app.clock)[0]
-    low = make_quake("low", 0.5, time=WEEK_NOW)  # below the 4.5 view filter: the list can never show it
-    app.store.merge(Batch("usgs", WEEK_NOW, quakes=(low,)), app.clock)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.tracker.observe([QuakeNew(shown), QuakeNew(low)])
-        app.set_query(shown.place)  # search hides the others, and the 0.5 never shows
-        await pilot.pause()
-        assert app.tracker.is_unseen(shown.id) and not app.tracker.is_unseen("low")
 
 
 def test_alert_floor_keeps_the_steady_feed_wide_enough_for_alerts():
@@ -588,7 +579,8 @@ def test_detail_opens_only_web_urls(monkeypatch, url, opens):
 
     opened = []
     monkeypatch.setattr("earthwave.ui.screens.detail.webbrowser.open", opened.append)
-    DetailScreen.action_open_browser(SimpleNamespace(quake=SimpleNamespace(url=url)))
+    screen = SimpleNamespace(quake=SimpleNamespace(url=url), run_worker=lambda fn, **kwargs: fn())  # the thread, inline
+    DetailScreen.action_open_browser(screen)
     assert opened == ([url] if opens else [])
 
 

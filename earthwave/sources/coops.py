@@ -140,7 +140,6 @@ def residuals(observed: list[GaugeReading], predictions: list[Prediction]) -> li
 
 BASELINE_WINDOW = timedelta(hours=3)  # the non-tidal offset is estimated from this much history ...
 BASELINE_LAG = timedelta(hours=1)  # ... ending this long before the sample, so a surge in progress is not absorbed
-BASELINE_MIN_SPAN = timedelta(hours=1)
 BASELINE_MIN_POINTS = 8
 
 
@@ -149,8 +148,8 @@ def remove_baseline(series: list[Residual]) -> list[Residual]:
 
     The baseline of each sample is the median of the residuals in the ``BASELINE_WINDOW`` that ends ``BASELINE_LAG``
     before it, so a surge that lifts every gauge by tens of centimetres is not an anomaly, while a pulse of minutes
-    still is, and an offset that begins now keeps showing for a while instead of being absorbed. A sample with less
-    than ``BASELINE_MIN_SPAN`` of history in that window (or fewer than ``BASELINE_MIN_POINTS`` samples) gets no
+    still is, and an offset that begins now keeps showing for a while instead of being absorbed. A sample with fewer
+    than ``BASELINE_MIN_POINTS`` samples in that window (so none in the first ``BASELINE_LAG`` of a series) gets no
     residual, as with the DART detrend. ``predicted_m`` absorbs the baseline, so observed - predicted still equals
     the residual.
     """
@@ -162,7 +161,7 @@ def remove_baseline(series: list[Residual]) -> list[Residual]:
         while lo < hi and series[lo].ts < r.ts - BASELINE_LAG - BASELINE_WINDOW:
             lo += 1
         prior = series[lo:hi]
-        if len(prior) < BASELINE_MIN_POINTS or r.ts - prior[0].ts < BASELINE_MIN_SPAN:
+        if len(prior) < BASELINE_MIN_POINTS:
             continue
         base = statistics.median(p.residual_m for p in prior)
         out.append(Residual(r.station_id, r.ts, r.observed_m, r.predicted_m + base, r.residual_m - base))

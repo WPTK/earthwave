@@ -536,8 +536,35 @@ async def drive(clock: ReplayClock, predicate, step: float = 60.0, timeout: floa
         await asyncio.sleep(0.05)
 
 
+async def drive_settled(app: EarthwaveApp, pilot, predicate, step: float = 60.0, timeout: float = 60.0) -> None:
+    """Move the frozen replay clock forward `step` seconds at a time until `predicate()` holds.
+
+    The clock only moves here and when the transport serves a recorded response. It moves only once the app has
+    finished everything the last step made due (every poll done, every result delivered), so a slow runner takes
+    longer in real time but never lets the clock run ahead of the polls. `timeout` only guards against a hang.
+    """
+    deadline = time.monotonic() + timeout
+
+    def busy() -> bool:
+        now = app.clock.monotonic()
+        return any(st.in_flight or st.next_due <= now for st in app.scheduler.statuses.values())
+
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for condition")
+        app.clock.advance(step)
+        while busy() and not predicate() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        await pilot.pause()
+
+
 class GatedReplay(ReplayTransport):
-    """Holds the second 32401 request until the test opens the gate, so the standard-mode state can be inspected."""
+    """Holds the second 32401 request until the test opens the gate, so the standard-mode state can be inspected.
+
+    The fifth request, the recording's late row at 22:00 that ends the event, is never served: the replay clock jumps to
+    each served record's time, so serving it as soon as a loaded runner polls again would age the pulse into 'stale'
+    before the test has looked at it.
+    """
 
     def __init__(self, path, clock):
         super().__init__(path, clock)
@@ -549,12 +576,15 @@ class GatedReplay(ReplayTransport):
             self.requests += 1
             if self.requests == 2:
                 await self.gate.wait()
+            elif self.requests >= 5:
+                await asyncio.Event().wait()
         return await super().handle_async_request(request)
 
 
 async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_switch(monkeypatch):
     """Real 32401 payloads of 2026-10-09: a stale standard batch, then 1-minute and 15-second rows with a 3 cm pulse."""
     monkeypatch.setattr("earthwave.notify.inapp.GAUGE_SECONDS", 1e9)  # keep the flag up however long the test takes
+    monkeypatch.setattr("earthwave.poll.TICK", 0.05)  # the scheduler notices a due poll quickly; `drive` waits for it
     clock = ReplayClock(recording_start(REPLAY), real=lambda: 0.0)  # moves only with `drive` and the recordings
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     config = replace(config, alerts=replace(config.alerts, gauge_anomaly_dart_m=0.02))  # the real pulse peaks at 3.1 cm
@@ -581,7 +611,7 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
         assert isinstance(app.screen, ObservationsScreen)
 
         # standard mode: one stale batch, the default 15-minute cadence, and a strip that says 'last batch'
-        await drive(clock, lambda: app.store.gauge_readings("32401") and transport.requests >= 2, step=300)
+        await drive_settled(app, pilot, lambda: app.store.gauge_readings("32401") and transport.requests >= 2, step=300)
         row = next(r for r in app.gauge_rows() if r.station_id == "32401")
         assert row.mode == "15m" and intervals[:1] == [900]
         app.screen.refresh_gauges()
@@ -590,12 +620,13 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
 
         # event mode: 1-minute and 15-second rows arrive, the source drops to alert cadence, the pulse trips the flag
         transport.gate.set()
-        await drive(clock, lambda: intervals[-1:] == [60.0] and len(intervals) >= 3)
-        await drive(clock, lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
+        await drive_settled(app, pilot, lambda: intervals[-1:] == [60.0] and len(intervals) >= 3)
+        await drive_settled(app, pilot, lambda: any(n.title == "Gauge anomaly" for n in fake.sent))
         await app._outbox.join()
         assert [n.title for n in fake.sent].count("Gauge anomaly") == 1  # one toast for the whole episode
-        await drive(
-            clock,
+        await drive_settled(
+            app,
+            pilot,
             lambda: min(app.store.gauge_residuals("32401"), key=lambda r: r.residual_m).residual_m < -0.025,
             step=15,
         )
@@ -606,7 +637,7 @@ async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_swi
             app.screen.refresh_gauges()
             return "-0.031 m !" in strip_text(app)  # the signed maximum of the real pulse, flagged
 
-        await drive(clock, pulse_flagged, step=15)
+        await drive_settled(app, pilot, pulse_flagged, step=15)
         assert app.tracker.gauge_active() == ["32401"]
         assert "Gauge anomaly" in str(app.dashboard.query_one("#ticker").render())
 
