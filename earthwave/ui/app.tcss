@@ -2,6 +2,8 @@
    names one: CSS "gold" is the same colour as YELLOW in theme.py. */
 $watch: gold;
 $watch-dim: olive;
+/* A Warning is the loudest thing on screen: a solid red (the theme's $error is a muted pink, quieter than Watch). */
+$alarm: red;
 
 Screen {
     background: $surface;
@@ -105,8 +107,9 @@ Screen {
 #banner {
     display: none;
     height: 1;
-    background: $error;
-    color: $text;
+    background: $alarm;
+    color: white;
+    text-style: bold;
 }
 
 #banner.level-advisory {
@@ -127,7 +130,8 @@ Screen {
 }
 
 #status.level-warning {
-    background: $error;
+    background: $alarm;
+    color: white;
 }
 
 #status.level-advisory {
@@ -152,7 +156,8 @@ TsunamiScreen {
 }
 
 #alert_table {
-    height: 40%;
+    height: auto;  /* sized to its rows: a screen with one or two alerts leaves the room to the bulletin and the gauges */
+    max-height: 40%;
 }
 
 #alert_text_scroll {
@@ -165,6 +170,7 @@ TsunamiScreen {
 #gauges {
     height: auto;
     max-height: 40%;  /* more rows than this scroll instead of squeezing out the bulletin or falling off the bottom */
+    padding-bottom: 1;  /* the last row's residual bar is drawn a half-line low: a blank line keeps it off the footer */
 }
 
 #search {
@@ -187,7 +193,7 @@ TsunamiScreen {
     height: 100%;
     content-align: center middle;
     text-align: center;
-    background: $error-darken-2;
+    background: $surface;
     layer: overlay;
 }
 

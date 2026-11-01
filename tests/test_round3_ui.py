@@ -44,7 +44,7 @@ async def test_empty_list_gives_the_feed_reason_not_a_filter_hint():
         app.set_query("zzzz-no-such-place")
         await pilot.pause()
         empty = app.dashboard.query_one("#empty")
-        assert empty.display and "Waiting for USGS" in str(empty.render())
+        assert empty.display and "No quakes match" in str(empty.render())  # quakes are held: the search emptied it
         app.scheduler.statuses["usgs"].health.failures = 3
         app.dashboard.refresh_view()
         text = str(empty.render())

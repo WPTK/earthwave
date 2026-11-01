@@ -490,6 +490,22 @@ async def test_empty_hint_waits_for_the_first_poll():
         app.set_query("zzzz-no-such-place")
         await pilot.pause()
         empty = app.dashboard.query_one("#empty")
+        assert "No quakes match" in str(empty.render()) and "Waiting" not in str(empty.render())  # quakes are held
+
+
+async def test_empty_list_waits_for_the_first_poll_when_nothing_is_held():
+    config = with_overrides(Config(), 4.5, 168, None, "unicode")
+    app = EarthwaveApp(
+        config,
+        store=Store(config.alerts, config.home),
+        clock=ReplayClock(WEEK_NOW, real=lambda: 0.0),
+        run_scheduler=False,
+        ticks=False,
+    )
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.set_query("zzzz-no-such-place")
+        await pilot.pause()
+        empty = app.dashboard.query_one("#empty")
         assert "Waiting for USGS" in str(empty.render()) and "No quakes match" not in str(empty.render())
 
 
@@ -606,8 +622,8 @@ async def test_the_ticker_waits_for_data_and_keeps_the_gauge_value_on_a_long_lin
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         ticker = app.dashboard.query_one(Ticker)
-        ticker.show(None, 0.0, waiting="Waiting for USGS")
-        assert "Waiting for USGS" in str(ticker.render())
+        ticker.show(None, 0.0, waiting=True)
+        assert str(ticker.render()).strip() == ""  # the list below says why: said once, not twice
         ticker.show(None, 0.0)
         assert "No major quakes in the loaded data" in str(ticker.render())
         quake = make_quake("big", 7.2, place="267 km ESE of Petropavlovsk-Kamchatsky, Russia " * 2)
@@ -622,8 +638,9 @@ async def test_the_ticker_names_the_feed_state_when_no_live_batch_can_arrive():
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         ticker = app.dashboard.query_one(Ticker)
-        ticker.show(None, 0.0, waiting=app.quake_feed_wait())
-        assert "Quakes are not being fetched" in str(ticker.render())
+        ticker.show(None, 0.0, waiting=bool(app.quake_feed_wait()))
+        assert "No major quakes" not in str(ticker.render())  # the empty list says it; the line above stays blank
+        assert "Quakes are not being fetched" in str(app.dashboard.query_one("#empty").render())
     app = week_app()
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()

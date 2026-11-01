@@ -16,7 +16,7 @@ from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import LEVEL_COLORS
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
-from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
+from earthwave.ui.widgets.too_small import TooSmall, refresh_too_small, sync_too_small
 from earthwave.ui.widgets.tsunami_panel import fmt_until
 
 if TYPE_CHECKING:
@@ -46,9 +46,13 @@ def table_rows(alerts: list[TsunamiAlert], statuses: dict[str, str]) -> list[Tsu
 
 def render_alert(alert: TsunamiAlert, status: str, quake_line: str, time_zone: str) -> Text:
     text = Text()
-    text.append(f"{alert.level} ", LEVEL_COLORS[alert.level])
-    text.append(f"({status})\n", STATUS_STYLE.get(status, "grey62"))
-    text.append(f"{alert.headline}\n\n", "bold")
+    if alert.level == levels.CANCELLATION:  # the headline is the cancelled alert's: the level and status say no more
+        text.append("Cancelled: ", LEVEL_COLORS[alert.level])
+        text.append(f"{alert.headline}\n\n", "bold")
+    else:
+        text.append(f"{alert.level} ", LEVEL_COLORS[alert.level])
+        text.append(f"({status})\n", STATUS_STYLE.get(status, "grey62"))
+        text.append(f"{alert.headline}\n\n", "bold")
     if alert.issued:
         text.append(f"Issued   {fmt_time(alert.issued, time_zone)}\n", "grey70")
     if alert.expires:
@@ -116,6 +120,7 @@ class TsunamiScreen(Screen):
         if not self._ready:  # a poll can land right after the screen is pushed, before it has composed
             return
         app = self.earthwave
+        refresh_too_small(self, self.size.width, self.size.height)  # an alert can arrive while the window stays small
         table = self.query_one(DataTable)
         keep = self.selected()
         alerts = list(app.store.alerts())
@@ -128,7 +133,7 @@ class TsunamiScreen(Screen):
             status = statuses[alert.id]
             table.add_row(
                 Text(alert.level, LEVEL_COLORS[alert.level]),
-                Text(status, STATUS_STYLE.get(status, "grey62")),
+                Text("" if alert.level == levels.CANCELLATION else status, STATUS_STYLE.get(status, "grey62")),
                 SOURCE_NAMES.get(alert.source, alert.source),
                 fmt_time(alert.issued, tz) if alert.issued else "",
                 "overdue"

@@ -931,7 +931,9 @@ async def test_banner_panel_and_status_follow_the_alert():
         assert status.has_class("alert-alarm") and "TSUNAMI" in str(status.render())
         await pilot.press("a")
         await pilot.pause()
-        assert not banner.display and status.has_class("alert-active") and not status.has_class("alert-alarm")
+        assert status.has_class("alert-active") and not status.has_class("alert-alarm")
+        assert banner.display and "acknowledged" in str(banner.render())  # the alert in force stays in sight
+        assert "TSUNAMI" in str(status.render())
 
 
 async def test_information_statements_stay_blue_without_banner():

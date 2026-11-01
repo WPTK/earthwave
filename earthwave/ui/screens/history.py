@@ -16,7 +16,7 @@ from earthwave.models import Earthquake
 from earthwave.sources import levels
 from earthwave.state.history import day_bounds
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
-from earthwave.ui.widgets.too_small import TooSmall, is_too_small
+from earthwave.ui.widgets.too_small import TooSmall, is_too_small, refresh_too_small
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -85,7 +85,7 @@ class HistoryScreen(Screen):
         small = is_too_small(event.size.width, event.size.height)
         self.set_class(small, "too-small")
         if small:
-            self.query_one(TooSmall).show(event.size.width, event.size.height)
+            refresh_too_small(self, event.size.width, event.size.height)
         else:  # hiding the list dropped its focus; the header is padded to the list's width, which has changed
             self.call_after_refresh(self.query_one(QuakeList).focus)
             self.call_after_refresh(self._draw_header)
