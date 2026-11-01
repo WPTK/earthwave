@@ -166,11 +166,12 @@ def test_seen_quakes_do_not_pile_up_when_nobody_takes_them(clock):
 
 
 async def test_pressing_b_does_not_block_the_app_while_the_browser_runs(monkeypatch):
-    release, started = threading.Event(), threading.Event()
+    release, started, returned = threading.Event(), threading.Event(), threading.Event()
 
     def slow_open(url):
         started.set()
         release.wait(5)  # a console browser: returns only when it exits
+        returned.set()
         return True
 
     monkeypatch.setattr("earthwave.ui.screens.detail.webbrowser.open", slow_open)
@@ -184,6 +185,7 @@ async def test_pressing_b_does_not_block_the_app_while_the_browser_runs(monkeypa
             await wait_until(pilot, started.is_set, what="the browser call")
             await pilot.press("escape")  # the loop is free: the screen closes while the browser is still open
             await wait_until(pilot, lambda: app.screen is app.dashboard, what="going back")
+            assert not returned.is_set()  # and it did so without waiting for the browser
     finally:
         release.set()
 
