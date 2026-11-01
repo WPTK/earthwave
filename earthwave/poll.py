@@ -42,6 +42,10 @@ class SourceStatus:
     last_poll: float | None = None  # clock.monotonic() of the last attempt
     in_flight: bool = False
     nudged_due: float | None = None  # a reschedule made mid-fetch; the fetch must not undo it
+    backfill_failures: int = 0  # consecutive failed one-off queries for the current view
+    backfill_due: float = 0.0  # clock.monotonic() before which a failed query is not asked again
+    backfill_blocked: bool = False  # the server refused the query for good (a 4xx); a new view clears it
+    partial: bool = False  # the view's window could not be fetched in full, so the list may be short
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +122,16 @@ class Scheduler:
     def switch(self) -> int:
         """The view changed: older generations' backfill results are dropped. Returns the new generation."""
         self.generation += 1
+        for status in self.statuses.values():  # a new view is a new query: forget what failed for the old one
+            status.backfill_failures, status.backfill_due, status.backfill_blocked = 0, 0.0, False
+            if status.partial:
+                status.partial = status.health.incomplete = False
         return self.generation
+
+    def backfill_ready(self, name: str) -> bool:
+        """False while a failed one-off query is backing off, or after the server refused it for good."""
+        status = self.statuses.get(name)
+        return status is None or (not status.backfill_blocked and self._clock.monotonic() >= status.backfill_due)
 
     def refresh_now(self) -> None:
         """Poll every source as soon as its minimum interval allows."""
@@ -178,8 +191,9 @@ class Scheduler:
                 events.append(SourceRecovered(name))
             health.failures = 0
             health.last_ok = self._clock.now()
-            health.incomplete = bool(batch is not None and batch.meta.get("incomplete"))
-            if batch is not None and not health.incomplete:
+            skipped = bool(batch is not None and batch.meta.get("incomplete"))
+            health.incomplete = skipped or status.partial  # a failed backfill keeps the feed marked partial
+            if batch is not None and not skipped:
                 health.last_complete = started
             health.last_error = None
             if batch is not None and batch.cursor is not None:
@@ -216,11 +230,14 @@ class Scheduler:
                 raise
             except Exception as exc:
                 log.warning("%s: backfill failed: %r", source, exc)
+                if generation == self.generation:
+                    self._backfill_failed(source, exc)
                 self._on_done(PollResult(source, generation, error=describe(exc)))
                 return
             if generation != self.generation:
                 log.debug("%s: dropping backfill from generation %d (now %d)", source, generation, self.generation)
                 return
+            self._backfill_landed(source)
             events = self._store.merge(batch, self._clock)
             self._on_done(PollResult(source, generation, tuple(events), batch))
 
@@ -228,6 +245,28 @@ class Scheduler:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+    def _backfill_failed(self, name: str, exc: Exception) -> None:
+        """Back the next attempt off (honouring Retry-After), stop on a refusal that cannot change, mark the feed
+        partial so the status bar says the list may be short."""
+        status = self.statuses.get(name)
+        if status is None:
+            return
+        status.backfill_failures += 1
+        delay = backoff_delay(self._sources[name].min_interval, status.backfill_failures, self._rng)
+        asked = retry_after_of(exc, self._clock.now())
+        if asked is not None:
+            delay = max(delay, asked)
+        status.backfill_due = self._clock.monotonic() + delay
+        code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else 0
+        status.backfill_blocked = 400 <= code < 500 and code not in (408, 429)
+        status.partial = status.health.incomplete = True
+
+    def _backfill_landed(self, name: str) -> None:
+        status = self.statuses.get(name)
+        if status is not None:
+            status.backfill_failures, status.backfill_due, status.backfill_blocked = 0, 0.0, False
+            status.partial = status.health.incomplete = False
 
     async def run(self, client: httpx.AsyncClient) -> None:
         """Poll forever; each source has its own task, so a slow or failing one never delays the others."""

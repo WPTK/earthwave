@@ -50,6 +50,7 @@ async def test_empty_list_gives_the_feed_reason_not_a_filter_hint():
         text = str(empty.render())
         assert "USGS is not answering" in text and "No quakes match" not in text and "Press f" not in text
         app.store.merge(Batch("usgs", WEEK_NOW, quakes=()), app.clock)  # warm: the data was checked
+        app.scheduler.statuses["usgs"].health.failures = 0  # and the feed answers again
         app.dashboard.refresh_view()
         assert "No quakes match" in str(empty.render())
 
