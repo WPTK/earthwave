@@ -82,4 +82,4 @@ def test_quake_then_503_then_reset_then_recovery():
         term.wait_for(lambda s: "usgs" not in failed_line(s.text), 220, "recovery after the reset (backoff is 120 s +-10%)")
         recovered = snap(term, "4-recovered")
         assert "Vanuatu" in recovered
-        (OUT / "failed-lines.txt").write_text("\n".join(map(failed_line, (ok, after503, afterreset, recovered))))
+        (OUT / "failed-lines.txt").write_text("\n".join(map(failed_line, (ok, after503, afterreset, recovered))), encoding="utf-8")
