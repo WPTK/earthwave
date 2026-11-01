@@ -23,12 +23,34 @@ STEPS = 240  # two replay hours
 BUSY = 20  # the watch, the warning and the quake all arrive in the first steps: one frame per step until here,
 EVERY = 20  # then one frame per this many steps, as the clock runs on
 INTERVAL = 0.5  # seconds each frame stays on screen in the animation
+MIN_BUSY_RUNS = 8  # the first distinct frames (Watch, Warning, cancellation, the quake arriving) each stay at least
+MIN_BUSY_TICKS = 6  # this many intervals (3 s) on screen
 HOLD = 4  # the last frame stays on screen this many extra intervals
+
+import httpx  # noqa: E402
 
 from earthwave.app import EarthwaveApp  # noqa: E402
 from earthwave.clock import ReplayClock  # noqa: E402
 from earthwave.config import Config, with_overrides  # noqa: E402
 from earthwave.net import ReplayTransport, recording_start  # noqa: E402
+
+# Feeds the recording has no copy of answer as a quiet feed with nothing in it, not as a failure, so no frame shows a
+# red "failed" status. Anything else unrecorded still answers 404.
+_QUIET = (
+    ("api.weather.gov/alerts/active", '{"type": "FeatureCollection", "features": []}'),
+    ("mdapi/prod/webapi/stations.json", '{"stations": []}'),
+)
+
+
+class QuietReplay(ReplayTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url not in self._by_url:
+            for part, body in _QUIET:
+                if part in url:
+                    return httpx.Response(200, content=body.encode(), request=request)
+        return await super().handle_async_request(request)
+
 
 _BODY = re.compile(r"<svg[^>]*>(.*)</svg>", re.S)
 _ROOT = re.compile(r"<svg([^>]*)>")
@@ -39,7 +61,7 @@ async def sample() -> list[str]:
     clock = ReplayClock(recording_start(RECORDING), real=lambda: 0.0)
     config = with_overrides(Config(), 2.5, 24, None, "unicode")
     config = replace(config, view=replace(config.view, time_zone="UTC"))
-    app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(RECORDING, clock), history=None)
+    app = EarthwaveApp(config, clock=clock, transport=QuietReplay(RECORDING, clock), history=None)
     frames: list[str] = []
     async with app.run_test(size=SIZE) as pilot:
         await pilot.pause()
@@ -54,18 +76,20 @@ async def sample() -> list[str]:
 
 def join(frames: list[str]) -> str:
     """One SVG that shows each distinct frame in turn; a repeated frame just stays on screen longer."""
-    runs: list[list] = []  # [frame, ticks]
-    for frame in frames:
+    runs: list[list] = []  # [frame, ticks, index of its first sample]
+    for n, frame in enumerate(frames):
         if runs and runs[-1][0] == frame:
             runs[-1][1] += 1
         else:
-            runs.append([frame, 1])
+            runs.append([frame, 1, n])
+    for run in runs[:MIN_BUSY_RUNS]:
+        run[1] = max(run[1], MIN_BUSY_TICKS)
     runs[-1][1] += HOLD
-    total = sum(ticks for _f, ticks in runs) * INTERVAL
+    total = sum(run[1] for run in runs) * INTERVAL
     attrs = _ROOT.search(runs[0][0]).group(1)  # type: ignore[union-attr]
     out = [f"<svg{attrs}>", f'<set id="loop" attributeName="x" to="0" begin="0s;loop.end" dur="{total:.2f}s"/>']
     at = 0.0
-    for n, (frame, ticks) in enumerate(runs):
+    for n, (frame, ticks, _first) in enumerate(runs):
         body = _BODY.search(frame).group(1)  # type: ignore[union-attr]
         out.append(f'<g display="{"inline" if n == 0 else "none"}">')
         out.append(
