@@ -168,13 +168,14 @@ def test_sparkline_is_framed_by_zero_and_threshold():
     assert len(sparkline_data(tuple([0.01] * 1000), DART_THRESHOLD)) == 242
 
 
-def test_summary_and_colour_use_only_the_drawn_window():
+def test_summary_covers_every_stored_residual_and_only_the_drawing_is_limited():
     from earthwave.ui.widgets.gauge_strip import MAX_POINTS
 
     residuals = (0.9, *([0.001] * (MAX_POINTS + 59)))  # a spike 300 samples back, outside the drawn 240
     row = _row(residuals=residuals)
-    assert max_text(row, NOW).plain == "+0.001 m" and "green" in str(max_text(row, NOW).style)
-    assert max(sparkline_data(residuals, DART_THRESHOLD)) == DART_THRESHOLD
+    shown = max_text(row, NOW)
+    assert shown.plain == "+0.900 m peak" and "green" not in str(shown.style)  # an old exceedance is not a calm value
+    assert max(sparkline_data(residuals, DART_THRESHOLD)) == DART_THRESHOLD  # the drawing keeps only the newest 240
     assert max_residual((float("nan"), -0.02)) == -0.02 and max_residual((float("nan"),)) is None
 
 

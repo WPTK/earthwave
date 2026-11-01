@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -14,6 +15,7 @@ from textual.widgets import Footer, Static
 from earthwave.models import Earthquake, QuakeDetail
 from earthwave.ui.labels import fmt_age, fmt_distance, fmt_time
 from earthwave.ui.theme import PAGER_COLORS, mag_color
+from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -24,9 +26,19 @@ def _row(text: Text, label: str, value: str, style: str = "white") -> None:
     text.append(f"{value}\n", style)
 
 
+GONE_NOTE = "USGS no longer lists this quake; these are the last values received."
+
+
 def render_detail(
-    quake: Earthquake, detail: QuakeDetail | None, note: str, home: tuple[float, float] | None, time_zone: str, now
+    quake: Earthquake,
+    detail: QuakeDetail | None,
+    note: str,
+    home: tuple[float, float] | None,
+    time_zone: str,
+    now,
+    detail_current: bool = True,
 ) -> Text:
+    """`detail_current`: the product was fetched for this revision; an older one yields to the quake's own values."""
     text = Text()
     text.append(f"M{quake.mag:.1f} ", mag_color(quake.mag))
     text.append(f"{quake.place or 'unknown location'}\n\n", "bold")
@@ -46,7 +58,8 @@ def render_detail(
         _row(text, "Max MMI", f"{quake.mmi:g}")
     if quake.tsunami_flag:
         _row(text, "Tsunami", "USGS links a tsunami product", "bold blue")
-    alert = (detail.pager_alert if detail else None) or quake.pager_alert
+    product = (detail.pager_alert if detail else None) if detail_current else None
+    alert = product or quake.pager_alert or (detail.pager_alert if detail else None)
     if alert:
         _row(text, "PAGER alert", alert, PAGER_COLORS.get(alert, "white"))
     if detail:
@@ -90,6 +103,9 @@ class DetailScreen(Screen):
         self.quake = quake
         self.detail: QuakeDetail | None = None
         self.note = "Loading detail..."
+        self.gone = False  # the store no longer holds the quake (USGS deleted or retyped it)
+        self._requested: tuple[str, object] | None = None  # (id, updated) the detail was last asked for
+        self._fetched: tuple[str, object] | None = None  # (id, updated) the shown detail belongs to
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -99,20 +115,34 @@ class DetailScreen(Screen):
         with VerticalScroll(id="detail_scroll"):
             yield Static("", id="detail")
         yield Footer(compact=True, show_command_palette=False)
+        yield TooSmall(id="too_small")
+
+    def on_resize(self, event: events.Resize) -> None:
+        sync_too_small(self, event)
 
     def on_mount(self) -> None:
         self._show()
         self.set_interval(REFRESH_SECONDS, self._show)  # the store holds revisions, and the age moves on
-        self.run_worker(self._load(), exit_on_error=False)
 
-    async def _load(self) -> None:
+    def _key(self) -> tuple[str, object]:
+        return self.quake.id, self.quake.updated
+
+    def _load_if_changed(self) -> None:
+        """Fetch the detail product once per revision: on open, and again when `updated` or the id moves."""
+        if self._requested == self._key():
+            return
+        self._requested = self._key()
+        self.run_worker(self._load(self.quake), group="detail", exclusive=True, exit_on_error=False)
+
+    async def _load(self, quake: Earthquake) -> None:
         app = self.earthwave
         if app.offline:
             self.note = "Offline: PAGER, ShakeMap and nearby cities are not available."
             self._show()
             return
         try:
-            self.detail = await app.usgs.fetch_detail(app.client, self.quake)
+            self.detail = await app.usgs.fetch_detail(app.client, quake)
+            self._fetched = (quake.id, quake.updated)
             self.note = ""
         except Exception as exc:
             self.note = f"Detail unavailable: {type(exc).__name__}: {exc}"
@@ -120,10 +150,23 @@ class DetailScreen(Screen):
 
     def _show(self) -> None:
         app = self.earthwave
-        self.quake = app.store.get(self.quake.id) or self.quake  # the snapshot only if the store dropped the quake
+        current = app.store.resolve(self.quake.id)  # follows a preferred-id change through the store's alias map
+        self.gone = current is None
+        self.quake = current or self.quake  # the snapshot only if the store dropped the quake
+        if not self.gone:
+            self._load_if_changed()
         home = (app.config.home.lat, app.config.home.lon) if app.config.home.enabled else None
+        note = "\n".join(n for n in (self.note, GONE_NOTE if self.gone else "") if n)
         self.query_one("#detail", Static).update(
-            render_detail(self.quake, self.detail, self.note, home, app.config.view.time_zone, app.clock.now())
+            render_detail(
+                self.quake,
+                self.detail,
+                note,
+                home,
+                app.config.view.time_zone,
+                app.clock.now(),
+                detail_current=self._fetched == self._key(),
+            )
         )
 
     def action_back(self) -> None:

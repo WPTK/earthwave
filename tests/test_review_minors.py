@@ -389,6 +389,7 @@ async def test_r_does_not_claim_to_refresh_when_nothing_polls():
 
 async def test_empty_hint_names_whichever_of_search_and_filter_emptied_the_list():
     app = week_app()
+    app.store.warm = True  # a steady batch has answered, so an empty list is a query result
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         empty = app.dashboard.query_one("#empty")
