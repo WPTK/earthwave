@@ -33,12 +33,14 @@ py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -e ".[dev]"
 .venv\Scripts\python -m earthwave --version
 .venv\Scripts\python -m earthwave --selftest
 .venv\Scripts\python scripts\capture_fixtures.py   # re-capture live fixtures (one request per URL)
+.venv\Scripts\python scripts\check_feeds.py --state s.json --report r.md   # live feed check (CI runs it daily)
 ```
 
 ## Layout
 
 `earthwave/` package (`__main__.py` CLI; the full module plan is in `docs/plan.md`), `scripts/`, `tests/` with saved
 live payloads under `tests/fixtures/<source>/` (`-text` in `.gitattributes`, never reformat them), `docs/`.
+Tests are limited to 120 s each and 2 GB resident memory per process (`EARTHWAVE_TEST_RSS_MB` overrides).
 Use `127.0.0.1`, not `localhost`, for local servers on Windows.
 
 ## Data resolution
