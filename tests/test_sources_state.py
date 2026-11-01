@@ -647,6 +647,18 @@ async def test_failure_backoff_recovery_and_isolation(clock):
     assert sched.statuses["fake"].health.failures == 0
 
 
+async def test_a_429_with_retry_after_delays_the_next_poll_beyond_the_backoff(clock):
+    request = httpx.Request("GET", "https://example.test/")
+    limited = httpx.HTTPStatusError(
+        "429", request=request, response=httpx.Response(429, headers={"Retry-After": "1800"}, request=request)
+    )
+    source = FakeSource([limited])
+    sched = Scheduler([source], Store(), clock, lambda result: None, rng=random.Random(3))
+    async with build_client() as client:
+        await sched.poll_source("fake", client)
+    assert sched.statuses["fake"].next_due - clock.monotonic() == 1800.0
+
+
 async def test_merge_crash_is_contained(clock):
     source = FakeSource([Batch("fake", T0)])
     store = Store()

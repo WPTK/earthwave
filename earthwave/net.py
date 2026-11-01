@@ -3,18 +3,25 @@
 import base64
 import json
 import logging
+import math
+import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import httpx
 
 from earthwave import __version__
-from earthwave.clock import Clock, ReplayClock
+from earthwave.clock import Clock, ReplayClock, SystemClock
 
 log = logging.getLogger(__name__)
 
 REPO_URL = "https://github.com/WPTK/earthwave"
 _DROPPED_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
+_CALLER_VALIDATORS = {"if-none-match", "if-modified-since"}
+RETRY_AFTER_DEFAULT = 60.0  # seconds a host is left alone after a 429 that names no wait
+RETRY_AFTER_CAP = 3600.0  # a longer Retry-After is honoured only up to here
+CACHE_ENTRIES = 64
 
 
 def user_agent(contact: str = "") -> str:
@@ -22,13 +29,138 @@ def user_agent(contact: str = "") -> str:
     return f"earthwave/{__version__} (+{REPO_URL}{suffix})"
 
 
-def build_client(contact: str = "", transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
-    """The one shared client: identifying User-Agent, gzip, 10 s connect and 20 s read timeouts."""
+def retry_after(header: str | None, now: datetime, default: float = 5.0) -> float:
+    """Seconds to wait from a Retry-After header: a number of seconds or an HTTP date."""
+    if not header:
+        return default
+    try:
+        return max(0.0, float(header))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, (when - now).total_seconds()) if when.tzinfo else default
+
+
+def retry_after_of(exc: BaseException, now: datetime) -> float | None:
+    """The wait a 429 or 503 asked for (capped), or None when `exc` is not a rate-limit answer."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (429, 503):
+        header = exc.response.headers.get("Retry-After")
+        if header or exc.response.status_code == 429:
+            return min(retry_after(header, now, RETRY_AFTER_DEFAULT), RETRY_AFTER_CAP)
+    return None
+
+
+def _max_age(cache_control: str) -> float | None:
+    """Freshness lifetime in seconds from a Cache-Control value; 0 for no-cache, None for no-store."""
+    directives = cache_control.lower()
+    if "no-store" in directives:
+        return None
+    if "no-cache" in directives:
+        return 0.0
+    match = re.search(r"(?<![-\w])max-age=(\d+)", directives)
+    return float(match.group(1)) if match else 0.0
+
+
+class _Entry:
+    __slots__ = ("body", "etag", "fresh_until", "headers", "last_modified", "status")
+
+    def __init__(self, response: httpx.Response, body: bytes, fresh_until: float):
+        self.etag = response.headers.get("ETag")
+        self.last_modified = response.headers.get("Last-Modified")
+        self.status = response.status_code
+        self.headers = {k: v for k, v in response.headers.items() if k.lower() not in _DROPPED_HEADERS}
+        self.body = body
+        self.fresh_until = fresh_until
+
+    def response(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(self.status, headers=self.headers, content=self.body, request=request)
+
+
+class PoliteTransport(httpx.AsyncBaseTransport):
+    """The one place that makes every source a considerate client.
+
+    - GET responses that carry an ETag or Last-Modified are kept; the next request for the URL is conditional and a 304
+      is answered to the caller as the kept 200, so no source needs to know about validators.
+    - A response still fresh under its Cache-Control max-age is answered from the cache with no request at all.
+    - After a 429 (or a 503 with Retry-After) the host is left alone for the time it named: requests meanwhile get a
+      synthetic 429 carrying the wait that remains, which the scheduler turns into the next poll time.
+
+    A request that already carries If-None-Match or If-Modified-Since (the USGS cursor) passes through untouched.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, clock: Clock):
+        self._inner = inner
+        self._clock = clock
+        self._cache: dict[str, _Entry] = {}
+        self._blocked: dict[str, float] = {}  # host -> monotonic time the host may be asked again
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host, now = request.url.host, self._clock.monotonic()
+        remaining = self._blocked.get(host, 0.0) - now
+        if remaining > 0:
+            log.debug("polite: %s asked us to wait, %.0fs left", host, remaining)
+            return httpx.Response(429, headers={"Retry-After": str(math.ceil(remaining))}, request=request)
+        if request.method != "GET" or _CALLER_VALIDATORS & {k.lower() for k in request.headers}:
+            return await self._inner.handle_async_request(request)
+        key = str(request.url)
+        entry = self._cache.get(key)
+        if entry and now < entry.fresh_until:
+            return entry.response(request)
+        if entry:
+            if entry.etag:
+                request.headers["If-None-Match"] = entry.etag
+            if entry.last_modified:
+                request.headers["If-Modified-Since"] = entry.last_modified
+        response = await self._inner.handle_async_request(request)
+        if response.status_code in (429, 503):
+            self._note_rate_limit(host, response, now)
+            return response
+        if response.status_code == 304 and entry:
+            await response.aclose()
+            entry.fresh_until = now + (_max_age(response.headers.get("Cache-Control", "")) or 0.0)
+            return entry.response(request)
+        if response.status_code == 200:
+            return await self._remember(key, request, response, now)
+        return response
+
+    def _note_rate_limit(self, host: str, response: httpx.Response, now: float) -> None:
+        header = response.headers.get("Retry-After")
+        if not header and response.status_code != 429:
+            return
+        wait = min(retry_after(header, self._clock.now(), RETRY_AFTER_DEFAULT), RETRY_AFTER_CAP)
+        self._blocked[host] = now + wait
+        log.warning("%s answered %d; leaving it alone for %.0fs", host, response.status_code, wait)
+
+    async def _remember(self, key: str, request: httpx.Request, response: httpx.Response, now: float) -> httpx.Response:
+        lifetime = _max_age(response.headers.get("Cache-Control", ""))
+        if lifetime is None or not (lifetime or response.headers.get("ETag") or response.headers.get("Last-Modified")):
+            self._cache.pop(key, None)
+            return response
+        body = await response.aread()
+        await response.aclose()
+        entry = _Entry(response, body, now + lifetime)
+        self._cache.pop(key, None)
+        self._cache[key] = entry
+        while len(self._cache) > CACHE_ENTRIES:
+            del self._cache[next(iter(self._cache))]
+        return entry.response(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def build_client(
+    contact: str = "", transport: httpx.AsyncBaseTransport | None = None, clock: Clock | None = None
+) -> httpx.AsyncClient:
+    """The one shared client: identifying User-Agent, gzip, 10 s connect and 20 s read timeouts, polite transport."""
     return httpx.AsyncClient(
         headers={"User-Agent": user_agent(contact), "Accept-Encoding": "gzip"},
         timeout=httpx.Timeout(20.0, connect=10.0),
         follow_redirects=True,
-        transport=transport,
+        transport=PoliteTransport(transport or httpx.AsyncHTTPTransport(), clock or SystemClock()),
     )
 
 

@@ -100,7 +100,7 @@ class EarthwaveApp(App):
             config.alerts.major_magnitude, config.alerts.near_home_magnitude if config.home.enabled else math.inf
         )
         self.usgs = UsgsSource(self.clock, config.poll.usgs_seconds, config.view.min_magnitude, alert_floor=alert_floor)
-        self.client = build_client(config.notify.contact, transport)
+        self.client = build_client(config.notify.contact, transport, self.clock)
         self.rules = AlertRules(config.alerts)
         self.notifier = notifier
         self.bell_enabled = bell

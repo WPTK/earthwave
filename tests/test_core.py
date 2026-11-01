@@ -21,7 +21,14 @@ from earthwave.config import (
     with_overrides,
 )
 from earthwave.logging_setup import setup_logging
-from earthwave.net import RecordingTransport, ReplayTransport, build_client, recording_start, user_agent
+from earthwave.net import (
+    RecordingTransport,
+    ReplayTransport,
+    build_client,
+    recording_start,
+    retry_after_of,
+    user_agent,
+)
 from earthwave.sources import geo
 
 # --- clock ------------------------------------------------------------------------------------------------------
@@ -73,6 +80,114 @@ async def test_client_sends_user_agent_and_gzip():
         await client.get("https://example.test/")
     assert seen["user-agent"].startswith("earthwave/") and "a@b.c" in seen["user-agent"]
     assert "gzip" in seen["accept-encoding"]
+
+
+def _polite(clock, handler):
+    seen = []
+
+    def wrapped(request):
+        seen.append(request)
+        return handler(request, len(seen))
+
+    return build_client(transport=httpx.MockTransport(wrapped), clock=clock), seen
+
+
+async def test_etag_makes_the_next_request_conditional_and_a_304_serves_the_kept_body(clock):
+    def handler(request, n):
+        if n == 1:
+            return httpx.Response(
+                200, text="body", headers={"ETag": '"v1"', "Last-Modified": "Sat, 10 Oct 2026 12:00:00 GMT"}
+            )
+        assert request.headers["if-none-match"] == '"v1"'
+        assert request.headers["if-modified-since"] == "Sat, 10 Oct 2026 12:00:00 GMT"
+        return httpx.Response(304)
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        first = await client.get("https://example.test/feed")
+        second = await client.get("https://example.test/feed")
+    assert (first.status_code, second.status_code, second.text) == (200, 200, "body") and len(seen) == 2
+
+
+async def test_max_age_answers_from_cache_until_it_lapses(clock):
+    def handler(request, n):
+        return httpx.Response(200, text=f"v{n}", headers={"Cache-Control": "public, max-age=60"})
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        assert (await client.get("https://example.test/a")).text == "v1"
+        clock.advance(30)
+        assert (await client.get("https://example.test/a")).text == "v1" and len(seen) == 1
+        clock.advance(31)
+        assert (await client.get("https://example.test/a")).text == "v2" and len(seen) == 2
+
+
+async def test_no_store_and_unvalidated_responses_are_never_kept(clock):
+    def handler(request, n):
+        return httpx.Response(
+            200, text=f"v{n}", headers={"Cache-Control": "no-store", "ETag": '"x"'} if "s" in request.url.path else {}
+        )
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        for path in ("/s", "/s", "/plain", "/plain"):
+            await client.get(f"https://example.test{path}")
+    assert len(seen) == 4 and all("if-none-match" not in r.headers for r in seen)
+
+
+async def test_a_caller_supplied_validator_passes_straight_through(clock):
+    def handler(request, n):
+        return httpx.Response(304) if n > 1 else httpx.Response(200, text="x", headers={"ETag": '"a"'})
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        await client.get("https://example.test/f")
+        got = await client.get("https://example.test/f", headers={"If-Modified-Since": "Sat, 10 Oct 2026 12:00:00 GMT"})
+    assert got.status_code == 304 and "if-none-match" not in seen[1].headers
+
+
+async def test_429_leaves_the_host_alone_for_retry_after_without_touching_others(clock):
+    def handler(request, n):
+        return httpx.Response(429, headers={"Retry-After": "30"}) if n == 1 else httpx.Response(200, text="ok")
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        assert (await client.get("https://a.test/x")).status_code == 429
+        clock.advance(10)
+        held = await client.get("https://a.test/y")
+        assert held.status_code == 429 and held.headers["retry-after"] == "20" and len(seen) == 1
+        assert (await client.get("https://b.test/x")).status_code == 200
+        clock.advance(20)
+        assert (await client.get("https://a.test/y")).status_code == 200
+
+
+async def test_a_429_without_a_wait_backs_off_a_minute_and_a_bare_503_does_not_block(clock):
+    def handler(request, n):
+        return httpx.Response(429 if request.url.host == "a.test" else 503)
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        await client.get("https://a.test/")
+        await client.get("https://b.test/")
+        await client.get("https://b.test/")
+        held = await client.get("https://a.test/")
+    assert held.headers["retry-after"] == "60" and len(seen) == 3
+
+
+def test_retry_after_of_reads_only_rate_limit_answers(clock):
+    def status_error(code, headers=None):
+        request = httpx.Request("GET", "https://example.test/")
+        return httpx.HTTPStatusError(
+            "x", request=request, response=httpx.Response(code, headers=headers, request=request)
+        )
+
+    now = clock.now()
+    assert retry_after_of(status_error(429, {"Retry-After": "90"}), now) == 90.0
+    assert retry_after_of(status_error(503, {"Retry-After": "7"}), now) == 7.0
+    assert retry_after_of(status_error(429), now) == 60.0
+    assert retry_after_of(status_error(429, {"Retry-After": "999999"}), now) == 3600.0
+    assert retry_after_of(status_error(503), now) is None and retry_after_of(status_error(500), now) is None
+    assert retry_after_of(httpx.ConnectError("down"), now) is None
 
 
 async def test_record_then_replay_round_trip(tmp_path):

@@ -16,7 +16,7 @@ from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
 from earthwave.config import AlertsConfig, Config, with_overrides
 from earthwave.models import Batch, TsunamiAlert
-from earthwave.net import ReplayTransport, recording_start
+from earthwave.net import ReplayTransport, recording_start, retry_after
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
 from earthwave.poll import Freshness, PollResult, Scheduler
@@ -314,10 +314,10 @@ async def test_tsunamigov_keeps_retrying_through_a_cap_outage(clock):
 
 def test_nws_retry_after_accepts_seconds_and_http_dates():
     now = datetime(2026, 10, 10, 12, 0, 0, tzinfo=UTC)
-    assert nws.retry_after("7", now) == 7.0
-    assert nws.retry_after("Sat, 10 Oct 2026 12:00:09 GMT", now) == 9.0
-    assert nws.retry_after("Sat, 10 Oct 2026 11:00:00 GMT", now) == 0.0
-    assert nws.retry_after(None, now) == 5.0 and nws.retry_after("soon", now) == 5.0
+    assert retry_after("7", now) == 7.0
+    assert retry_after("Sat, 10 Oct 2026 12:00:09 GMT", now) == 9.0
+    assert retry_after("Sat, 10 Oct 2026 11:00:00 GMT", now) == 0.0
+    assert retry_after(None, now) == 5.0 and retry_after("soon", now) == 5.0
 
 
 def test_nws_sorts_alerts_with_and_without_timestamps():
