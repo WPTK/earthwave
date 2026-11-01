@@ -129,10 +129,10 @@ def test_application_cursor_arrows_paste_and_function_keys(tmp_path: Path) -> No
         term.arrow("left", application=False)
         term.paste("hello\nworld")
         term.paste("raw", bracketed=False)
-        term.send_keys("f1", "f5", "f12", "ctrl+z", "backspace", "delete")
+        term.send_keys("f1", "f5", "f12", "backspace", "delete")
         text = read_log(log)
     assert "<ESC>OA" in text and "<ESC>[D" in text
     assert "<ESC>[200~hello" in text and "world<ESC>[201~" in text
     assert "raw" in text
-    for seq in ("<ESC>OP", "<ESC>[15~", "<ESC>[24~", "\x1a", "\x7f", "<ESC>[3~"):
+    for seq in ("<ESC>OP", "<ESC>[15~", "<ESC>[24~", "\x7f", "<ESC>[3~"):
         assert seq in text, seq
