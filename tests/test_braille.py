@@ -11,7 +11,9 @@ from earthwave.ui.widgets.braille import (
     Viewport,
     coastline_canvas,
     draw_polyline,
+    land_cells,
     level_for,
+    load_land,
     load_levels,
     project,
     project_cell,
@@ -269,3 +271,87 @@ def test_render_ascii_halves():
     c.set(4, 3)  # both halves
     assert render_ascii(c) == ["..:"]
     assert render_ascii(BrailleCanvas(2, 1)) == ["  "]
+
+
+def _connected(canvas: BrailleCanvas, a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """True when lit dots form an 8-connected path from dot a to dot b (searched inside their bounding box + 1)."""
+    x0, x1 = min(a[0], b[0]) - 1, max(a[0], b[0]) + 1
+    y0, y1 = min(a[1], b[1]) - 1, max(a[1], b[1]) + 1
+    seen, todo = {a}, [a]
+    while todo:
+        x, y = todo.pop()
+        if (x, y) == b:
+            return True
+        for dx, dy in itertools.product((-1, 0, 1), repeat=2):
+            n = (x + dx, y + dy)
+            if n not in seen and x0 <= n[0] <= x1 and y0 <= n[1] <= y1 and canvas.get(*n):
+                seen.add(n)
+                todo.append(n)
+    return False
+
+
+@pytest.mark.parametrize("size", [(198, 45), (138, 40)], ids=lambda s: f"{s[0]}x{s[1]}")
+@pytest.mark.parametrize("span", [16, 40, 90])
+@pytest.mark.parametrize("place", [(138.0, 37.0), (127.5, 36.5)], ids=["japan", "korea"])
+def test_coast_polylines_are_connected_dot_paths(place, span, size):
+    """Every pair of consecutive vertices on screen is joined by lit, 8-connected dots at every zoom tier.
+    The coast is a continuous line; it only looks dotted because braille dots sit apart in a font."""
+    from earthwave.ui.widgets import braille
+    from earthwave.ui.widgets.map_panel import zoom_view
+
+    cols, rows = size
+    view = zoom_view(place[0], place[1], span, cols, rows)
+    canvas = coastline_canvas(cols, rows, view)
+    w, h = canvas.width, canvas.height
+    checked = 0
+    for pts, (lo, hi, lat_lo, lat_hi) in braille._prepared_coastline(level_for(view, cols, rows)):
+        if lat_hi < view.lat0 or lat_lo > view.lat1:
+            continue
+        for shift in (-360.0, 0.0, 360.0):
+            if hi + shift < view.lon0 or lo + shift > view.lon1:
+                continue
+            dots = [
+                (
+                    round((lon + shift - view.lon0) / (view.lon1 - view.lon0) * (w - 1)),
+                    round((view.lat1 - lat) / (view.lat1 - view.lat0) * (h - 1)),
+                )
+                for lon, lat in pts
+            ]
+            for a, b in itertools.pairwise(dots):
+                if a != b and all(0 <= x < w and 0 <= y < h for x, y in (a, b)):
+                    checked += 1
+                    assert _connected(canvas, a, b), (a, b)
+    assert checked > 300
+
+
+def test_land_levels_match_coastline_levels():
+    assert len(load_land()) == len(load_levels())
+    assert all(ring[0] == ring[-1] for level in load_land() for ring in level)
+
+
+def test_land_cells_fill_land_and_leave_sea_and_holes():
+    from earthwave.ui.widgets.map_panel import zoom_view
+
+    cols, rows = 198, 45
+    view = zoom_view(138, 37, 40, cols, rows)
+    land = land_cells(cols, rows, view)
+
+    def at(lon, lat):
+        x, y = project(lon, lat, view, cols * 2, rows * 4)
+        return land[(round(y) // 4) * cols + round(x) // 2]
+
+    assert at(138.0, 36.5) == 8  # central Honshu
+    assert at(143.0, 33.0) == 0  # Pacific
+    assert at(131.0, 40.0) == 0  # Sea of Japan
+    wide = zoom_view(60, 40, 90, cols, rows)
+    x, y = project(51.0, 41.5, wide, cols * 2, rows * 4)  # Caspian Sea: a hole in the Eurasia ring
+    assert land_cells(cols, rows, wide)[(round(y) // 4) * cols + round(x) // 2] == 0
+
+
+def test_land_fill_spans_the_antimeridian():
+    from earthwave.ui.widgets.map_panel import zoom_view
+
+    cols, rows = 120, 36
+    view = zoom_view(179, -17, 40, cols, rows)  # Fiji straddles 180
+    land = land_cells(cols, rows, view)
+    assert sum(1 for c in land if c) > 20

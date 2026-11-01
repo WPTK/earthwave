@@ -77,7 +77,7 @@ quakes and new alerts can also raise a desktop notification and a terminal bell.
 - [NOAA](https://www.noaa.gov/): tsunami.gov bulletins, National Weather Service alerts, NDBC DART buoys and CO-OPS
   tide gauges
 - [Japan Meteorological Agency](https://www.jma.go.jp/) tsunami information, used with attribution
-- [Natural Earth](https://www.naturalearthdata.com/) coastlines, public domain
+- [Natural Earth](https://www.naturalearthdata.com/) coastlines and land polygons, public domain
 
 earthwave identifies itself to every feed, asks whether a copy has changed instead of downloading it again, and backs
 off when a feed says to.

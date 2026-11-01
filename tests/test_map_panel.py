@@ -25,6 +25,7 @@ from earthwave.ui.widgets.map_panel import (
     MapPanel,
     ZoomMode,
     base_lines,
+    land_rows,
     marker_band,
     place_markers,
     row_segments,
@@ -150,6 +151,35 @@ def test_row_segments_split_around_markers():
     segs = row_segments("x" * 10, [marker])
     assert "".join(s.text for s in segs) == "x" * marker.col + marker.glyph + "x" * (9 - marker.col)
     assert row_segments("abc", [])[0].text == "abc"
+
+    from rich.style import Style
+
+    land, coast = Style(bgcolor="blue"), Style(color="cyan")
+    segs = row_segments("abcde", [], None, bytes([0, 1, 1, 0, 0]), coast, land)
+    assert [(s.text, s.style) for s in segs] == [("a", coast), ("bc", coast + land), ("de", coast)]
+
+
+def test_land_background_never_overrides_a_marker_that_sets_its_own():
+    from rich.style import Style
+
+    from earthwave.ui.widgets.map_panel import Marker
+
+    land = Style(bgcolor="blue")
+    selected = Marker(1, 0, "●", Style(color="red", reverse=True), (True, False, 0, 6.0))
+    flashing = Marker(2, 0, "●", Style(color="white", bgcolor="red"), (False, True, 0, 6.0))
+    plain = Marker(3, 0, "●", Style(color="green"), (False, False, 0, 5.0))
+    segs = row_segments("abcd", [selected, flashing, plain], None, bytes([1, 1, 1, 1]), Style(), land)
+    styles = [s.style for s in segs for _ in s.text]
+    assert styles[1] == selected.style and styles[2] == flashing.style
+    assert styles[3] == plain.style + land and styles[0] == Style() + land
+
+
+def test_land_rows_flag_land_cells_and_are_cached():
+    view = zoom_view(138, 37, 40, 198, 45)
+    rows_ = land_rows(198, 45, view)
+    assert len(rows_) == 45 and all(len(r) == 198 for r in rows_)
+    assert land_rows(198, 45, view) is rows_
+    assert 0 < sum(map(sum, rows_)) < 198 * 45
 
 
 # --- zoom and pan -----------------------------------------------------------------------------------------------
