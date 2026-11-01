@@ -73,7 +73,7 @@ jobs:
       - name: Install foot, sway and tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq foot sway xwayland wlrctl grim imagemagick jq fonts-dejavu-core mesa-vulkan-drivers libgl1-mesa-dri
+          sudo apt-get install -y -qq foot sway xwayland wlrctl libwayland-dev libwayland-bin gcc curl grim imagemagick jq fonts-dejavu-core mesa-vulkan-drivers libgl1-mesa-dri
       - name: Fetch the released Linux binary
         env:
           GH_TOKEN: ${{ github.token }}

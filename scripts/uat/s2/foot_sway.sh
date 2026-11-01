@@ -48,7 +48,8 @@ grim "$OUT/$TERMNAME-before.png"
 cw=$((gw / COLS)); ch=$((gh / ROWS))
 cx=$((gx + 12 * cw)); cy=$((gy + CLICK_ROW * ch + ch / 2))
 log "cell ${cw}x${ch} click at $cx,$cy"
-. "$(dirname "$0")/verify.sh"
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/verify.sh"
 wlrctl --help 2>&1 | head -20 | tee -a "$OUT/wlrctl-help.txt" >/dev/null
 swaymsg -t get_seats | tee "$OUT/seats.json" >/dev/null
 wlrctl pointer move -5000 -5000; sleep 0.2
@@ -61,6 +62,15 @@ try() { # try <label> <command...>: run a click variant, screenshot, verify
   if verify "$TERMNAME" "$OUT"; then method=$label; return 0; fi; return 1
 }
 seat=$(swaymsg -t get_seats | jq -r '.[0].name')
+# a virtual pointer that lives long enough for foot to bind wl_pointer (wlrctl's lives for milliseconds)
+mkdir -p "$OUT/vptr" && (
+  cd "$OUT/vptr" &&
+  curl -fsSL -o vp.xml https://gitlab.freedesktop.org/wlroots/wlr-protocols/-/raw/master/unstable/wlr-virtual-pointer-unstable-v1.xml &&
+  wayland-scanner client-header vp.xml wlr-virtual-pointer-unstable-v1-client-protocol.h &&
+  wayland-scanner private-code vp.xml vp-protocol.c &&
+  gcc -I. -o vptr "$HERE/vptr.c" vp-protocol.c -lwayland-client
+) >>"$OUT/vptr-build.log" 2>&1 || log "vptr build failed: $(tail -3 "$OUT/vptr-build.log")"
+try persistent-virtual-pointer "$OUT/vptr/vptr" "$cx" "$cy" 1600 900 ||
 try wlrctl-move-click-chained wlrctl pointer move 30 0 click left ||
 try wlrctl-move-move-click-chained wlrctl pointer move 1 0 move -1 0 click left ||
 try wlrctl-click-only wlrctl pointer click left ||
