@@ -171,6 +171,28 @@ def test_a_long_past_quake_merely_revised_is_not_announced_by_a_backfill():
     assert store.merge(Batch("usgs", T0, quakes=(revised,), backfill=True), clock) == []
 
 
+def launched_store(seed: bool = True) -> tuple[Store, ReplayClock]:
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    return Store(AlertsConfig(), launched=T0 if seed else None), clock
+
+
+def test_a_quake_published_after_launch_is_announced_from_a_silent_batch_when_startup_failed():
+    store, clock = launched_store()
+    big =make_quake("big", 7.5, time=T0 + timedelta(seconds=40), updated=T0 + timedelta(seconds=45))
+    events = store.merge(Batch("usgs", T0 + timedelta(minutes=2), quakes=(big,), meta={"silent": True}), clock)
+    assert [type(e) for e in events] == [QuakeNew, QuakeMajor]
+    assert store.merge(Batch("usgs", T0 + timedelta(minutes=3), quakes=(big,)), clock) == []  # not announced twice
+
+
+def test_quakes_published_before_launch_stay_silent_in_the_first_batches():
+    store, clock = launched_store()
+    saved = make_quake("saved", 7.5, time=T0 - timedelta(hours=2), updated=T0 - timedelta(minutes=30))
+    just_before = make_quake("before", 7.0, time=T0 - timedelta(seconds=50), updated=T0 - timedelta(seconds=40))
+    assert store.merge(Batch("usgs", T0, quakes=(saved,), backfill=True), clock) == []
+    assert store.merge(Batch("usgs", T0, quakes=(just_before,), meta={"silent": True}), clock) == []
+    assert store.merge(Batch("usgs", T0, quakes=(saved, just_before)), clock) == []  # the cold first steady batch
+
+
 # --- 5. a quake announced long after it happened says so -----------------------------------------------------------------
 
 
