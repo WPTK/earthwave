@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -39,8 +41,10 @@ import psutil
 
 try:
     from tui_test import TuiTest
+    from tui_test.types import TraceOptions
 except ImportError:  # pragma: no cover - reported as a skip reason
     TuiTest = None  # type: ignore[assignment,misc]
+    TraceOptions = None  # type: ignore[assignment,misc]
 
 IS_WINDOWS = sys.platform == "win32"
 ESC = "\x1b"
@@ -69,6 +73,66 @@ def unavailable_reason() -> str | None:
     if TuiTest is None:
         return "tui-test is not installed (pip install -e '.[dev]')"
     return None
+
+
+_SGR = re.compile(r"\x1b\[([0-9;:]*)m")
+
+
+def sgr_depth(raw: str) -> str:
+    """The colour depth a byte stream asks for, from its SGR sequences: ``mono`` (none, or only bold/dim/reverse),
+    ``16`` (30-37, 40-47, 90-97, 100-107), ``256`` (38;5;n or 48;5;n) or ``truecolor`` (38;2;r;g;b or 48;2;...)."""
+    depth = 0
+    for match in _SGR.finditer(raw):
+        params = [p for p in re.split(r"[;:]", match.group(1)) if p != ""]
+        i = 0
+        while i < len(params):
+            n = int(params[i])
+            if n in (38, 48, 58) and i + 1 < len(params):
+                depth = max(depth, 3 if params[i + 1] == "2" else 2)
+                i += 2 + (3 if params[i + 1] == "2" else 1)
+                continue
+            if 30 <= n <= 37 or 40 <= n <= 47 or 90 <= n <= 97 or 100 <= n <= 107:
+                depth = max(depth, 1)
+            i += 1
+    return ("mono", "16", "256", "truecolor")[depth]
+
+
+def is_chromatic(hex_colour: str, spread: int = 24) -> bool:
+    """True for a colour with real hue: ``#rrggbb`` whose channels differ by more than ``spread`` (greys are not)."""
+    if hex_colour.isdigit():  # a palette index: the ANSI hues, or the 6x6x6 cube
+        n = int(hex_colour)
+        return 1 <= n <= 6 or 9 <= n <= 14 or 16 <= n <= 231
+    h = hex_colour.lstrip("#")
+    if len(h) != 6:
+        return False
+    try:
+        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return False
+    return max(r, g, b) - min(r, g, b) > spread
+
+
+def sgr_chromatic(raw: str) -> int:
+    """How many SGR colour settings in the stream have hue: truecolor triples that are not grey, 256-colour cube
+    entries, and the coloured 16-colour codes (31-36, 41-46, 91-96, 101-106). Textual under NO_COLOR still sends greys."""
+    count = 0
+    for match in _SGR.finditer(raw):
+        params = [p for p in re.split(r"[;:]", match.group(1)) if p != ""]
+        i = 0
+        while i < len(params):
+            n = int(params[i])
+            if n in (38, 48) and i + 1 < len(params):
+                if params[i + 1] == "2" and i + 4 < len(params):
+                    r, g, b = (int(x) for x in params[i + 2 : i + 5])
+                    count += max(r, g, b) - min(r, g, b) > 24
+                    i += 5
+                else:
+                    count += 16 <= int(params[i + 2] if i + 2 < len(params) else 0) <= 231
+                    i += 3
+                continue
+            count += 31 <= n <= 36 or 41 <= n <= 46 or 91 <= n <= 96 or 101 <= n <= 106
+            i += 1
+    return count
 
 
 @dataclass(frozen=True)
@@ -109,6 +173,7 @@ class Terminal:
         env_remove: tuple[str, ...] = (),
         cwd: Path | None = None,
         isolate: bool = True,
+        trace: bool = True,
     ) -> None:
         reason = unavailable_reason()
         if reason:
@@ -123,7 +188,11 @@ class Terminal:
         argv = [a.replace("{dir}", str(self._dir)) for a in argv]
         child_env = self._env(env or {}, env_remove, isolate)
         before = {p.pid for p in psutil.Process().children(recursive=True)}
-        self._cm = TuiTest.ephemeral()
+        self._trace_dir = self._dir / "_trace"
+        self._raw = ""
+        # a trace holds an asciicast (session.cast) of everything the program wrote, from the first byte; tui-test
+        # writes it when the session closes, so the raw stream is readable after close(), not while the program runs
+        self._cm = TuiTest.ephemeral(trace=TraceOptions(mode="on", directory=str(self._trace_dir))) if trace else TuiTest.ephemeral()
         self._t: Any = self._run(self._cm.__aenter__())
         try:
             self._run(self._t.run(argv[0], *argv[1:], cols=cols, rows=rows, cwd=str(cwd or self._dir), env=child_env))
@@ -198,6 +267,7 @@ class Terminal:
         with contextlib.suppress(Exception):
             self._run(self._cm.__aexit__(None, None, None))
         self.kill()
+        self._raw = self._read_trace()
         self._loop.close()
         _LIVE.discard(self)
         shutil.rmtree(self._dir, ignore_errors=True)
@@ -252,6 +322,51 @@ class Terminal:
     def screen(self) -> Screen:
         lines = [line.rstrip() for line in self._run(self._t.text()).split("\n")]
         return Screen(tuple((lines + [""] * self.rows)[: self.rows]))
+
+    def cells(self) -> list[list[Any]]:
+        """Every cell of the screen as ``rows`` lists of ``cols`` tui-test Cells: char, fg, bg (``#rrggbb`` or
+        ``default``), bold, dim, italic, inverse, underline, strike, link."""
+        flat = self._run(self._t.cells(0, 0, self.cols, self.rows))
+        return [flat[r * self.cols : (r + 1) * self.cols] for r in range(self.rows)]
+
+    def colours_on_screen(self) -> set[str]:
+        """The distinct non-default foreground and background colours currently drawn on non-blank cells."""
+        found: set[str] = set()
+        for row in self.cells():
+            for cell in row:
+                if cell.char.strip() or cell.bg != "default":
+                    found.update(str(c) for c in (cell.fg, cell.bg) if str(c) != "default")
+        return found
+
+    def chromatic_on_screen(self) -> set[str]:
+        """``colours_on_screen`` without the greys: colours with a hue, which a NO_COLOR run must not have."""
+        return {c for c in self.colours_on_screen() if is_chromatic(c)}
+
+    def _read_trace(self) -> str:
+        text = []
+        for cast in sorted(self._trace_dir.glob("**/session.cast")):
+            with contextlib.suppress(OSError, ValueError):
+                for line in cast.read_text(encoding="utf-8").splitlines()[1:]:
+                    with contextlib.suppress(ValueError):
+                        ev = json.loads(line)
+                        if ev[1] == "o":
+                            text.append(ev[2])
+        return "".join(text)
+
+    def end(self) -> str:
+        """Close the session (the program is ended by PID) and return the raw stream."""
+        self.close()
+        return self._raw
+
+    def raw_stream(self) -> str:
+        """Every byte the program wrote to the terminal, from the first byte: startup queries, escape sequences, any
+        DCS image data (an asciicast from the tui-test trace). tui-test writes it when the session closes, so this is
+        empty while the program runs; call ``end()`` or leave the ``with`` block first."""
+        return self._raw if self._closed else self._read_trace()
+
+    def colour_depth(self) -> str:
+        """``mono`` / ``16`` / ``256`` / ``truecolor``, from the SGR codes in the raw stream."""
+        return sgr_depth(self.raw_stream())
 
     def screen_text(self) -> str:
         return self.screen().text
