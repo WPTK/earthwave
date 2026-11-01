@@ -2,15 +2,16 @@
 
     python run_wt.py {wt,conhost} --exe EARTHWAVE.exe --tool-exe WindowsTerminal.exe --replay usgs_short.jsonl --out DIR
 
-Uses the vendored real-terminal driver (realterm/, copied from WPTK/wxbrief tests/uat_realterm at bc62698). Per terminal:
+Uses the vendored real-terminal driver (realterm/, copied from WPTK/wxbrief tests/uat_realterm at bc62698).
+Per terminal:
   1. probe     da1_probe.py in the terminal: the exact reply to the app's own query (CSI 16t, 14t, c), escaped.
-  2. auto      the unmodified exe, config map_renderer = "auto", `--debug --log`: dashboard, then the full-screen map (M).
-               The log line "map renderer: ..." says what the app chose; the window PNG and the terminal's own text say what
-               was drawn.
+  2. auto      the unmodified exe, config map_renderer = "auto", `--debug --log`: dashboard, then the map (M).
+               The log line "map renderer: ..." says what the app chose; the window PNG and the terminal's
+               own text say what was drawn.
   3. braille   control: the same run with the config forcing map_renderer = "braille".
   4. analyze   pixel comparison of the two map PNGs, braille glyph counts from the terminal text.
-Nothing in the app is changed; the config file is the user-facing setting. Exit 0 always (the verdict is in result.json):
-the caller reads it, a harness error is a nonzero exit with a message.
+Nothing in the app is changed; the config file is the user-facing setting. The verdict is in result-<term>.json;
+the exit code is nonzero only for a harness error.
 """
 
 from __future__ import annotations

@@ -2,7 +2,8 @@
 
     python da1_probe.py OUT.json
 
-Runs inside the terminal being tested (driven by run_wt.py). Uses the app's own `query_terminal` and `parse_reply`, so the
+Runs inside the terminal being tested (driven by run_wt.py). Uses the app's own `query_terminal` and
+`parse_reply`, so the
 bytes are what the app would have seen. The raw reply is written escaped, with the parsed verdict; nothing is forced.
 """
 
