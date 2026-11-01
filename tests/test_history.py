@@ -119,7 +119,14 @@ def test_stats_text_is_words():
     assert stats_text([], {}) == "No saved quakes for this day"
     text = stats_text([make_quake("a", 5.2), make_quake("b", 3.0)], {"INFORMATION": 2, "WARNING": 1, "WATCH": 1})
     assert text == "2 quakes, largest M5.2, 1 at M5 or more; tsunami alerts: 1 Warning, 1 Watch, 2 Information"
-    assert stats_text([make_quake("a", 2.0)], {}).endswith("no tsunami alerts")
+    assert stats_text([make_quake("a", 2.0)], {}).endswith("no tsunami alerts recorded")
+
+
+def test_stats_text_does_not_claim_no_alerts_happened():
+    # A day with quakes but no saved alerts may be a day the app (or an alert feed) was not running: say what we hold.
+    text = stats_text([make_quake("a", 2.0)], {})
+    assert "recorded" in text
+    assert not text.endswith("no tsunami alerts")
 
 
 # --- restart: quit, relaunch --offline -------------------------------------------------------------------------
