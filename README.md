@@ -1,82 +1,104 @@
 # earthwave
 
-An earthquake and tsunami tracker for the terminal. It follows free, keyless public feeds, with USGS as the backbone,
-and is written in Python 3.13 with [Textual](https://textual.textualize.io/).
+earthwave is a terminal app for following earthquakes and tsunami alerts. It shows live USGS earthquakes in a list, on
+a world map and in a detail screen, and it watches the tsunami warning centres and sea-level gauges so you can see an
+alert next to what the water is actually doing. It uses only free public feeds that need no key or account.
 
 ![earthwave replaying a recorded Kamchatka earthquake: a tsunami watch, then a warning, then the quake in the list and on the map](docs/img/demo.svg)
 
-*Recorded data, not live: the app replaying `tests/fixtures/replay/kamchatka_watch_to_warning.jsonl` with
-`--replay`. Re-record it with `python scripts/record_demo.py`.*
+*Recorded data, not live: the app replaying a saved session with `--replay`.*
 
-**Status: pre-release (0.0.x).** Milestones M1 to M6 are in progress. Follow them on the
-[milestones](https://github.com/WPTK/earthwave/milestones) page and the
-[issue tracker](https://github.com/WPTK/earthwave/issues). The design is in [`docs/plan.md`](docs/plan.md).
+![earthwave dashboard: quake list, world map and tsunami panel](docs/img/dashboard.svg)
 
-## Planned features
+This is a 0.x release. It works and is tested, but it is young, and details such as key bindings and the config file may
+still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md).
 
-- Live USGS earthquakes, with new and major events flashing in the list
-- Tsunami alerts from tsunami.gov, the National Weather Service and the Japan Meteorological Agency
-- DART buoy and CO-OPS tide-gauge readings to check an alert against real sea-level data
-- A braille world map showing where events are happening
-- Desktop notifications for major quakes and tsunami warnings
-- SQLite history that persists across runs
-- Record a session and replay it later, for demos and tests
+## Install
 
-None of these are released yet.
+Pick one.
 
-## What works today
+- **Release binary.** Download the file for your system from
+  [GitHub Releases](https://github.com/WPTK/earthwave/releases) (Windows `.exe`, Linux x86-64 and macOS arm64
+  `.tar.gz`). No Python needed. The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask
+  you to confirm; check the download against `SHA256SUMS` from the same release.
+- **From source**, with Python 3.13 or newer:
 
-The project has only been bootstrapped: the package, the command line and live-captured test fixtures.
+  ```
+  pipx install git+https://github.com/WPTK/earthwave.git
+  ```
 
-```powershell
-python -m earthwave --version
-python -m earthwave --selftest
+  or `pip install git+https://github.com/WPTK/earthwave.git` inside a virtual environment.
+
+## Run
+
+```
+earthwave
 ```
 
-`--version` prints the version. `--selftest` runs the built-in self-check.
+The first run writes a commented config file to your user config directory. Useful options:
 
-## Development
-
-Requires Python 3.13. On Windows:
-
-```powershell
-py -3.13 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
+```
+earthwave --min-mag 4.5 --hours 72     # what to list
+earthwave --home 40.7,-74.0            # distances and near-home alerts
+earthwave --glyphs ascii               # for terminals without braille
+earthwave --offline                    # no network; browse the saved history
+earthwave --record session.jsonl       # save every request ...
+earthwave --replay session.jsonl       # ... and play it back later
+earthwave --help                       # everything else
 ```
 
-Checks:
+Use a terminal at least 100 columns wide and 30 rows tall; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
 
-```powershell
-.venv\Scripts\python -m ruff check .
-.venv\Scripts\python -m vulture earthwave scripts --min-confidence 80
-.venv\Scripts\python -m pytest -n auto
-.venv\Scripts\python -m earthwave --selftest
-```
+## Keys
 
-`scripts\capture_fixtures.py` re-captures the saved live payloads under `tests/fixtures/`. Do not reformat those files.
-Contributor rules and the milestone workflow are in [`CLAUDE.md`](CLAUDE.md) and [`docs/plan.md`](docs/plan.md).
+`?` opens the full list. The main ones:
+
+| Key | Action |
+| --- | --- |
+| `j` `k`, arrows | move in the list |
+| `Enter` | quake detail (`b` opens the USGS page, `y` copies its URL) |
+| `f` `s` `/` | filters, sort, search |
+| `m` `z` | show or hide the map, zoom it |
+| `t` | tsunami alerts and bulletins |
+| `o` | sea-level gauges |
+| `h` | history by day |
+| `a` | acknowledge alerts |
+| `r` | refresh now |
+| `q` | quit |
+
+A tsunami watch, advisory or warning raises a coloured banner across the top, and the status bar changes colour. Major
+quakes and new alerts can also raise a desktop notification and a terminal bell.
+
+![the tsunami screen showing a Kamchatka warning and its bulletin](docs/img/tsunami.svg)
 
 ## Data sources
 
 - [USGS](https://earthquake.usgs.gov/) earthquake feeds and event service
 - [NOAA](https://www.noaa.gov/): tsunami.gov bulletins, National Weather Service alerts, NDBC DART buoys and CO-OPS
   tide gauges
-- [Japan Meteorological Agency](https://www.jma.go.jp/) (JMA) tsunami information, used with attribution
+- [Japan Meteorological Agency](https://www.jma.go.jp/) tsunami information, used with attribution
 - [Natural Earth](https://www.naturalearthdata.com/) coastlines, public domain
 
-earthwave is not an official tsunami or earthquake warning service and is not affiliated with any of these agencies.
-Do not rely on it for safety decisions; follow your local authorities.
+earthwave identifies itself to every feed, asks whether a copy has changed instead of downloading it again, and backs
+off when a feed says to.
 
-It identifies itself to every feed (`earthwave/<version>` with the repository URL, plus `[notify] contact` if you set
-one), asks the feed whether a copy has changed (ETag, Last-Modified) instead of downloading it again, and after a 429 or 503
-leaves that address alone for as long as its `Retry-After` asks, up to five minutes.
+**earthwave is not an official tsunami or earthquake warning service and is not affiliated with any of these agencies.
+Do not rely on it for safety decisions; follow your local authorities.**
 
-## Versioning and changelog
+## Checking an install
 
-Versions follow ZeroVer: the major version stays 0, minor releases add features and patch releases fix bugs. The
-changelog follows [Common Changelog](https://common-changelog.org/) and is in [`CHANGELOG.md`](CHANGELOG.md); it has no
-entries until the first release.
+```
+earthwave --version
+earthwave --selftest
+```
 
-## License
+`--selftest` checks that every module imports and renders one screen without a terminal; from a source checkout it also
+parses the saved sample feeds. It prints `selftest: ok` and exits 0 on success. It does not use the network.
+
+## Development
+
+See [`docs/development.md`](docs/development.md) for setup, checks, the release process and the data-capture scripts.
+
+## Licence
 
 [MIT](LICENSE)
