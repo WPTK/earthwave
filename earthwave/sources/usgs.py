@@ -1,5 +1,6 @@
 """USGS earthquake source: summary feeds (steady polling), fdsnws queries (history) and the lazy detail product."""
 
+import asyncio
 import logging
 import math
 from collections import OrderedDict
@@ -67,6 +68,11 @@ def listing(data: dict) -> frozenset[str] | None:
     for feature in features:
         if not isinstance(feature, dict) or "id" not in feature:
             return None
+        props = feature.get("properties")
+        if isinstance(props, dict) and (
+            props.get("type", "earthquake") != "earthquake" or ("mag" in props and props["mag"] is None)
+        ):
+            continue  # reclassified (a blast) or unmagnituded: the feed no longer vouches for it as a quake
         ids.add(feature["id"])
         aliases = (feature.get("properties") or {}).get("ids")
         ids.update(_ids(aliases) if isinstance(aliases, str) else ())
@@ -249,7 +255,7 @@ class UsgsSource:
             response.raise_for_status()
             data = response.json()
             quakes = parse_collection(data)
-        except Exception:
+        except (Exception, asyncio.CancelledError):  # the poll deadline cancels: a stalled feed counts too
             if backfill:
                 self._startup_failures += 1
                 if self._startup_failures >= STARTUP_ATTEMPTS:

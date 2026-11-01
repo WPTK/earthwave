@@ -276,6 +276,8 @@ class EarthwaveApp(App):
                 if note.key.startswith("tsunami:"):
                     severity = "error" if note.urgency == "critical" else "warning"
                     self.notify(note.body, title=note.title, severity=severity, timeout=30, markup=False)
+        if result.source == "usgs" and result.error:  # a failed backfill (deadline included) is asked again
+            self._coverage_checked = False
         steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
         if (
             steady
@@ -464,11 +466,7 @@ class EarthwaveApp(App):
             min_mag = self.view.min_magnitude
 
             async def job(client: httpx.AsyncClient) -> Batch:
-                try:
-                    return await self.usgs.fetch_range(client, start, end, min_mag)
-                except Exception:
-                    self._coverage_checked = False  # the next good steady poll tries the backfill again
-                    raise
+                return await self.usgs.fetch_range(client, start, end, min_mag)
 
             self._backfill = self.scheduler.submit_backfill("usgs", self.client, job)
         else:

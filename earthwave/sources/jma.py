@@ -1,5 +1,6 @@
 """JMA tsunami source (undocumented bosai endpoint): event list, then the detail file of each unseen report."""
 
+import asyncio
 import logging
 import re
 from dataclasses import replace
@@ -10,7 +11,7 @@ import httpx
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.sources import levels
-from earthwave.sources.base import SourceHealth
+from earthwave.sources.base import ENTRY_BUDGET, SourceHealth
 from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent
 
 log = logging.getLogger(__name__)
@@ -145,33 +146,46 @@ class JmaSource:
         done: list[str] = []  # reports finished this poll
         events = dict(self._ids_by_event)  # event -> report ids; replaced, never edited, until the poll is whole
         # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
-        for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
-            name = entry.get("json")
-            reported = parse_time(entry.get("rdt"))
-            if not name or name in self._seen or name in done or reported is None or now - reported > MAX_AGE:
-                continue
-            try:
-                detail = await client.get(f"{BASE}{name}")
-                detail.raise_for_status()
-                payload = detail.json()
-                if not isinstance(payload, dict):
-                    raise ValueError("detail is not an object")
-                alert = parse_detail(payload, entry)
-            except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
-                count = self._failures.get(name, 0)
-                if permanent(exc):  # outages never count: a live report must not be dropped
-                    count = self._failures[name] = count + 1
-                if not permanent(exc) or count < MAX_ENTRY_FAILURES:
-                    log.debug("jma: skipping %s: %r", name, exc)
-                    skipped = True
-                    continue
-                log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
-                alert = fallback_alert(entry)
-            event = str(entry.get("eid") or name)
-            earlier = events.pop(event, [])  # re-inserted below, so an active event stays newest
-            events[event] = [*earlier, alert.id]
-            alerts.append(replace(alert, references=tuple(earlier)))
-            done.append(name)
+        try:
+            async with asyncio.timeout(ENTRY_BUDGET):  # below poll.FETCH_DEADLINE: what was read is still returned
+                for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
+                    if not await self._report(client, entry, now, events, alerts, done):
+                        skipped = True
+        except TimeoutError:
+            log.warning("jma: out of time, returning %d reports read so far", len(alerts))
+            skipped = True
         self._commit(done, events)
         log.debug("jma: %d new reports", len(alerts))
         return Batch(self.name, now, alerts=tuple(alerts), meta={"incomplete": skipped})
+
+    async def _report(self, client, entry: dict, now, events: dict, alerts: list, done: list[str]) -> bool:
+        """Fetch one list entry into `alerts`. False when the report could not be fetched and is left for next poll."""
+        try:
+            name = entry.get("json")
+            reported = parse_time(entry.get("rdt"))
+            if not name or name in self._seen or name in done or reported is None or now - reported > MAX_AGE:
+                return True
+        except (TypeError, AttributeError, ValueError, OverflowError):  # a malformed list entry: not this one
+            return True
+        try:
+            detail = await client.get(f"{BASE}{name}")
+            detail.raise_for_status()
+            payload = detail.json()
+            if not isinstance(payload, dict):
+                raise ValueError("detail is not an object")
+            alert = parse_detail(payload, entry)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
+            count = self._failures.get(name, 0)
+            if permanent(exc):  # outages never count: a live report must not be dropped
+                count = self._failures[name] = count + 1
+            if not permanent(exc) or count < MAX_ENTRY_FAILURES:
+                log.debug("jma: skipping %s: %r", name, exc)
+                return False
+            log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
+            alert = fallback_alert(entry)
+        event = str(entry.get("eid") or name)
+        earlier = events.pop(event, [])  # re-inserted below, so an active event stays newest
+        events[event] = [*earlier, alert.id]
+        alerts.append(replace(alert, references=tuple(earlier)))
+        done.append(name)
+        return True

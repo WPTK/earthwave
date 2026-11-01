@@ -193,7 +193,7 @@ class Store:
                     self._relink(other.id, quake.id)
                     events.append(QuakeRenamed(other.id, quake))
             self._put(quake)
-            if silent and not (old is None and self._published_since(quake, steady_at)):
+            if silent and not self._news_since(old, quake, steady_at):
                 continue
             if old is None:
                 events.append(QuakeNew(quake))
@@ -225,6 +225,14 @@ class Store:
         """True for a quake that happened (within the feed's lag) and was published after `since`; a long-past quake
         merely revised since is not new."""
         return since is not None and (quake.updated or quake.time) > since and quake.time > since - FEED_LAG
+
+    @classmethod
+    def _news_since(cls, old: Earthquake | None, quake: Earthquake, since: datetime | None) -> bool:
+        """Whether a silent batch must still speak about this quake: it is new, or revised, after the steady feed
+        last answered (the steady feed has not delivered that change and would find it already stored)."""
+        if old is None:
+            return cls._published_since(quake, since)
+        return since is not None and quake.updated is not None and quake.updated > since
 
     def _known(self, quake: Earthquake) -> list[Earthquake]:
         """Every stored version of this event under any id USGS has given it, the one under its own id first."""
@@ -353,7 +361,8 @@ class Store:
         else:
             self._predictions[station_id] = self.predictions_for(station_id) or self._predictions.get(station_id, [])
             new = coops.remove_baseline(coops.residuals(rows, self._predictions[station_id]))  # type: ignore[arg-type]
-            since = datetime.min.replace(tzinfo=UTC)
+            # The prediction cache only reaches back a few hours: keep the residuals it can no longer reproduce.
+            since = min((r.ts for r in new), default=datetime.max.replace(tzinfo=UTC))
         kept = {ts: r for ts, r in self._residuals.get(station_id, {}).items() if ts < since}
         kept.update({r.ts: r for r in new})
         floor = rows[0].ts
@@ -452,9 +461,21 @@ class Store:
 
     def _find_duplicate(self, alert: TsunamiAlert) -> TsunamiAlert | None:
         """The stored alert this one repeats: same id, same WMO header + sent, else same quake and areas elsewhere."""
-        for known_id in (self._alias.get(alert.id, alert.id), self._by_key.get(alert.dedupe_key)):
-            if known_id and known_id in self._tsunamis:
-                return self._tsunamis[known_id]
+        by_id = self._tsunamis.get(self._alias.get(alert.id, alert.id))
+        if by_id is not None:
+            return by_id
+        by_key = self._tsunamis.get(self._by_key.get(alert.dedupe_key, ""))
+        # One bulletin can hold segments of different levels for different areas, each its own feature under one
+        # header: such a segment is not a repeat of its sibling. Another source's copy, or a revised level over the
+        # same areas, is.
+        if by_key is not None and not (
+            by_key.source == alert.source
+            and by_key.level != alert.level
+            and by_key.areas
+            and alert.areas
+            and not {a.lower() for a in by_key.areas} & {a.lower() for a in alert.areas}
+        ):
+            return by_key
         if alert.quake_ref is None or alert.level in (levels.CANCELLATION, levels.INFORMATION):
             return None
         wanted = {a.lower() for a in alert.areas}

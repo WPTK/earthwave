@@ -1,5 +1,6 @@
 """tsunami.gov source: NTWC and PTWC Atom feeds, then each unseen entry's CAP product and plain-text bulletin."""
 
+import asyncio
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -12,7 +13,7 @@ from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import retry_after_of
 from earthwave.sources import levels
-from earthwave.sources.base import SourceHealth
+from earthwave.sources.base import ENTRY_BUDGET, SourceHealth
 
 log = logging.getLogger(__name__)
 
@@ -261,51 +262,32 @@ class TsunamiGovSource:
         failures: list[Exception] = []
         done: list[str] = []  # entries finished this poll; committed to _seen only once the batch is returned
         skipped = False  # something the feeds list could not be fetched: this poll is not a full answer
-        for feed in FEEDS:
-            try:
-                entries = parse_atom(await self._get_text(client, feed))
-            except (httpx.HTTPError, ET.ParseError) as exc:
-                log.warning("tsunamigov: %s unavailable: %r", feed, exc)
-                failures.append(exc)
-                skipped = True
-                continue
-            # Oldest first, so an update is merged after the product it supersedes.
-            for entry in reversed(entries):
-                if entry["id"] in self._seen or entry["id"] in done or not entry["cap_url"]:
-                    continue
-                cap_url = trusted_url(entry["cap_url"])
-                bulletin_url = trusted_url(entry["bulletin_url"]) if entry["bulletin_url"] else None
+
+        async def collect() -> None:
+            nonlocal skipped
+            for feed in FEEDS:
                 try:
-                    if cap_url is None:
-                        log.warning("tsunamigov: not fetching %s (not tsunami.gov)", entry["cap_url"])
-                        alerts.append(fallback_alert(entry))
+                    entries = parse_atom(await self._get_text(client, feed))
+                except (httpx.HTTPError, ET.ParseError, ValueError) as exc:  # ValueError: redirected off-site
+                    log.warning("tsunamigov: %s unavailable: %r", feed, exc)
+                    failures.append(exc)
+                    skipped = True
+                    continue
+                # Oldest first, so an update is merged after the product it supersedes.
+                for entry in reversed(entries):
+                    if entry["id"] in self._seen or entry["id"] in done or not entry["cap_url"]:
+                        continue
+                    if await self._entry(client, entry, alerts):
+                        done.append(entry["id"])
                     else:
-                        cap = await self._get_text(client, cap_url)
-                        bulletin = ""
-                        if bulletin_url:
-                            try:
-                                bulletin = await self._get_text(client, bulletin_url)
-                            except (httpx.HTTPError, ValueError) as exc:
-                                if not permanent(exc):  # an outage: retry the whole product next poll
-                                    raise
-                                log.warning("tsunamigov: bulletin %s unavailable: %r", bulletin_url, exc)
-                        if (alert := parse_cap(cap, bulletin, cap_url)) is not None:
-                            alerts.append(alert)
-                except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
-                    if not permanent(exc):
-                        # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
-                        log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], exc)
                         skipped = True
-                        continue
-                    count = self._failures.get(entry["id"], 0) + 1
-                    self._failures[entry["id"]] = count
-                    if count < MAX_ENTRY_FAILURES:
-                        log.debug("tsunamigov: %s failed (%d): %r", entry["cap_url"], count, exc)
-                        skipped = True
-                        continue
-                    log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
-                    alerts.append(fallback_alert(entry))
-                done.append(entry["id"])
+
+        try:
+            async with asyncio.timeout(ENTRY_BUDGET):  # below poll.FETCH_DEADLINE: what was read is still returned
+                await collect()
+        except TimeoutError:
+            log.warning("tsunamigov: out of time, returning %d products read so far", len(alerts))
+            skipped = True
         if len(failures) == len(FEEDS):
             now = self._clock.now()
             raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0)
@@ -317,3 +299,44 @@ class TsunamiGovSource:
         log.debug("tsunamigov: %d new products", len(alerts))
         alerts.sort(key=lambda a: a.issued or datetime.min.replace(tzinfo=UTC))
         return Batch(self.name, self._clock.now(), alerts=tuple(alerts), meta={"incomplete": skipped})
+
+    async def _entry(self, client: httpx.AsyncClient, entry: dict, alerts: list[TsunamiAlert]) -> bool:
+        """Fetch one entry's product into `alerts`. True when the entry is finished and need not be fetched again.
+
+        An alert in hand is always appended: a bulletin outage shows the CAP text now and leaves the entry open, so
+        a later poll adds the bulletin to the same alert (the CAP identifier is the store's first dedupe key).
+        """
+        try:
+            cap_url = trusted_url(entry["cap_url"])
+            if cap_url is None:
+                log.warning("tsunamigov: not fetching %s (not tsunami.gov)", entry["cap_url"])
+                alerts.append(fallback_alert(entry))
+                return True
+            bulletin_url = trusted_url(entry["bulletin_url"]) if entry["bulletin_url"] else None
+            cap = await self._get_text(client, cap_url)
+            bulletin, outage = "", False
+            if bulletin_url:
+                try:
+                    bulletin = await self._get_text(client, bulletin_url)
+                except (httpx.HTTPError, ValueError) as exc:
+                    outage = not permanent(exc)  # an outage: show the CAP now, fetch the bulletin next poll
+                    log.warning("tsunamigov: bulletin %s unavailable: %r", bulletin_url, exc)
+            if (alert := parse_cap(cap, bulletin, cap_url)) is not None:
+                alerts.append(alert)
+            return not outage
+        except Exception as exc:
+            if not permanent(exc):
+                # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
+                log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], exc)
+                return False
+            count = self._failures.get(entry["id"], 0) + 1
+            self._failures[entry["id"]] = count
+            if count < MAX_ENTRY_FAILURES:
+                log.debug("tsunamigov: %s failed (%d): %r", entry["cap_url"], count, exc)
+                return False
+            log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
+            try:
+                alerts.append(fallback_alert(entry))
+            except Exception:
+                log.warning("tsunamigov: no alert can be built from %s", entry["id"], exc_info=True)
+            return True
