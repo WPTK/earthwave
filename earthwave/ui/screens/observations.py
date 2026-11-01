@@ -58,7 +58,7 @@ class ObservationsScreen(Screen):
         q = self.quake = found or self.quake
         app.pin_gauge_quake(q)  # USGS may have flagged it since `o` was pressed: its stations are chosen now
         head = Text()
-        head.append(f"M{q.mag:.1f} {q.place}\n", "bold")
+        head.append(f"M{q.mag:.1f} {q.place or 'unknown location'}\n", "bold")
         if q.tsunami_flag:
             head.append("Stations nearest this quake, plus any tied to active tsunami alerts.", "grey62")
         else:

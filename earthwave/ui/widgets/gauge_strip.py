@@ -16,7 +16,9 @@ from earthwave.ui.labels import fmt_age
 from earthwave.ui.theme import YELLOW
 
 MAX_POINTS = 240  # sparkline samples drawn per row; the "24 h max" summary reads every stored residual
-NAME_WIDTH = 26
+NAME_WIDTH = 26  # the least room a station name gets; a wider strip gives names the free width (see GaugeStrip)
+LABEL_REST = 32  # after the name: space, distance, mode, and the longest reading ("last batch 12h ago")
+OTHER_COLUMNS = 8 + 2 + 18  # the sparkline's minimum width, its margins, and the "24 h max" column
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
 RESIDUAL_LAG = timedelta(hours=1)  # residuals this far behind the newest reading no longer describe the water now
 STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
@@ -58,16 +60,17 @@ def sparkline_data(residuals: Sequence[float], threshold_m: float) -> list[float
     """abs(residual) padded with [0, threshold] so the threshold frames the strip.
 
     Textual's Sparkline scales to the data it is given, so without the padding a +-2 cm tide wobble would draw as
-    full-height noise. The two leading samples fix the scale at 0..threshold and read as a reference mark on the left.
+    full-height noise. The two leading samples fix the scale at 0..threshold and read as a reference mark on the left;
+    GaugeRow draws the top of that scale in a muted colour so the mark does not read as an alert.
     """
     return [0.0, threshold_m, *(abs(r) for r in shown_residuals(residuals))]
 
 
-def short_name(name: str) -> str:
-    """The name cut to NAME_WIDTH with an ellipsis, never ending on a dangling separator ("South Dutch Harbor -")."""
-    if len(name) <= NAME_WIDTH:
+def short_name(name: str, width: int = NAME_WIDTH) -> str:
+    """The name cut to `width` with an ellipsis, never ending on a dangling separator ("South Dutch Harbor -")."""
+    if len(name) <= width:
         return name
-    cut = name[: NAME_WIDTH - 1]
+    cut = name[: width - 1]
     while cut and cut[-1] in " -–—,.:/":  # noqa: RUF001
         cut = cut[:-1]
     return cut + "…"
@@ -88,11 +91,11 @@ def age_text(row: GaugeRowData, now: datetime) -> str:
     return f"last batch {age} ago" if row.mode == "15m" else f"{age} ago"
 
 
-def row_label(row: GaugeRowData, now: datetime) -> Text:
+def row_label(row: GaugeRowData, now: datetime, name_width: int = NAME_WIDTH) -> Text:
     name = row.name or row.station_id
     dist = f"{row.distance_km:5.0f} km" if row.distance_km is not None else "       "
     text = Text(no_wrap=True, overflow="ellipsis")
-    text.append(f"{short_name(name):<{NAME_WIDTH}} ", "bold")
+    text.append(f"{short_name(name, name_width):<{name_width}} ", "bold")
     text.append(f"{dist} ", "grey62")
     text.append(f"{row.mode:<3} ", "cyan")
     text.append(age_text(row, now), "grey70")
@@ -123,18 +126,21 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
 class GaugeRow(Horizontal):
     DEFAULT_CSS = """
     GaugeRow > Sparkline > .sparkline--min-color { color: $success; }
-    GaugeRow > Sparkline > .sparkline--max-color { color: $warning; }
+    GaugeRow > Sparkline > .sparkline--max-color { color: $text-muted; }
     GaugeRow.over > Sparkline > .sparkline--max-color { color: $error; }
     """
 
-    def __init__(self, row: GaugeRowData, now: datetime):
+    def __init__(self, row: GaugeRowData, now: datetime, name_width: int = NAME_WIDTH):
         super().__init__(id=f"gauge-{row.station_id}")
         self.row = row
         self._now = now
+        self._name_width = name_width
 
     def compose(self) -> ComposeResult:
         self.set_class(is_over_now(self.row, self._now), "over")
-        yield Static(row_label(self.row, self._now), classes="gauge-label")
+        label = Static(row_label(self.row, self._now, self._name_width), classes="gauge-label")
+        label.styles.width = self._name_width + LABEL_REST
+        yield label
         if shown_residuals(self.row.residuals):
             yield Sparkline(sparkline_data(self.row.residuals, self.row.threshold_m), classes="gauge-spark")
         else:  # nothing to draw: Sparkline would scale an empty series to a solid block
@@ -145,8 +151,14 @@ class GaugeRow(Horizontal):
 class GaugeHeader(Horizontal):
     """The column headings, in the same columns as the rows."""
 
+    def __init__(self, name_width: int = NAME_WIDTH):
+        super().__init__()
+        self._name_width = name_width
+
     def compose(self) -> ComposeResult:
-        yield Static(f"{'Station':<{NAME_WIDTH}} {'Distance':>8} {'Mode':<3} Reading", classes="gauge-label")
+        label = Static(f"{'Station':<{self._name_width}} {'Distance':>8} {'Mode':<3} Reading", classes="gauge-label")
+        label.styles.width = self._name_width + LABEL_REST
+        yield label
         yield Static("Residual", classes="gauge-spark")
         yield Static("24 h max", classes="gauge-max")
 
@@ -156,7 +168,6 @@ class GaugeStrip(Vertical):
     GaugeStrip { height: auto; }
     GaugeStrip > Horizontal { height: 1; }
     GaugeStrip > GaugeHeader { color: $text-muted; }
-    GaugeStrip .gauge-label { width: 58; }
     GaugeStrip .gauge-spark { width: 1fr; min-width: 8; margin: 0 1; }
     GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: right; }
     GaugeStrip > .gauge-empty { color: $text-muted; }
@@ -166,14 +177,25 @@ class GaugeStrip(Vertical):
         super().__init__(**kwargs)
         self._rows: tuple[GaugeRowData, ...] = ()
         self._now: datetime | None = None
+        self._name_width = NAME_WIDTH
+
+    def _fit_name_width(self) -> int:
+        """The station column: the longest name, as wide as the strip leaves room for, never under NAME_WIDTH."""
+        longest = max((len(r.name or r.station_id) for r in self._rows), default=NAME_WIDTH)
+        return max(NAME_WIDTH, min(longest, self.size.width - LABEL_REST - OTHER_COLUMNS))
+
+    def on_resize(self) -> None:
+        if self._rows and self._fit_name_width() != self._name_width:
+            self.refresh(recompose=True)
 
     def compose(self) -> ComposeResult:
         if not self._rows or self._now is None:
             yield Static("No gauge stations selected.", classes="gauge-empty")
             return
-        yield GaugeHeader()
+        self._name_width = self._fit_name_width()
+        yield GaugeHeader(self._name_width)
         for row in self._rows:
-            yield GaugeRow(row, self._now)
+            yield GaugeRow(row, self._now, self._name_width)
         if any(r.kind == "dart" for r in self._rows) and not any(r.kind == "coops" for r in self._rows):
             coops = getattr(self.app, "coops", None)
             if coops is not None and not coops.stations:  # an outage or the first fetch, not a fact about the coast
