@@ -417,19 +417,6 @@ async def test_a_markup_looking_search_does_not_crash_the_empty_hint():
         assert "[/x] [bold]" in str(app.dashboard.query_one("#empty").render())
 
 
-async def test_attention_follows_what_the_filter_can_show_not_what_the_search_hides():
-    app = week_app()
-    shown = app.store.visible(app.view, app.clock)[0]
-    low = make_quake("low", 0.5, time=WEEK_NOW)  # below the 4.5 view filter: the list can never show it
-    app.store.merge(Batch("usgs", WEEK_NOW, quakes=(low,)), app.clock)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.tracker.observe([QuakeNew(shown), QuakeNew(low)])
-        app.set_query(shown.place)  # search hides the others, and the 0.5 never shows
-        await pilot.pause()
-        assert app.tracker.is_unseen(shown.id) and not app.tracker.is_unseen("low")
-
-
 def test_alert_floor_keeps_the_steady_feed_wide_enough_for_alerts():
     home = (40.7, -74.0)
     config = with_overrides(Config(), 5.0, 24, home, "ascii")

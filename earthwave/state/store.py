@@ -101,6 +101,7 @@ class Store:
         self._coverage: dict[tuple[float, float], datetime] = {}
         self.coverage_lapsed = False  # a claim was dropped because the steady feed missed more than its window
         self.warm = False
+        self._steady_at: datetime | None = None  # when the steady feed last answered
         self._tsunamis: dict[str, TsunamiAlert] = {}
         self._first_seen: dict[str, datetime] = {}
         self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
@@ -164,8 +165,13 @@ class Store:
         """Fold a batch into the store and return the events it caused.
 
         Backfill batches, and everything before the first steady batch has been merged (the store is "cold"),
-        update the store without raising events, so launch never produces a flash storm.
+        update the store without raising events, so launch never produces a flash storm. A quake published after the
+        steady feed last answered is the exception: the feed has not delivered it yet and would find it already
+        stored, so it is announced here or never.
         """
+        steady_at = self._steady_at
+        if self._is_steady(batch):
+            self._steady_at = batch.fetched_at
         if batch.not_modified:
             if batch.coverage and batch.generated:
                 self._claim(batch)  # the feed is unchanged since it was made: its claims are current up to then
@@ -186,7 +192,7 @@ class Store:
                     self._relink(other.id, quake.id)
                     events.append(QuakeRenamed(other.id, quake))
             self._put(quake)
-            if silent:
+            if silent and not (old is None and self._published_since(quake, steady_at)):
                 continue
             if old is None:
                 events.append(QuakeNew(quake))
@@ -201,13 +207,21 @@ class Store:
             self._claim(batch)
         if batch.backfill:
             self.coverage_lapsed = False  # the backfill that closes a lapsed claim has landed (even if it was partial)
-        if not batch.backfill and batch.source not in GAUGE_SOURCES | ALERT_SOURCES:
+        if self._is_steady(batch):
             self.warm = True
         events.extend(self._merge_alerts(batch, clock))
         events.extend(self._merge_gauges(batch, clock, silent=batch.backfill or bool(batch.meta.get("silent"))))
         self._link_alerts()
         self._prune(clock)
         return events
+
+    @staticmethod
+    def _is_steady(batch: Batch) -> bool:
+        return not batch.backfill and batch.source not in GAUGE_SOURCES | ALERT_SOURCES
+
+    @staticmethod
+    def _published_since(quake: Earthquake, since: datetime | None) -> bool:
+        return since is not None and (quake.updated or quake.time) > since
 
     def _known(self, quake: Earthquake) -> list[Earthquake]:
         """Every stored version of this event under any id USGS has given it, the one under its own id first."""

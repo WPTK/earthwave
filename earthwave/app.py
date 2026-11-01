@@ -19,6 +19,7 @@ from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import Freshness, PollResult, Scheduler
+from earthwave.sources import levels
 from earthwave.sources.anomaly import threshold_m
 from earthwave.sources.base import Source
 from earthwave.sources.coops import CoopsSource
@@ -35,10 +36,12 @@ from earthwave.state.events import (
     QuakeRenamed,
     SourceDegraded,
     SourceRecovered,
+    TsunamiChanged,
+    TsunamiIssued,
 )
 from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
-from earthwave.state.rules import AlertRules, Notification
+from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.labels import fmt_time
@@ -255,9 +258,25 @@ class EarthwaveApp(App):
         self._record_history(result)
         for event in result.events:
             if isinstance(event, QuakeMajor):
-                q = event.quake
                 self.notify(
-                    f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10, markup=False
+                    quake_line(event.quake, self.clock.now()),
+                    title="Major earthquake",
+                    severity="warning",
+                    timeout=10,
+                    markup=False,
+                )
+            elif (
+                isinstance(event, TsunamiIssued | TsunamiChanged)
+                and self.config.alerts.tsunami
+                and event.alert.level in levels.ACTIONABLE
+            ):
+                # The banner, panel and status bar live on the dashboard only; a toast reaches every screen.
+                self.notify(
+                    event.alert.headline,
+                    title=f"Tsunami {event.alert.level.title()}",
+                    severity="error",
+                    timeout=30,
+                    markup=False,
                 )
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
@@ -323,6 +342,13 @@ class EarthwaveApp(App):
         # partial: the list may be missing an alert, so it must not read as clear.
         partial = [(n, f) for n, f in state if f is Freshness.FRESH and self.scheduler.statuses[n].health.incomplete]
         return down + partial, bool(names) and all(f is not Freshness.FRESH for _, f in state)
+
+    def tsunami_feeds_loading(self) -> bool:
+        """True while an enabled tsunami feed has not answered yet: an empty list says nothing until it has, because
+        another feed (NWS, JMA) answering first does not cover what only this one carries."""
+        return self.scheduler_running and any(
+            self.scheduler.freshness(n) is Freshness.LOADING for n in TSUNAMI_FEEDS if n in self.scheduler.statuses
+        )
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""
@@ -416,7 +442,7 @@ class EarthwaveApp(App):
 
     def _notify_desktop(self, events: list) -> None:
         """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
-        for note in self.rules.evaluate(events):
+        for note in self.rules.evaluate(events, self.clock.now()):
             if self.bell_enabled and note.bell:
                 self.bell()
             if self.notifier is not None:
@@ -476,6 +502,12 @@ class EarthwaveApp(App):
         self.dashboard.refresh_status()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
+
+    def close_observations(self) -> None:
+        """Leaving the observations screen releases the quake `o` pinned, so its stations stop being polled."""
+        if self._gauge_quake is not None:
+            self._gauge_quake = None
+            self.sync_gauges()
 
     def open_observations(self, quake: Earthquake) -> None:
         """`o`: select the stations nearest a USGS-flagged quake and show their gauges."""
