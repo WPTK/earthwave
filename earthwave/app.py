@@ -38,7 +38,7 @@ from earthwave.state.events import (
 )
 from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
-from earthwave.state.rules import AlertRules, Notification
+from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.labels import fmt_time
@@ -251,13 +251,16 @@ class EarthwaveApp(App):
     def on_poll_done(self, message: PollDone) -> None:
         result = message.result
         self.tracker.observe(list(result.events))
-        self._notify_desktop(list(result.events))
+        notes = self._notify_desktop(list(result.events))
         self._record_history(result)
         for event in result.events:
             if isinstance(event, QuakeMajor):
-                q = event.quake
                 self.notify(
-                    f"M{q.mag:.1f} {q.place}", title="Major earthquake", severity="warning", timeout=10, markup=False
+                    quake_line(event.quake, self.clock.now()),
+                    title="Major earthquake",
+                    severity="warning",
+                    timeout=10,
+                    markup=False,
                 )
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
@@ -267,6 +270,12 @@ class EarthwaveApp(App):
                 self.notify(body, title="Gauge anomaly", severity="warning", timeout=10, markup=False)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
+        if self.screen_stack and self.screen is not self.dashboard:
+            # The banner and panel live on the dashboard only: elsewhere the tsunami notes also toast in the app.
+            for note in notes:
+                if note.key.startswith("tsunami:"):
+                    severity = "error" if note.urgency == "critical" else "warning"
+                    self.notify(note.body, title=note.title, severity=severity, timeout=30, markup=False)
         steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
         if (
             steady
@@ -312,8 +321,8 @@ class EarthwaveApp(App):
         self.history.record(current, unseen, merged.values(), batch.fetched_at, replaced=gone)
 
     def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
-        """(tsunami feeds late or failing, whether no tsunami feed is fresh). A feed not polled yet is not an outage,
-        but until one feed has answered, an empty alert list says nothing."""
+        """(tsunami feeds late, failing or partial, whether no tsunami feed is fresh). A feed not polled yet is not an
+        outage; `tsunami_feeds_loading` says an empty alert list still means nothing."""
         if not self.scheduler_running:
             return [], False
         names = [n for n in TSUNAMI_FEEDS if n in self.scheduler.statuses]
@@ -323,6 +332,13 @@ class EarthwaveApp(App):
         # partial: the list may be missing an alert, so it must not read as clear.
         partial = [(n, f) for n, f in state if f is Freshness.FRESH and self.scheduler.statuses[n].health.incomplete]
         return down + partial, bool(names) and all(f is not Freshness.FRESH for _, f in state)
+
+    def tsunami_feeds_loading(self) -> bool:
+        """True while an enabled tsunami feed has not answered yet: an empty list says nothing until it has, because
+        another feed (NWS, JMA) answering first does not cover what only this one carries."""
+        return self.scheduler_running and any(
+            self.scheduler.freshness(n) is Freshness.LOADING for n in TSUNAMI_FEEDS if n in self.scheduler.statuses
+        )
 
     def sync_tsunami(self) -> None:
         """Forget tsunami attention for alerts that expired or were closed since the last look."""
@@ -414,13 +430,15 @@ class EarthwaveApp(App):
             return ""
         return f"{last.name} {last.residual_m:+.2f} m"
 
-    def _notify_desktop(self, events: list) -> None:
+    def _notify_desktop(self, events: list) -> list[Notification]:
         """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
-        for note in self.rules.evaluate(events):
+        notes = self.rules.evaluate(events, self.clock.now())
+        for note in notes:
             if self.bell_enabled and note.bell:
                 self.bell()
             if self.notifier is not None:
                 self._outbox.put_nowait(note)
+        return notes
 
     # --- view changes -------------------------------------------------------------------------------------------
 
@@ -476,6 +494,12 @@ class EarthwaveApp(App):
         self.dashboard.refresh_status()
         if isinstance(self.screen, TsunamiScreen):
             self.screen.refresh_alerts()
+
+    def close_observations(self) -> None:
+        """Leaving the observations screen releases the quake `o` pinned, so its stations stop being polled."""
+        if self._gauge_quake is not None:
+            self._gauge_quake = None
+            self.sync_gauges()
 
     def open_observations(self, quake: Earthquake) -> None:
         """`o`: select the stations nearest a USGS-flagged quake and show their gauges."""

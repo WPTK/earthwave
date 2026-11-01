@@ -1,6 +1,7 @@
 """Alert rules: which events become a desktop toast (and bell), from the [alerts] config."""
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from earthwave.config import AlertsConfig
 from earthwave.models import Earthquake
@@ -15,10 +16,11 @@ from earthwave.state.events import (
     TsunamiChanged,
     TsunamiIssued,
 )
-from earthwave.ui.labels import fmt_time
+from earthwave.ui.labels import fmt_age, fmt_time
 
 PAGER_RANK = {"green": 0, "yellow": 1, "orange": 2, "red": 3}
 BURST = 3  # this many quake toasts at once collapse into one summary
+OLD_QUAKE = 3600.0  # seconds: a quake announced this long after it happened (an outage, a sleep) says how old it is
 SENT_LIMIT = 500  # toast keys remembered; the oldest are forgotten first
 
 
@@ -31,8 +33,11 @@ class Notification:
     bell: bool = False
 
 
-def _quake_line(quake: Earthquake) -> str:
-    return f"M{quake.mag:.1f} {quake.place}".strip()
+def quake_line(quake: Earthquake, now: datetime | None = None) -> str:
+    """'M6.1 place', with 'N ago' when the quake is old news by the time it is announced."""
+    line = f"M{quake.mag:.1f} {quake.place}".strip()
+    age = (now - quake.time).total_seconds() if now is not None else 0.0
+    return f"{line}, {fmt_age(age)} ago" if age >= OLD_QUAKE else line
 
 
 class AlertRules:
@@ -40,18 +45,18 @@ class AlertRules:
         self._config = alerts
         self._sent: dict[str, None] = {}
 
-    def evaluate(self, events: list[Event] | tuple[Event, ...]) -> list[Notification]:
+    def evaluate(self, events: list[Event] | tuple[Event, ...], now: datetime | None = None) -> list[Notification]:
         quakes: list[tuple[int, Earthquake, Notification]] = []  # (urgency rank, quake, note); 0 is most urgent
         tsunamis: list[Notification] = []
         home_km: dict[str, float] = {}
         for event in events:
             if isinstance(event, QuakeMajor):
                 quakes.append(
-                    (0, event.quake, self._quake("major", "Major earthquake", event.quake, "warning", bell=True))
+                    (0, event.quake, self._quake("major", "Major earthquake", event.quake, "warning", now, bell=True))
                 )
             elif isinstance(event, QuakeNearHome):
                 home_km[event.quake.id] = event.distance_km
-                body = f"{_quake_line(event.quake)} ({event.distance_km:.0f} km from home)"
+                body = f"{quake_line(event.quake, now)} ({event.distance_km:.0f} km from home)"
                 quakes.append(
                     (1, event.quake, Notification(f"near:{event.quake.id}", "Earthquake near home", body, "warning"))
                 )
@@ -62,7 +67,7 @@ class AlertRules:
                         (
                             2,
                             event.quake,
-                            self._quake(f"pager:{pager}", f"PAGER {pager} earthquake", event.quake, "warning"),
+                            self._quake(f"pager:{pager}", f"PAGER {pager} earthquake", event.quake, "warning", now),
                         )
                     )
             elif (
@@ -88,7 +93,7 @@ class AlertRules:
                 Notification(
                     f"burst:{fresh[0].key}",
                     "Earthquakes",
-                    f"{len(fresh)} notable quakes in the last minute, largest {_quake_line(top)}",
+                    f"{len(fresh)} notable quakes, largest {quake_line(top, now)}",
                     "warning",
                     bell=True,
                 )
@@ -107,8 +112,10 @@ class AlertRules:
         floor = PAGER_RANK.get(self._config.pager_min, 1)
         return quake.pager_alert in PAGER_RANK and PAGER_RANK[quake.pager_alert] >= floor
 
-    def _quake(self, kind: str, title: str, quake: Earthquake, urgency: str, bell: bool = False) -> Notification:
-        return Notification(f"{kind}:{quake.id}", title, _quake_line(quake), urgency, bell)
+    def _quake(
+        self, kind: str, title: str, quake: Earthquake, urgency: str, now: datetime | None, bell: bool = False
+    ) -> Notification:
+        return Notification(f"{kind}:{quake.id}", title, quake_line(quake, now), urgency, bell)
 
     def _tsunami(self, event: TsunamiIssued | TsunamiChanged) -> Notification:
         alert = event.alert
