@@ -60,7 +60,11 @@ def build_panel(
     if not alerts and checking:
         return Text("Checking tsunami feeds", style="grey50")
     if not alerts and not down:
-        return Text(cancelled or "No tsunami alerts in force", style="grey50")
+        if not cancelled:
+            return Text("No tsunami alerts in force", style="grey50")
+        line = Text(cancelled, style="grey50")
+        line.highlight_words(["cancelled"], "green")  # the word that says it is over reads as resolved
+        return line
     text = Text(no_wrap=True, overflow="ellipsis")
     for alert in alerts[:max_lines]:
         text.append(f"{alert.level:<11}", LEVEL_COLORS[alert.level])

@@ -178,3 +178,41 @@ async def test_open_search_box_shows_enter_and_escape_hints_whatever_is_typed():
         await pilot.press("slash", "a", "l")
         await pilot.pause()
         assert "Enter apply, Esc cancel" in screen_text(app)
+
+
+# --- final polish: banner hints at 100 columns, cancelled in green, bulletin/gauge separation -------------------------
+
+
+async def test_overdue_banner_keeps_its_key_hints_at_100_columns():
+    app = kam_alert_app(0, 1)
+    app.clock.advance_to(kam(1).expires + timedelta(minutes=10))
+    async with app.run_test(size=(100, 30)) as pilot:
+        observe(app, 1)
+        await pilot.pause()
+        banner_row = screen_text(app).splitlines()[1].rstrip()
+        assert "OVERDUE" in banner_row and banner_row.endswith("t details, a acknowledge")
+
+
+def test_the_word_cancelled_is_styled_so_the_line_reads_as_resolved():
+    line = "Warning cancelled 2025-07-30 01:40:12 UTC"
+    text = build_panel([], datetime(2025, 7, 30, 2, tzinfo=UTC), cancelled=line)
+    assert text.plain == line
+    styled = {text.plain[s.start : s.end]: str(s.style) for s in text.spans}
+    assert styled.get("cancelled") == "green"
+
+
+def test_the_bulletin_drops_the_zczc_start_line_only():
+    alert = kam(1)
+    plain = render_alert(alert, "active", "", "UTC").plain
+    assert "ZCZC" not in plain and "WEAK51 PAAQ 292351" in plain and "Tsunami Warning Number 2" in plain
+
+
+async def test_gauge_strip_is_set_off_from_the_bulletin_by_a_rule():
+    for size in ((120, 30), (100, 30)):
+        app = kam_alert_app(0, 1)
+        async with app.run_test(size=size) as pilot:
+            await pilot.press("t")
+            await pilot.pause()
+            gauges = app.screen.query_one("#gauges")
+            assert gauges.styles.border_top[0] == "solid"  # the rule is the strip's first line, under the bulletin
+            assert gauges.region.height >= 2
