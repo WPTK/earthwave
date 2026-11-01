@@ -3,6 +3,7 @@
 Pure Python with no Textual dependency. A `BrailleCanvas(cols, rows)` is a grid of 2x4 dots per terminal
 cell. `coastline_canvas` rasterises the bundled Natural Earth 1:10m coastline for a viewport and caches
 the result; `render_ascii` is the 1x1 cell fallback for terminals without braille glyphs.
+The data file holds three levels of detail and `level_for` picks one from the dot size of the view.
 """
 
 from __future__ import annotations
@@ -166,11 +167,33 @@ def render_ascii(canvas: BrailleCanvas) -> list[str]:
     return lines
 
 
+Polylines = tuple[tuple[tuple[float, float], ...], ...]
+
+
 @cache
-def load_coastline() -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Bundled coastline polylines as ((lon, lat), ...) tuples."""
+def load_levels() -> tuple[tuple[float, Polylines], ...]:
+    """Bundled coastline as (Douglas-Peucker tolerance in degrees, polylines of (lon, lat)), finest level first."""
     raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-    return tuple(tuple((float(x), float(y)) for x, y in line) for line in raw)
+    return tuple(
+        (
+            float(level["tolerance"]),
+            tuple(tuple((float(x), float(y)) for x, y in line) for line in level["lines"]),
+        )
+        for level in raw
+    )
+
+
+def level_for(view: Viewport, cols: int, rows: int) -> int:
+    """Index of the coarsest level whose tolerance is under half a dot at this view; 0 (finest) when none is."""
+    dot = min(
+        (view.lon1 - view.lon0) / max(cols * 2 - 1, 1),
+        (view.lat1 - view.lat0) / max(rows * 4 - 1, 1),
+    )
+    best = 0
+    for index, (tolerance, _) in enumerate(load_levels()):
+        if tolerance <= dot / 2:
+            best = index
+    return best
 
 
 def _unwrap(points: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -212,7 +235,12 @@ def _draw_unwrapped(
             if cur != prev:
                 if prev is None:
                     canvas.set(cur[0], cur[1])  # a polyline collapsing to one dot still leaves that dot
-                else:
+                elif not (  # both ends past the same edge: nothing of the segment is on the canvas
+                    (prev[0] < 0 and cur[0] < 0)
+                    or (prev[0] > wm and cur[0] > wm)
+                    or (prev[1] < 0 and cur[1] < 0)
+                    or (prev[1] > hm and cur[1] > hm)
+                ):
                     canvas.line(prev[0], prev[1], cur[0], cur[1])
                 prev = cur
 
@@ -231,25 +259,26 @@ def draw_polyline(canvas: BrailleCanvas, points: Sequence[tuple[float, float]], 
 
 
 @cache
-def _prepared_coastline() -> tuple[tuple[list[tuple[float, float]], tuple[float, float, float, float]], ...]:
-    """Coastline polylines unwrapped once, with their bounding boxes, so a view can reject most of them cheaply."""
+def _prepared_coastline(level: int) -> tuple[tuple[list[tuple[float, float]], tuple[float, float, float, float]], ...]:
+    """One level's polylines unwrapped once, with bounding boxes, so a view can reject most of them cheaply."""
     out = []
-    for line in load_coastline():
+    for line in load_levels()[level][1]:
         pts = _unwrap(line)
         if len(pts) >= 2:
             out.append((pts, _bounds(pts)))
     return tuple(out)
 
 
-def warm_coastline() -> None:
+def warm_coastline(level: int | None = None) -> None:
     """Load and prepare the coastline data (call off the UI thread to avoid a first-draw stall)."""
-    _prepared_coastline()
+    for index in range(len(load_levels())) if level is None else (level,):
+        _prepared_coastline(index)
 
 
 @lru_cache(maxsize=16)
 def _coastline_cached(cols: int, rows: int, view: Viewport) -> BrailleCanvas:
     canvas = BrailleCanvas(cols, rows)
-    for pts, bounds in _prepared_coastline():
+    for pts, bounds in _prepared_coastline(level_for(view, cols, rows)):
         _draw_unwrapped(canvas, pts, bounds, view)
     return canvas
 

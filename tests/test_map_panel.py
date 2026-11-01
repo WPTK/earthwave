@@ -56,6 +56,12 @@ def model(cols, rows, home=None, ascii_mode=False, tracker=None, selected=BONIN)
     return m
 
 
+def to_region(m: MapModel) -> None:
+    """World -> wide -> region."""
+    m.cycle_zoom()
+    assert m.cycle_zoom() is ZoomMode.REGION
+
+
 # --- marker placement -------------------------------------------------------------------------------------------
 
 
@@ -170,31 +176,87 @@ def test_zoom_view_clamps_poles_and_spans_the_dateline():
 
 def test_region_zoom_centres_the_selected_quake():
     m = model(160, 40)
-    assert m.mode is ZoomMode.WORLD and m.view() == WORLD
+    assert m.mode is ZoomMode.WORLD and m.view() == world_view(0, 160, 40)
+    assert m.cycle_zoom() is ZoomMode.WIDE
     assert m.cycle_zoom() is ZoomMode.REGION
     col, row = project_cell(BONIN.lon, BONIN.lat, m.view(), 160, 40)
     assert abs(col - 80) <= 1 and abs(row - 20) <= 1
     assert m.frame().markers[(col, row)].glyph == "◉"
 
 
-def test_zoom_cycle_world_region_home_and_skips():
+def test_zoom_cycle_steps_and_spans():
+    Z = ZoomMode
     m = model(160, 40, home=NEW_YORK)
-    assert [m.cycle_zoom() for _ in range(4)] == [ZoomMode.REGION, ZoomMode.HOME, ZoomMode.WORLD, ZoomMode.REGION]
+    assert [m.cycle_zoom() for _ in range(5)] == [Z.WIDE, Z.REGION, Z.CLOSE, Z.WORLD, Z.WIDE]
+    spans = {}
+    for _ in range(3):
+        view = m.view()
+        spans[m.mode] = view.lat1 - view.lat0
+        assert m.shown.startswith(m.mode.value) and "°" in m.shown
+        m.cycle_zoom()
+    assert spans == {Z.WIDE: 90, Z.REGION: 40, Z.CLOSE: 16}
+    assert m.shown == "world"
+    ascii_model = model(160, 40, ascii_mode=True)
+    ascii_model.cycle_zoom()
+    assert ascii_model.shown == "wide 90 deg"
+
+
+def test_zoom_without_a_selection_centres_on_pan_point_then_home_then_latest_major():
+    home = model(160, 40, home=NEW_YORK, selected=None)
+    assert home.cycle_zoom() is ZoomMode.WIDE
+    assert home.view().lon0 < -74 < home.view().lon1 and home.view().lat0 < 40.7 < home.view().lat1
+    home.cycle_zoom()
+    home.cycle_zoom()
+    assert home.view().lat1 - home.view().lat0 == 16 and home.view().lon0 < -74 < home.view().lon1
+
+    major = max((q for q in QUAKES if q.mag >= 6.0), key=lambda q: q.time)
+    no_home = model(160, 40, selected=None)
+    assert no_home.cycle_zoom() is ZoomMode.WIDE
+    assert project_cell(major.lon, major.lat, no_home.view(), 160, 40) is not None
+    view = no_home.view()
+    assert abs(((view.lon0 + view.lon1) / 2 - major.lon + 180) % 360 - 180) < 3
+
+    panned = model(160, 40, home=NEW_YORK, selected=None)
+    panned.pan(1, 0)  # the world scrolled 30 degrees east: that is the point to zoom on
+    panned.cycle_zoom()
+    assert abs((panned.view().lon0 + panned.view().lon1) / 2 - 30) <= 5
+    panned.pan(1, 0)  # panning in a zoomed view moves the point the next step centres on
+    centre = (panned.view().lon0 + panned.view().lon1) / 2
+    panned.cycle_zoom()
+    assert abs((panned.view().lon0 + panned.view().lon1) / 2 - centre) <= 5
+
+    nothing = MapModel()
+    nothing.resize(160, 40)
+    assert nothing.cycle_zoom() is ZoomMode.WIDE and nothing.shown == "world"  # no anchor anywhere: draws the world
+
+
+def test_selecting_a_quake_recentres_a_zoom_made_without_one():
+    m = model(160, 40, home=NEW_YORK, selected=None)
     m.cycle_zoom()
-    assert m.view().lon0 < -74 < m.view().lon1 and m.view().lat0 < 40.7 < m.view().lat1
-    no_home = model(160, 40)
-    assert [no_home.cycle_zoom() for _ in range(3)] == [ZoomMode.REGION, ZoomMode.WORLD, ZoomMode.REGION]
-    nothing = model(160, 40, selected=None)
-    assert nothing.cycle_zoom() is ZoomMode.WORLD  # no anchor anywhere: stays on the world
+    m.select(BONIN)
+    col, row = project_cell(BONIN.lon, BONIN.lat, m.view(), 160, 40)
+    assert abs(col - 80) <= 1 and abs(row - 20) <= 1
+
+
+def test_world_view_has_equal_degrees_per_dot():
+    for cols, rows in ((200, 50), (280, 70), (88, 41), (160, 40), (60, 10)):
+        view = world_view(0, cols, rows)
+        per_x = (view.lon1 - view.lon0) / (cols * 2 - 1)
+        per_y = (view.lat1 - view.lat0) / (rows * 4 - 1)
+        assert abs(per_x - per_y) < 1e-9, (cols, rows)
+        assert view.lon1 - view.lon0 == 360
+        assert (view.lat1 - view.lat0 >= 180 and view.lat0 < -90) or view.lat1 <= 90
+    assert world_view(0, 88, 41).lat1 > 90  # a tall panel is letterboxed
+    assert world_view(0, 160, 20).lat0 > -90  # a short one drops the south polar cap
 
 
 def test_pan_math():
     m = model(160, 40)
     m.pan(1, 1)
-    assert m.view().lon0 == WORLD.lon0 + 30 and m.view().lon1 - m.view().lon0 == 360  # world scrolls sideways only
+    assert m.view().lon0 == -180 + 30 and m.view().lon1 - m.view().lon0 == 360  # world scrolls sideways only
     m.pan(-1, 0)
-    assert m.view() == WORLD
-    m.cycle_zoom()
+    assert m.view() == world_view(0, 160, 40)
+    to_region(m)
     m.pan(1, 0)  # the first pan snaps the centre to the 5 degree grid
     before = m.view()
     m.pan(1, 0)
@@ -243,7 +305,7 @@ def test_pan_longitude_wraps_around_the_globe():
 
 def test_data_refresh_keeps_the_pan_but_user_selection_recentres():
     m = model(160, 40)
-    m.cycle_zoom()
+    to_region(m)
     m.pan(1, 1)
     panned = (m.pan_lon, m.pan_lat)
     other = QUAKES[0] if QUAKES[0].id != BONIN.id else QUAKES[1]
@@ -276,7 +338,7 @@ def test_world_view_wraps_and_pan_views_are_cache_friendly():
         and world_view(30).lon0 == WORLD.lon0 + 30
     )
     m = model(160, 40)
-    m.cycle_zoom()
+    to_region(m)
     base_lines.cache_clear()
     for _ in range(3):
         m.pan(1, 0)
@@ -308,7 +370,7 @@ def test_world_golden(cols, rows, ascii_mode):
 @pytest.mark.parametrize("ascii_mode", [False, True], ids=["unicode", "ascii"])
 def test_region_golden(ascii_mode):
     m = model(160, 40, home=NEW_YORK, ascii_mode=ascii_mode)
-    m.cycle_zoom()
+    to_region(m)
     check_golden(f"region_160x40_{'ascii' if ascii_mode else 'unicode'}.txt", m.plain_rows())
 
 
@@ -361,7 +423,10 @@ async def test_widget_renders_the_model_and_cycles_zoom_with_keys():
         assert panel.border_title == "Map · world"
         panel.action_cycle_zoom()
         await pilot.pause()
-        assert panel.border_title == "Map · region" and panel.model.mode is ZoomMode.REGION
+        assert panel.border_title == "Map · wide 90°" and panel.model.mode is ZoomMode.WIDE
+        panel.action_cycle_zoom()
+        await pilot.pause()
+        assert panel.border_title == "Map · region 40°" and panel.model.mode is ZoomMode.REGION
         before = panel.model.view()
         panel.focus()
         await pilot.press("right", "up")
@@ -402,9 +467,11 @@ async def test_dashboard_keys_zoom_fullscreen_and_selection_follow():
         await pilot.press("j")
         assert panel.model.selected.id == quake_list.selected.id  # moving the cursor moves the highlight
         await pilot.press("z")
-        assert panel.model.mode is ZoomMode.REGION and "region" in panel.border_title
+        assert panel.model.mode is ZoomMode.WIDE and "wide 90" in panel.border_title
         await pilot.press("z")
-        assert panel.model.mode is ZoomMode.HOME
+        assert panel.model.mode is ZoomMode.REGION and "region 40" in panel.border_title
+        await pilot.press("z")
+        assert panel.model.mode is ZoomMode.CLOSE and "close 16" in panel.border_title
         await pilot.press("z")
         assert panel.model.mode is ZoomMode.WORLD
         await pilot.press("M")
@@ -412,7 +479,7 @@ async def test_dashboard_keys_zoom_fullscreen_and_selection_follow():
         assert app.dashboard.has_class("map-full") and app.focused is panel
         assert panel.size.width > 150
         await pilot.press("right")
-        assert panel.model.pan_lon == 30 and panel.model.view().lon0 == WORLD.lon0 + 30  # one step, not a jump
+        assert panel.model.pan_lon == 30 and panel.model.view().lon0 == -180 + 30  # one step, not a jump
         await pilot.press("M")
         await pilot.pause()
         assert not app.dashboard.has_class("map-full") and app.focused is quake_list

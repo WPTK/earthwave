@@ -1,3 +1,4 @@
+import itertools
 import os
 import time
 from pathlib import Path
@@ -10,7 +11,8 @@ from earthwave.ui.widgets.braille import (
     Viewport,
     coastline_canvas,
     draw_polyline,
-    load_coastline,
+    level_for,
+    load_levels,
     project,
     project_cell,
     render_ascii,
@@ -107,13 +109,85 @@ def test_dateline_polyline_draws_across_the_edge():
 
 
 def test_coastline_data_shape():
-    lines = load_coastline()
-    assert len(lines) > 1000
-    assert sum(len(line) for line in lines) > 100_000  # linecast's 1:10m land layer has about 138k points
-    for line in lines:
-        assert len(line) >= 2
-        for lon, lat in line:
-            assert -180 <= lon <= 180 and -90 <= lat <= 90
+    levels = load_levels()
+    assert [t for t, _ in levels] == [0.01, 0.1, 0.4]  # finest first
+    fine = levels[0][1]
+    assert len(fine) > 1000
+    assert sum(len(line) for line in fine) > 100_000  # linecast's 1:10m land layer has about 138k points
+    for _, lines in levels:
+        for line in lines:
+            assert len(line) >= 2
+            for lon, lat in line:
+                assert -180 <= lon <= 180 and -90 <= lat <= 90
+    sizes = [sum(len(line) for line in lines) for _, lines in levels]
+    assert sizes[0] > 5 * sizes[1] > 5 * sizes[2]  # each level is far lighter than the one before
+
+
+def _extent(line) -> float:
+    lons, lats = [p[0] for p in _unwrapped(line)], [p[1] for p in line]
+    return max(max(lons) - min(lons), max(lats) - min(lats))
+
+
+def _unwrapped(line):
+    out, offset, prev = [], 0.0, None
+    for lon, lat in line:
+        if prev is not None and abs(lon - prev) > 180:
+            offset += 360.0 if prev > lon else -360.0
+        prev = lon
+        out.append((lon + offset, lat))
+    return out
+
+
+def test_level_for_picks_the_coarsest_level_under_half_a_dot():
+    def dot(deg):  # a view whose dots are `deg` across on both axes
+        return Viewport(0, 0, deg * 399, deg * 199), 200, 50
+
+    assert [level_for(*dot(d)) for d in (0.01, 0.05, 0.19, 0.2, 0.7, 0.8, 2.0)] == [0, 0, 0, 1, 1, 2, 2]
+    assert level_for(WORLD, 198, 45) == 2  # 0.9 degrees a dot at full-screen width
+    assert level_for(Viewport(0, 0, 180, 90), 198, 45) == 1  # a 90 degree view
+    assert level_for(Viewport(0, 0, 32, 16), 198, 45) == 0  # a 16 degree view keeps the fine line
+    assert level_for(Viewport(0, 0, 10, 10), 1, 1) in (0, 1, 2)  # tiny canvases do not divide by zero
+
+
+def test_no_island_a_cell_wide_is_dropped_at_any_level():
+    levels = load_levels()
+    fine = levels[0][1]
+    for (tolerance, lines), cell_deg in ((levels[1], 2 * 0.2), (levels[2], 2 * 0.8)):  # a cell is 2 dots wide
+        wanted = sum(1 for line in fine if _extent(line) >= cell_deg * 1.1)
+        kept = sum(1 for line in lines if _extent(line) >= cell_deg)
+        assert kept >= wanted, tolerance
+    assert len(levels[2][1]) < len(fine) // 5  # and the specks below a dot are gone from the world level
+
+
+def test_islands_still_light_dots_at_the_world_view():
+    c = coastline_canvas(160, 40)
+    for name, lon, lat in (
+        ("Sri Lanka", 80.7, 7.8),
+        ("Tasmania", 146.6, -42.0),
+        ("Iceland", -19.0, 65.0),
+        ("Cuba", -79.5, 21.8),
+    ):
+        x, y = project(lon, lat, WORLD, c.width, c.height)
+        assert any(c.get(round(x) + dx, round(y) + dy) for dx in range(-2, 3) for dy in range(-2, 3)), name
+
+
+def test_no_level_has_a_dateline_streak():
+    for tolerance, lines in load_levels():
+        for line in lines:
+            pts = _unwrapped(line)
+            for a, b in itertools.pairwise(pts):
+                assert abs(a[0] - b[0]) < 60, (tolerance, a, b)  # a streak across the map would be ~360 degrees
+
+
+def test_pacific_view_across_the_dateline_has_no_horizontal_streak():
+    view = Viewport(120.0, -50.0, 240.0, 50.0)  # Japan to Hawaii, straddling 180
+    c = coastline_canvas(120, 50, view)
+    for y in range(c.height):
+        run = best = 0
+        for x in range(c.width):
+            run = run + 1 if c.get(x, y) else 0
+            best = max(best, run)
+        assert best < c.width // 3, y
 
 
 def test_coastline_cache_returns_private_copies():

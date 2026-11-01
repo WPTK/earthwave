@@ -24,6 +24,7 @@ from earthwave.ui.widgets.map_panel import (
     place_tsunami,
     row_segments,
     tsunami_marks,
+    world_view,
     zoom_view,
 )
 
@@ -75,9 +76,10 @@ def test_polygon_tint_follows_the_nws_polygon_in_a_view_past_the_dateline():
 
 def test_source_ring_flanks_the_quake_and_never_covers_a_marker():
     cols, rows = 160, 40
+    world = world_view(0, cols, rows)
     mark = tsunami_marks([KAM_WARNING], lambda a: kam_quake())[0]
-    _, rings = place_tsunami([mark], WORLD, cols, rows, False)
-    col, row = project_cell(160.324, 52.512, WORLD, cols, rows)
+    _, rings = place_tsunami([mark], world, cols, rows, False)
+    col, row = project_cell(160.324, 52.512, world, cols, rows)
     assert {k: m.glyph for k, m in rings.items()} == {(col - 1, row): "(", (col + 1, row): ")"}
     m = MapModel()
     m.resize(cols, rows)
@@ -85,7 +87,7 @@ def test_source_ring_flanks_the_quake_and_never_covers_a_marker():
     m.set_tsunami([mark])
     glyphs = {k: v.glyph for k, v in m.frame().markers.items()}
     assert (glyphs[(col, row)], glyphs[(col - 1, row)], glyphs[(col + 1, row)]) == ("◉", "(", ")")
-    left_lon, left_lat = centre(col - 1, row, WORLD, cols, rows)
+    left_lon, left_lat = centre(col - 1, row, world, cols, rows)
     near = make_quake("near", 5.0, lat=left_lat, lon=left_lon)  # lands in the left ring cell
     m.set_quakes([kam_quake(), near], None)
     assert m.frame().markers[(col - 1, row)].glyph == "•"  # the quake keeps its cell
