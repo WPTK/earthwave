@@ -1,6 +1,7 @@
 """Canonical in-memory quake store: merge and dedupe, material-update rules, filtered views, coverage tracking."""
 
 import logging
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -45,6 +46,8 @@ GAUGE_FRESH = timedelta(minutes=30)  # the first look at a station only reports 
 EPISODE_GAP = timedelta(minutes=30)  # exceedances further apart than this are separate anomaly episodes
 ALERT_HINT = frozenset({levels.WARNING, levels.ADVISORY, levels.WATCH})  # levels that speed the gauge polling up
 
+KEY_PARTS = re.compile(r"^(?P<head>.+) (?P<day>\d{2})(?P<hour>\d{2})(?P<minute>\d{2})\|(?P<month>\d{4}-\d{2})$")
+KEY_SKEW_MINUTES = 5  # a CAP's sent time vs. its bulletin's header time
 QUIET = (levels.CANCELLATION, levels.INFORMATION)  # products that neither supersede nor merge with a warning
 LATE_GRACE = timedelta(minutes=30)  # a healthy feed's follow-up may run this late
 OVERDUE_MAX = timedelta(hours=6)  # a feed that never completes a poll cannot hold an alert open longer
@@ -104,7 +107,6 @@ class Store:
         self._steady_at: datetime | None = None  # when the steady feed last answered
         self._tsunamis: dict[str, TsunamiAlert] = {}
         self._first_seen: dict[str, datetime] = {}
-        self._by_key: dict[str, str] = {}  # dedupe_key -> alert id
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
         self._sources: dict[str, set[str]] = {}  # alert id -> every source that has confirmed it
         # Alerts the last complete listing left out. Not keyed by source: the only listing source is NWS.
@@ -197,7 +199,7 @@ class Store:
                     self._relink(other.id, quake.id)
                     events.append(QuakeRenamed(other.id, quake))
             self._put(quake)
-            if silent and not (old is None and self._published_since(quake, steady_at)):
+            if silent and not self._news_since(old, quake, steady_at):
                 continue
             if old is None:
                 events.append(QuakeNew(quake))
@@ -229,6 +231,14 @@ class Store:
         """True for a quake that happened (within the feed's lag) and was published after `since`; a long-past quake
         merely revised since is not new."""
         return since is not None and (quake.updated or quake.time) > since and quake.time > since - FEED_LAG
+
+    @classmethod
+    def _news_since(cls, old: Earthquake | None, quake: Earthquake, since: datetime | None) -> bool:
+        """Whether a silent batch must still speak about this quake: it is new, or revised, after the steady feed
+        last answered (the steady feed has not delivered that change and would find it already stored)."""
+        if old is None:
+            return cls._published_since(quake, since)
+        return since is not None and quake.updated is not None and quake.updated > since
 
     def _known(self, quake: Earthquake) -> list[Earthquake]:
         """Every stored version of this event under any id USGS has given it, the one under its own id first."""
@@ -357,7 +367,8 @@ class Store:
         else:
             self._predictions[station_id] = self.predictions_for(station_id) or self._predictions.get(station_id, [])
             new = coops.remove_baseline(coops.residuals(rows, self._predictions[station_id]))  # type: ignore[arg-type]
-            since = datetime.min.replace(tzinfo=UTC)
+            # The prediction cache only reaches back a few hours: keep the residuals it can no longer reproduce.
+            since = min((r.ts for r in new), default=datetime.max.replace(tzinfo=UTC))
         kept = {ts: r for ts, r in self._residuals.get(station_id, {}).items() if ts < since}
         kept.update({r.ts: r for r in new})
         floor = rows[0].ts
@@ -456,9 +467,16 @@ class Store:
 
     def _find_duplicate(self, alert: TsunamiAlert) -> TsunamiAlert | None:
         """The stored alert this one repeats: same id, same WMO header + sent, else same quake and areas elsewhere."""
-        for known_id in (self._alias.get(alert.id, alert.id), self._by_key.get(alert.dedupe_key)):
-            if known_id and known_id in self._tsunamis:
-                return self._tsunamis[known_id]
+        by_id = self._tsunamis.get(self._alias.get(alert.id, alert.id))
+        if by_id is not None:
+            return by_id
+        same = [o for o in self._tsunamis.values() if self._same_product(o, alert)]
+        # One bulletin can hold segments of different levels for different areas, each its own feature under one
+        # header: such a segment is not a repeat of its siblings, whichever source reports them. A copy at the same
+        # level is (or a revised level over the same areas); the same level is preferred.
+        same = [o for o in same if o.level == alert.level or not self._disjoint(o, alert)]
+        if same:
+            return next((o for o in same if o.level == alert.level), same[0])
         if alert.quake_ref is None or alert.level in (levels.CANCELLATION, levels.INFORMATION):
             return None
         wanted = {a.lower() for a in alert.areas}
@@ -472,12 +490,35 @@ class Store:
                 return other
         return None
 
+    @staticmethod
+    def _disjoint(a: TsunamiAlert, b: TsunamiAlert) -> bool:
+        return bool(a.areas and b.areas and not {x.lower() for x in a.areas} & {x.lower() for x in b.areas})
+
+    def _same_product(self, stored: TsunamiAlert, alert: TsunamiAlert) -> bool:
+        """The same WMO header and month. Another source's key may sit a few minutes off: a CAP read without its
+        bulletin has only its own sent time to build the header from."""
+        if stored.dedupe_key == alert.dedupe_key:
+            return True
+        if stored.source == alert.source:
+            return False
+        if QUIET[0] in (stored.level, alert.level) or QUIET[1] in (stored.level, alert.level):
+            return False  # a cancellation or statement is its own product, whatever its header minute
+        linked = {self._alias.get(r, r) for r in alert.references}
+        if stored.id in linked or alert.id in {self._alias.get(r, r) for r in stored.references}:
+            return False  # an update or follow-up never repeats the product it refers to
+        a, b = KEY_PARTS.match(stored.dedupe_key), KEY_PARTS.match(alert.dedupe_key)
+        if not a or not b or a["head"] != b["head"] or a["month"] != b["month"]:
+            return False
+        minutes = lambda m: (int(m["day"]) * 24 + int(m["hour"])) * 60 + int(m["minute"])  # noqa: E731
+        return abs(minutes(a) - minutes(b)) <= KEY_SKEW_MINUTES
+
     def _merge_duplicate(self, old: TsunamiAlert, new: TsunamiAlert) -> TsunamiAlert:
         """Same product from two sources: the higher level wins, the richer fields fill the gaps."""
         top = new if levels.RANK[new.level] > levels.RANK[old.level] else old
         polygon_first = new if new.geometry and new.geometry[0] == "polygon" else old
         return replace(
             old,
+            dedupe_key=new.dedupe_key if new.id == old.id else old.dedupe_key,  # the bulletin's header key wins
             level=top.level,
             headline=top.headline,
             areas=tuple(dict.fromkeys((*old.areas, *new.areas))),
@@ -512,7 +553,6 @@ class Store:
                 self._tsunamis[alert.id] = alert
                 self._first_seen[alert.id] = clock.now()
                 self._sources[alert.id] = {alert.source}
-            self._by_key[alert.dedupe_key] = record.id
             closed = self._close_referenced(record)
             if old is None and self._closed_by_stored(record):
                 continue  # arrived after the product that ends it: never in force
@@ -684,7 +724,6 @@ class Store:
             self._closed.pop(alert.id, None)
             self._first_seen.pop(alert.id, None)
             self._sources.pop(alert.id, None)
-            self._by_key = {k: v for k, v in self._by_key.items() if v != alert.id}
             self._alias = {k: v for k, v in self._alias.items() if v != alert.id}
 
     def visible(

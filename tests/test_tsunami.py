@@ -256,7 +256,9 @@ async def test_tsunamigov_retries_a_product_whose_bulletin_had_a_transient_failu
     source = tsunamigov.TsunamiGovSource(clock)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         first = await source.fetch(client, None)
-        assert first.alerts == () and first.meta["incomplete"]  # not kept without its bulletin, and not final
+        # the CAP is in hand, so the alert is shown now; the entry stays open for its bulletin
+        assert [a.id for a in first.alerts] == ["PAAQ-1-tnfxzn"] and first.meta["incomplete"]
+        assert "BULLETIN TEXT" not in first.alerts[0].text
         bulletin_status[0] = 200
         second = await source.fetch(client, None)
     assert [a.id for a in second.alerts] == ["PAAQ-1-tnfxzn"] and "BULLETIN TEXT" in second.alerts[0].text
