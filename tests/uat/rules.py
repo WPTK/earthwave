@@ -75,7 +75,8 @@ def violations(text: str, cols: int, rows: int) -> list[str]:
                 out.append(f"status says {shown} shown of {total}")
             if drawn > shown:
                 out.append(f"status says {shown} shown but {drawn} rows are drawn")
-            if shown <= 4 and drawn != shown and "Terminal too small" not in text:
+            list_visible = "AGE  MAG" in text  # the full-screen map (M) replaces the list, whose header goes with it
+            if shown <= 4 and drawn != shown and list_visible and "Terminal too small" not in text:
                 out.append(f"status says {shown} shown but {drawn} rows are drawn")
         s = status.lower()
         if "feeds ok" in s and re.search(r"\b(failed|stale|loading|incomplete)\b", s):
