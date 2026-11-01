@@ -6,7 +6,7 @@ set -uo pipefail
 TERMNAME=$1 EW=$2 FIX=$3 OUT=$4
 COLS=${COLS:-130} ROWS=${ROWS:-32}
 CLICK_ROW=${CLICK_ROW:-8}     # 0-based screen row of the quake to click (a list row below the first)
-SEL_ROW=${SEL_ROW:-5}         # 0-based screen row of the quake selected at start
+SEL_ROW=${SEL_ROW:-2}         # 0-based screen row of the quake selected at start
 LIST_COLS=${LIST_COLS:-70}    # width in cells of the list pane
 mkdir -p "$OUT"
 export DISPLAY=:99 LANG=C.UTF-8 TERM=xterm-256color COLORTERM=truecolor
@@ -27,7 +27,7 @@ case $TERMNAME in
   xterm)       CMD=(xterm -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -e $APP) ;;
   gnome-terminal) CMD=(dbus-run-session -- gnome-terminal --wait --geometry="${COLS}x${ROWS}" -- $APP) ;;
   kitty)       CMD=(kitty -o initial_window_width=${COLS}c -o initial_window_height=${ROWS}c -o remember_window_size=no -o confirm_os_window_close=0 $APP) ;;
-  alacritty)   CMD=(alacritty -o window.dimensions.columns=$COLS -o window.dimensions.lines=$ROWS $APP) ;;
+  alacritty)   CMD=(alacritty -o window.dimensions.columns=$COLS -o window.dimensions.lines=$ROWS -e $APP) ;;
   wezterm)
     cat >"$OUT/wezterm.lua" <<LUA
 local wezterm = require 'wezterm'
@@ -48,7 +48,7 @@ for _ in $(seq 60); do
   best=0
   for w in $(xdotool search --onlyvisible --name '.*' 2>/dev/null); do
     eval "$(xdotool getwindowgeometry --shell "$w" 2>/dev/null)" || continue
-    a=$((WIDTH * HEIGHT)); if [ "$a" -gt "$best" ] && [ "$WIDTH" -gt 400 ]; then best=$a; win=$w; gw=$WIDTH; gh=$HEIGHT; gx=$X; gy=$Y; fi
+    a=$((WIDTH * HEIGHT)); if [ "$a" -gt "$best" ] && [ "$WIDTH" -gt 400 ] && [ "$WIDTH" -lt 1600 ]; then best=$a; win=$w; gw=$WIDTH; gh=$HEIGHT; gx=$X; gy=$Y; fi
   done
   [ -n "$win" ] && break
   sleep 0.5

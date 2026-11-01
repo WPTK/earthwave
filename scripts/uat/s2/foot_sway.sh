@@ -5,7 +5,7 @@ set -uo pipefail
 EW=$1 FIX=$2 OUT=$3
 TERMNAME=foot
 COLS=${COLS:-130} ROWS=${ROWS:-32}
-CLICK_ROW=${CLICK_ROW:-8} SEL_ROW=${SEL_ROW:-5} LIST_COLS=${LIST_COLS:-70}
+CLICK_ROW=${CLICK_ROW:-8} SEL_ROW=${SEL_ROW:-2} LIST_COLS=${LIST_COLS:-70}
 mkdir -p "$OUT"
 log() { echo "[$TERMNAME] $*" | tee -a "$OUT/$TERMNAME.log"; }
 export XDG_RUNTIME_DIR="$OUT/run" LANG=C.UTF-8 TERM=xterm-256color
@@ -20,6 +20,7 @@ sway -c "$OUT/sway.conf" >"$OUT/sway.log" 2>&1 &
 SWAY=$!
 trap 'kill $SWAY 2>/dev/null' EXIT
 for _ in $(seq 50); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.2; done
+export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
 export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
 log "sway socket $WAYLAND_DISPLAY"
 
