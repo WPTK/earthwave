@@ -11,7 +11,7 @@ import httpx
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.sources import levels
-from earthwave.sources.base import ENTRY_BUDGET, SourceHealth
+from earthwave.sources.base import ENTRY_BUDGET, ENTRY_LIMIT, SourceHealth
 from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent
 
 log = logging.getLogger(__name__)
@@ -135,23 +135,33 @@ class JmaSource:
             del self._ids_by_event[next(iter(self._ids_by_event))]
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
-        response = await client.get(f"{BASE}list.json")
-        response.raise_for_status()
-        entries = response.json()
-        if not isinstance(entries, list):
-            raise ValueError("jma: list.json is not a list")
         now = self._clock.now()
         alerts: list[TsunamiAlert] = []
         skipped = False  # a report that could not be fetched: this poll is not a full answer
         done: list[str] = []  # reports finished this poll
         events = dict(self._ids_by_event)  # event -> report ids; replaced, never edited, until the poll is whole
-        # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
+        listed = False
         try:
             async with asyncio.timeout(ENTRY_BUDGET):  # below poll.FETCH_DEADLINE: what was read is still returned
+                response = await client.get(f"{BASE}list.json")
+                response.raise_for_status()
+                entries = response.json()
+                if not isinstance(entries, list):
+                    raise ValueError("jma: list.json is not a list")
+                listed = True
+                # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
                 for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
-                    if not await self._report(client, entry, now, events, alerts, done):
+                    try:
+                        async with asyncio.timeout(ENTRY_LIMIT):  # one stalled report must not use the whole budget
+                            finished = await self._report(client, entry, now, events, alerts, done)
+                    except TimeoutError:
+                        log.warning("jma: %s timed out", entry.get("json"))
+                        finished = False
+                    if not finished:
                         skipped = True
         except TimeoutError:
+            if not listed:
+                raise  # nothing was learned: an outage, not an empty list
             log.warning("jma: out of time, returning %d reports read so far", len(alerts))
             skipped = True
         self._commit(done, events)

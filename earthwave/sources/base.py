@@ -9,6 +9,7 @@ import httpx
 from earthwave.models import Batch
 
 ENTRY_BUDGET = 90.0  # seconds a multi-request source spends on a poll's entries; poll.FETCH_DEADLINE (120) outlasts it
+ENTRY_LIMIT = 25.0  # seconds one entry may take, so a single stalled product cannot use the whole budget
 
 
 @dataclass(slots=True)

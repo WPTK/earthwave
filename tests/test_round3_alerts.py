@@ -12,7 +12,7 @@ from test_tsunami import TG, JmaFeed, read
 from earthwave import poll
 from earthwave.clock import ReplayClock
 from earthwave.config import AlertsConfig
-from earthwave.models import Batch
+from earthwave.models import Batch, TsunamiAlert
 from earthwave.poll import Scheduler
 from earthwave.sources import coops, jma, levels, tsunamigov
 from earthwave.sources.base import ENTRY_BUDGET
@@ -101,21 +101,22 @@ async def test_a_warning_is_shown_from_its_cap_during_a_bulletin_outage_and_not_
 
 
 async def test_the_budget_leaves_the_fetch_deadline_room_to_merge():
+    """poll_source puts the store merge inside FETCH_DEADLINE too, so the entry budget must end well before it."""
     assert ENTRY_BUDGET < poll.FETCH_DEADLINE
 
 
 async def test_a_spent_entry_budget_returns_what_was_read_and_finishes_the_rest_next_poll(now_clock, monkeypatch):
     monkeypatch.setattr(tsunamigov, "ENTRY_BUDGET", 0.3)
-    server = Server("aaaa01", "bbbb02")  # the feed lists newest first: bbbb02 is read first, aaaa01 last
-    server.hang.add("aaaa01")
+    server = Server("aaaa01", "bbbb02")  # the feed lists newest first: aaaa01 is read first, bbbb02 last
+    server.hang.add("bbbb02")
     source, store = tsunamigov.TsunamiGovSource(now_clock), Store()
     async with client_for(server) as client:
         first = await source.fetch(client, None)
-        assert first.meta["incomplete"] and [a.id for a in first.alerts] == ["PAAQ-1-bbbb02"]
+        assert first.meta["incomplete"] and [a.id for a in first.alerts] == ["PAAQ-1-aaaa01"]
         assert len(store.merge(first, now_clock)) == 1
         server.hang.clear()
         second = await source.fetch(client, None)
-    assert [a.id for a in second.alerts] == ["PAAQ-1-aaaa01"] and not second.meta["incomplete"]
+    assert [a.id for a in second.alerts] == ["PAAQ-1-bbbb02"] and not second.meta["incomplete"]
 
 
 async def test_deadline_bulletin_outage_and_alert_state_together(now_clock, monkeypatch):
@@ -123,14 +124,14 @@ async def test_deadline_bulletin_outage_and_alert_state_together(now_clock, monk
     both recover there is one alert per product, the text upgraded, and nothing announced twice."""
     monkeypatch.setattr(tsunamigov, "ENTRY_BUDGET", 0.3)
     server = Server("aaaa01", "bbbb02")
-    server.bulletin["bbbb02"] = 503
-    server.hang.add("aaaa01")
+    server.bulletin["aaaa01"] = 503
+    server.hang.add("bbbb02")
     sched = Scheduler([tsunamigov.TsunamiGovSource(now_clock)], store := Store(), now_clock, lambda r: None)
     async with client_for(server) as client:
         first = await sched.poll_source("tsunamigov", client)
         assert first.error is None and first.batch.meta["incomplete"]
         assert [type(e) for e in first.events].count(TsunamiIssued) == 1
-        assert [a.id for a in store.active_alerts(now_clock)] == ["PAAQ-1-bbbb02"]
+        assert [a.id for a in store.active_alerts(now_clock)] == ["PAAQ-1-aaaa01"]
         assert "TSUNAMI INFORMATION STATEMENT" not in store.active_alerts(now_clock)[0].text
         server.hang.clear()
         server.bulletin.clear()
@@ -338,3 +339,150 @@ async def test_a_backfill_that_hits_the_deadline_is_asked_again_on_the_next_good
         await asyncio.wait({app._backfill}, timeout=5)
         await pilot.pause()
         assert app._coverage_checked is False
+
+
+# --- review of #145: the same product from two sources, stalls and ordering ---------------------------------------
+
+PHEB_CAP = read(TG / "PHEB_0.cap.xml").replace("<event>Tsunami Information</event>", "<event>Tsunami Warning</event>")
+PHEB_URL = "https://www.tsunami.gov/events/PHEB/2026/10/24/26297050/1/WEGM42/PHEBCAP.xml"
+
+
+def pheb_pair():
+    """The tsunami.gov alert before and after its bulletin, and the NWS copy keyed by the same bulletin's header. The
+    real skew: the CAP says 02:27:01, the WMO header minute is 02:26."""
+    cap_only = tsunamigov.parse_cap(PHEB_CAP, "", PHEB_URL)
+    full = tsunamigov.parse_cap(PHEB_CAP, read(TG / "PHEB_0.txt"), PHEB_URL)
+    assert cap_only.dedupe_key != full.dedupe_key
+    nws = replace(full, id="nws-1", source="nws", text="NWS text")
+    return cap_only, full, nws
+
+
+@pytest.mark.parametrize("nws_first", [True, False])
+def test_a_cap_only_alert_and_the_nws_copy_are_one_alert_before_and_after_the_bulletin(now_clock, nws_first):
+    cap_only, full, nws = pheb_pair()
+    store, events = Store(), []
+    batches = [
+        Batch("nws", NOW, alerts=(nws,)),
+        Batch("tsunamigov", NOW, alerts=(cap_only,), meta={"incomplete": True}),
+    ]
+    for batch in batches if nws_first else batches[::-1]:
+        events += store.merge(batch, now_clock)
+    assert len(store.active_alerts(now_clock)) == 1
+    events += store.merge(Batch("tsunamigov", NOW, alerts=(full,)), now_clock)  # the bulletin lands
+    assert len(store.active_alerts(now_clock)) == 1
+    assert [type(e) for e in events].count(TsunamiIssued) == 1  # one toast, one bell
+
+
+def segments():
+    def alert(ident, source, level, areas):
+        return TsunamiAlert(
+            ident,
+            "WEAK51 PAAQ 292351|2026-10",
+            source,
+            level,
+            "h",
+            areas,
+            issued=NOW,
+            expires=NOW + timedelta(hours=6),
+            updated=NOW,
+        )
+
+    return (
+        alert("nws-a", "nws", levels.WARNING, ("Aleutian Islands",)),
+        alert("nws-b", "nws", levels.ADVISORY, ("Oregon Coast",)),
+        alert("PAAQ-1-x", "tsunamigov", levels.WARNING, ("Aleutian Islands to Oregon",)),
+    )
+
+
+@pytest.mark.parametrize("tsunamigov_first", [True, False])
+def test_nws_segments_of_different_level_stay_apart_whichever_source_arrives_first(now_clock, tsunamigov_first):
+    seg_a, seg_b, tg = segments()
+    store, events = Store(), []
+    batches = [Batch("tsunamigov", NOW, alerts=(tg,)), Batch("nws", NOW, alerts=(seg_a, seg_b))]
+    for batch in batches if tsunamigov_first else batches[::-1]:
+        events += store.merge(batch, now_clock)
+    shown = store.active_alerts(now_clock)
+    assert sorted(a.level for a in shown) == [levels.ADVISORY, levels.WARNING]
+    advisory = next(a for a in shown if a.level == levels.ADVISORY)
+    assert advisory.areas == ("Oregon Coast",)  # the Advisory was never upgraded or given the Warning's areas
+    assert not any(type(e).__name__ == "TsunamiChanged" for e in events)
+
+
+async def test_two_feeds_that_stall_are_an_outage_not_an_empty_answer(now_clock, monkeypatch):
+    monkeypatch.setattr(tsunamigov, "ENTRY_BUDGET", 0.3)
+
+    async def handler(request):
+        await asyncio.sleep(5)
+        return httpx.Response(200, text=EMPTY_ATOM)
+
+    sched = Scheduler([tsunamigov.TsunamiGovSource(now_clock)], Store(), now_clock, lambda r: None)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await sched.poll_source("tsunamigov", client)
+    assert result.error and result.batch is None and sched.statuses["tsunamigov"].health.failures == 1
+
+
+async def test_a_cap_is_kept_when_its_bulletin_trickles_past_the_budget(now_clock, monkeypatch):
+    monkeypatch.setattr(tsunamigov, "ENTRY_BUDGET", 0.3)
+
+    class BulletinStall(Server):
+        async def __call__(self, request):
+            if str(request.url).endswith(".txt"):
+                await asyncio.sleep(30)
+            return await super().__call__(request)
+
+    source, store = tsunamigov.TsunamiGovSource(now_clock), Store()
+    async with client_for(BulletinStall("warn01")) as client:
+        batch = await source.fetch(client, None)
+    assert batch.meta["incomplete"] and [a.id for a in batch.alerts] == ["PAAQ-1-warn01"]
+    assert len(store.merge(batch, now_clock)) == 1
+
+
+async def test_a_stalled_old_entry_does_not_keep_the_newest_warning_out(now_clock, monkeypatch):
+    monkeypatch.setattr(tsunamigov, "ENTRY_BUDGET", 0.3)
+    server = Server("newest", "oldest")
+    server.hang.add("oldest")
+    source = tsunamigov.TsunamiGovSource(now_clock)
+    async with client_for(server) as client:
+        first = await source.fetch(client, None)
+        second = await source.fetch(client, None)  # the stalled one costs the same budget every poll
+    assert [a.id for a in first.alerts] == ["PAAQ-1-newest"] and second.alerts == ()
+
+
+async def test_one_stalled_entry_is_given_its_own_limit_so_the_rest_are_read(now_clock, monkeypatch):
+    monkeypatch.setattr(tsunamigov, "ENTRY_LIMIT", 0.1)
+    server = Server("aaaa01", "bbbb02")
+    server.hang.add("aaaa01")  # read first
+    source = tsunamigov.TsunamiGovSource(now_clock)
+    async with client_for(server) as client:
+        batch = await source.fetch(client, None)
+    assert [a.id for a in batch.alerts] == ["PAAQ-1-bbbb02"] and batch.meta["incomplete"]
+    assert source._failures == {}  # a stall is an outage: it never counts toward giving the product up
+
+
+async def test_jma_list_json_is_inside_the_budget(monkeypatch):
+    monkeypatch.setattr(jma, "ENTRY_BUDGET", 0.2)
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:30:00+09:00")})
+
+    async def handler(request):
+        await asyncio.sleep(5)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(TimeoutError):
+            await feed.source.fetch(client, None)
+
+
+async def test_one_stalled_jma_report_does_not_use_the_whole_budget(monkeypatch):
+    monkeypatch.setattr(jma, "ENTRY_LIMIT", 0.1)
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:30:00+09:00"), "b.json": ("62", "2026-10-10T03:40:00+09:00")})
+
+    async def handler(request):
+        if request.url.path.endswith("list.json"):
+            return httpx.Response(200, json=feed.entries)
+        name = request.url.path.rsplit("/", 1)[1]
+        if name == "a.json":
+            await asyncio.sleep(5)
+        return httpx.Response(200, json=feed.details[name])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await feed.source.fetch(client, None)
+    assert len(batch.alerts) == 1 and batch.meta["incomplete"]

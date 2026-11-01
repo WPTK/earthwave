@@ -13,7 +13,7 @@ from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.net import retry_after_of
 from earthwave.sources import levels
-from earthwave.sources.base import ENTRY_BUDGET, SourceHealth
+from earthwave.sources.base import ENTRY_BUDGET, ENTRY_LIMIT, SourceHealth
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +230,8 @@ def trusted_url(url: str) -> str | None:
 
 def permanent(exc: Exception) -> bool:
     """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse. Not a rate limit."""
+    if isinstance(exc, TimeoutError):  # our own per-entry limit: a stall is an outage
+        return False
     if isinstance(exc, httpx.HTTPStatusError):
         if exc.response.status_code == 429 or "Retry-After" in exc.response.headers:
             return False
@@ -262,9 +264,10 @@ class TsunamiGovSource:
         failures: list[Exception] = []
         done: list[str] = []  # entries finished this poll; committed to _seen only once the batch is returned
         skipped = False  # something the feeds list could not be fetched: this poll is not a full answer
+        read_feeds = 0
 
         async def collect() -> None:
-            nonlocal skipped
+            nonlocal skipped, read_feeds
             for feed in FEEDS:
                 try:
                     entries = parse_atom(await self._get_text(client, feed))
@@ -273,11 +276,19 @@ class TsunamiGovSource:
                     failures.append(exc)
                     skipped = True
                     continue
-                # Oldest first, so an update is merged after the product it supersedes.
-                for entry in reversed(entries):
+                read_feeds += 1
+                # Newest first, so a stalled old product cannot keep a new Warning out of the poll; the store copes
+                # with a product arriving before the one it supersedes.
+                for entry in entries:
                     if entry["id"] in self._seen or entry["id"] in done or not entry["cap_url"]:
                         continue
-                    if await self._entry(client, entry, alerts):
+                    try:
+                        async with asyncio.timeout(ENTRY_LIMIT):
+                            finished = await self._entry(client, entry, alerts)
+                    except TimeoutError:  # one product trickling: the next entries still get their turn
+                        log.warning("tsunamigov: %s timed out", entry["cap_url"])
+                        finished = False
+                    if finished:
                         done.append(entry["id"])
                     else:
                         skipped = True
@@ -288,9 +299,9 @@ class TsunamiGovSource:
         except TimeoutError:
             log.warning("tsunamigov: out of time, returning %d products read so far", len(alerts))
             skipped = True
-        if len(failures) == len(FEEDS):
+        if not read_feeds:  # nothing was learned: an outage, not an empty feed
             now = self._clock.now()
-            raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0)
+            raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0) if failures else TimeoutError()
         for entry_id in done:  # nothing above awaits from here on, so a cancelled poll never leaves _seen ahead
             self._failures.pop(entry_id, None)
             self._seen[entry_id] = None
@@ -314,15 +325,22 @@ class TsunamiGovSource:
                 return True
             bulletin_url = trusted_url(entry["bulletin_url"]) if entry["bulletin_url"] else None
             cap = await self._get_text(client, cap_url)
-            bulletin, outage = "", False
+            # The alert in hand goes out before the bulletin is asked for: whatever happens to that request, the
+            # CAP's alert is already in `alerts`, and the bulletin's version replaces it.
+            alert = parse_cap(cap, "", cap_url)
+            slot = None
+            if alert is not None:
+                alerts.append(alert)
+                slot = len(alerts) - 1
+            outage = False
             if bulletin_url:
                 try:
                     bulletin = await self._get_text(client, bulletin_url)
+                    if slot is not None:
+                        alerts[slot] = parse_cap(cap, bulletin, cap_url)  # type: ignore[assignment]
                 except (httpx.HTTPError, ValueError) as exc:
-                    outage = not permanent(exc)  # an outage: show the CAP now, fetch the bulletin next poll
+                    outage = not permanent(exc)  # an outage: the CAP's alert stands, the bulletin comes next poll
                     log.warning("tsunamigov: bulletin %s unavailable: %r", bulletin_url, exc)
-            if (alert := parse_cap(cap, bulletin, cap_url)) is not None:
-                alerts.append(alert)
             return not outage
         except Exception as exc:
             if not permanent(exc):
