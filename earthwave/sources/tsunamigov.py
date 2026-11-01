@@ -9,6 +9,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
+from earthwave.net import retry_after_of
 from earthwave.sources import levels
 from earthwave.sources.base import SourceHealth
 
@@ -201,8 +202,10 @@ def fallback_alert(entry: dict) -> TsunamiAlert:
 
 
 def permanent(exc: Exception) -> bool:
-    """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse."""
+    """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse. Not a rate limit."""
     if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == 429 or "Retry-After" in exc.response.headers:
+            return False
         return 400 <= exc.response.status_code < 500
     return not isinstance(exc, httpx.HTTPError)
 
@@ -270,7 +273,8 @@ class TsunamiGovSource:
                 while len(self._seen) > SEEN_LIMIT:
                     del self._seen[next(iter(self._seen))]
         if len(failures) == len(FEEDS):
-            raise failures[0]
+            now = self._clock.now()
+            raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0)
         log.debug("tsunamigov: %d new products", len(alerts))
         alerts.sort(key=lambda a: a.issued or datetime.min.replace(tzinfo=UTC))
         return Batch(self.name, self._clock.now(), alerts=tuple(alerts), meta={"incomplete": skipped})

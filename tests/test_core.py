@@ -22,6 +22,8 @@ from earthwave.config import (
 )
 from earthwave.logging_setup import setup_logging
 from earthwave.net import (
+    CACHE_ENTRIES,
+    RETRY_AFTER_CAP,
     RecordingTransport,
     ReplayTransport,
     build_client,
@@ -109,17 +111,40 @@ async def test_etag_makes_the_next_request_conditional_and_a_304_serves_the_kept
     assert (first.status_code, second.status_code, second.text) == (200, 200, "body") and len(seen) == 2
 
 
-async def test_max_age_answers_from_cache_until_it_lapses(clock):
+async def test_max_age_never_answers_from_cache_so_an_outage_is_a_failed_poll_every_time(clock):
+    fresh = {"Cache-Control": "public, max-age=3600", "Age": "3500", "ETag": '"v1"'}
+
     def handler(request, n):
-        return httpx.Response(200, text=f"v{n}", headers={"Cache-Control": "public, max-age=60"})
+        if n == 1:
+            return httpx.Response(200, text="v1", headers=fresh)
+        raise httpx.ConnectError("network cut")
 
     client, seen = _polite(clock, handler)
     async with client:
         assert (await client.get("https://example.test/a")).text == "v1"
-        clock.advance(30)
-        assert (await client.get("https://example.test/a")).text == "v1" and len(seen) == 1
-        clock.advance(31)
-        assert (await client.get("https://example.test/a")).text == "v2" and len(seen) == 2
+        for _ in range(30):
+            with pytest.raises(httpx.ConnectError):
+                await client.get("https://example.test/a")
+    assert len(seen) == 31 and all(r.headers["if-none-match"] == '"v1"' for r in seen[1:])
+
+
+async def test_urls_with_a_query_string_are_never_kept_and_the_cache_is_least_recently_used(clock):
+    def handler(request, n):
+        return httpx.Response(200, text=f"v{n}", headers={"ETag": f'"{request.url.path}"'})
+
+    client, seen = _polite(clock, handler)
+    async with client:
+        for _ in range(2):
+            await client.get("https://example.test/data?begin=1")
+        assert all("if-none-match" not in r.headers for r in seen)
+        await client.get("https://example.test/keep")
+        for i in range(CACHE_ENTRIES):
+            await client.get(f"https://example.test/f{i}")
+            await client.get("https://example.test/keep")  # used each round, so never the oldest
+        seen.clear()
+        await client.get("https://example.test/keep")
+        await client.get("https://example.test/f0")
+    assert seen[0].headers["if-none-match"] == '"/keep"' and "if-none-match" not in seen[1].headers
 
 
 async def test_no_store_and_unvalidated_responses_are_never_kept(clock):
@@ -146,7 +171,7 @@ async def test_a_caller_supplied_validator_passes_straight_through(clock):
     assert got.status_code == 304 and "if-none-match" not in seen[1].headers
 
 
-async def test_429_leaves_the_host_alone_for_retry_after_without_touching_others(clock):
+async def test_429_leaves_only_that_url_alone_for_retry_after(clock):
     def handler(request, n):
         return httpx.Response(429, headers={"Retry-After": "30"}) if n == 1 else httpx.Response(200, text="ok")
 
@@ -154,11 +179,20 @@ async def test_429_leaves_the_host_alone_for_retry_after_without_touching_others
     async with client:
         assert (await client.get("https://a.test/x")).status_code == 429
         clock.advance(10)
-        held = await client.get("https://a.test/y")
+        held = await client.get("https://a.test/x")
         assert held.status_code == 429 and held.headers["retry-after"] == "20" and len(seen) == 1
+        assert (await client.get("https://a.test/y")).status_code == 200  # same host, other URL
         assert (await client.get("https://b.test/x")).status_code == 200
         clock.advance(20)
-        assert (await client.get("https://a.test/y")).status_code == 200
+        assert (await client.get("https://a.test/x")).status_code == 200
+
+
+async def test_a_long_retry_after_is_capped(clock):
+    client, seen = _polite(clock, lambda request, n: httpx.Response(503, headers={"Retry-After": "3600"}))
+    async with client:
+        await client.get("https://a.test/x")
+        held = await client.get("https://a.test/x")
+    assert held.headers["retry-after"] == str(int(RETRY_AFTER_CAP)) and len(seen) == 1
 
 
 async def test_a_429_without_a_wait_backs_off_a_minute_and_a_bare_503_does_not_block(clock):
@@ -185,7 +219,7 @@ def test_retry_after_of_reads_only_rate_limit_answers(clock):
     assert retry_after_of(status_error(429, {"Retry-After": "90"}), now) == 90.0
     assert retry_after_of(status_error(503, {"Retry-After": "7"}), now) == 7.0
     assert retry_after_of(status_error(429), now) == 60.0
-    assert retry_after_of(status_error(429, {"Retry-After": "999999"}), now) == 3600.0
+    assert retry_after_of(status_error(429, {"Retry-After": "999999"}), now) == RETRY_AFTER_CAP
     assert retry_after_of(status_error(503), now) is None and retry_after_of(status_error(500), now) is None
     assert retry_after_of(httpx.ConnectError("down"), now) is None
 

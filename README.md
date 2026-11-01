@@ -63,8 +63,8 @@ earthwave is not an official tsunami or earthquake warning service and is not af
 Do not rely on it for safety decisions; follow your local authorities.
 
 It identifies itself to every feed (`earthwave/<version>` with the repository URL, plus `[notify] contact` if you set
-one), reuses cached copies through ETag, Last-Modified and Cache-Control, and waits as long as a feed's `Retry-After`
-asks after a 429 or 503.
+one), asks the feed whether a copy has changed (ETag, Last-Modified) instead of downloading it again, and after a 429 or 503
+leaves that address alone for as long as its `Retry-After` asks, up to five minutes.
 
 ## Versioning and changelog
 
