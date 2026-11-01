@@ -54,6 +54,7 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
     term, out = args.terminal, args.out.resolve()
+    args.exe, args.replay = args.exe.resolve(), args.replay.resolve()  # the launcher runs from another folder
     out.mkdir(parents=True, exist_ok=True)
     work = out / f"launch-{term}"  # the driver tears down by PID and by executable folder: keep only launchers here
     work.mkdir(exist_ok=True)
@@ -65,7 +66,7 @@ def main() -> int:
     launcher.write_text(
         f'@echo off\r\n"{sys.executable}" "{HERE / "da1_probe.py"}" "{probe_json}"\r\n', encoding="ascii"
     )
-    rc = drive(
+    probe_args = (
         term,
         out / f"{term}-probe",
         "probe",
@@ -74,6 +75,12 @@ def main() -> int:
         args.tool_exe,
         "",
     )
+    rc = drive(*probe_args)
+    if rc != 0:  # the driver's focus step lost to the runner's own console once in run 41351929256: one retry, said so
+        print(f"FLAKY? probe driver exit {rc}, retrying once", flush=True)
+        probe_json.unlink(missing_ok=True)
+        result["probe_first_attempt_exit"] = rc
+        rc = drive(*probe_args)
     result["probe_driver_exit"] = rc
     if probe_json.is_file():
         result["probe"] = json.loads(probe_json.read_text(encoding="utf-8"))
