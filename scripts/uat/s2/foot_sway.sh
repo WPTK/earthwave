@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# S2 spike: foot under headless sway (WLR_BACKENDS=headless), wlrctl for the pointer, grim for the PNG.
+# Usage: foot_sway.sh <earthwave> <fixture> <outdir>
+set -uo pipefail
+EW=$1 FIX=$2 OUT=$3
+TERMNAME=foot
+COLS=${COLS:-130} ROWS=${ROWS:-32}
+CLICK_ROW=${CLICK_ROW:-8} SEL_ROW=${SEL_ROW:-5} LIST_COLS=${LIST_COLS:-70}
+mkdir -p "$OUT"
+log() { echo "[$TERMNAME] $*" | tee -a "$OUT/$TERMNAME.log"; }
+export XDG_RUNTIME_DIR="$OUT/run" LANG=C.UTF-8 TERM=xterm-256color
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+cat >"$OUT/sway.conf" <<'CONF'
+output HEADLESS-1 resolution 1600x900 position 0 0
+for_window [app_id="foot"] floating enable, move position 0 0
+default_border none
+CONF
+sway -c "$OUT/sway.conf" >"$OUT/sway.log" 2>&1 &
+SWAY=$!
+trap 'kill $SWAY 2>/dev/null' EXIT
+for _ in $(seq 50); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.2; done
+export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
+log "sway socket $WAYLAND_DISPLAY"
+
+mkdir -p "$OUT/home"; export HOME="$OUT/home"
+foot -W "${COLS}x${ROWS}" "$EW" --no-config --replay "$FIX" --hours 720 --min-mag 2.5 --glyphs unicode >"$OUT/foot.stdout" 2>&1 &
+TPID=$!
+rect=""
+for _ in $(seq 40); do
+  rect=$(swaymsg -t get_tree | jq -r '.. | objects | select(.app_id? == "foot") | "\(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"' | head -1)
+  [ -n "$rect" ] && break; sleep 0.5
+done
+[ -z "$rect" ] && { log "NO WINDOW"; tail -20 "$OUT/foot.stdout"; exit 1; }
+read -r gx gy gw gh <<<"$rect"
+log "window ${gw}x${gh}+${gx}+${gy}"
+prev=""; stable=0
+for _ in $(seq 90); do
+  grim "$OUT/probe.png" 2>/dev/null
+  h=$(convert "$OUT/probe.png" -resize 200x -depth 4 txt:- 2>/dev/null | md5sum | cut -c1-12)
+  colors=$(convert "$OUT/probe.png" -format %k info:)
+  if [ "$h" = "$prev" ] && [ "$colors" -gt 40 ]; then stable=$((stable + 1)); else stable=0; fi
+  prev=$h; [ "$stable" -ge 4 ] && break; sleep 1
+done
+log "stable (colours=$colors)"
+grim "$OUT/$TERMNAME-before.png"
+cw=$((gw / COLS)); ch=$((gh / ROWS))
+cx=$((gx + 12 * cw)); cy=$((gy + CLICK_ROW * ch + ch / 2))
+log "cell ${cw}x${ch} click at $cx,$cy"
+wlrctl pointer move -5000 -5000; sleep 0.2
+wlrctl pointer move "$((cx - 30))" "$cy"; sleep 0.2
+wlrctl pointer move 30 0; sleep 0.3
+wlrctl pointer click left; sleep 1.5
+grim "$OUT/$TERMNAME-after.png"
+. "$(dirname "$0")/verify.sh"
+verify "$TERMNAME" "$OUT"
+kill "$TPID" 2>/dev/null; true

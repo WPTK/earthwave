@@ -1,0 +1,99 @@
+name: spike-s2-linux-terminals
+
+# Spike only: runs on a push to uat/spikes that touches these files. Never on pull requests.
+on:
+  push:
+    branches: [uat/spikes]
+    paths:
+      - ".github/workflows/spike-s2.yml"
+      - "scripts/uat/s2/**"
+
+permissions:
+  contents: read
+
+jobs:
+  xvfb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        terminal: [xterm-vt340, xterm, gnome-terminal, wezterm, kitty, alacritty]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install terminal and tools
+        run: |
+          sudo apt-get update -qq
+          pkgs="xvfb xdotool imagemagick x11-utils mesa-utils libgl1-mesa-dri dbus-x11 fonts-dejavu-core"
+          case "${{ matrix.terminal }}" in
+            xterm*) pkgs="$pkgs xterm" ;;
+            gnome-terminal) pkgs="$pkgs gnome-terminal dconf-gsettings-backend" ;;
+            kitty) pkgs="$pkgs kitty" ;;
+            alacritty) pkgs="$pkgs alacritty" ;;
+          esac
+          sudo apt-get install -y -qq $pkgs
+      - name: Fetch WezTerm AppImage
+        if: matrix.terminal == 'wezterm'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/wezterm.AppImage" https://github.com/wez/wezterm/releases/download/20240203-110809-5046fc22/WezTerm-20240203-110809-5046fc22-Ubuntu20.04.AppImage
+          chmod +x "$RUNNER_TEMP/wezterm.AppImage"
+          echo "WEZTERM=$RUNNER_TEMP/wezterm.AppImage" >> "$GITHUB_ENV"
+      - name: Fetch the released Linux binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          gh release download v0.2.0 -R WPTK/earthwave -p '*linux-x86_64.tar.gz' -p SHA256SUMS
+          grep linux SHA256SUMS | sha256sum -c -
+          tar xzf earthwave-*.tar.gz
+          ./earthwave --version
+          echo "EW=$PWD/earthwave" >> "$GITHUB_ENV"
+      - name: Run the terminal, click, screenshot
+        run: |
+          chmod +x scripts/uat/s2/*.sh
+          scripts/uat/s2/xvfb_terminal.sh "${{ matrix.terminal }}" "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/${{ matrix.terminal }}"
+      - name: Verdict
+        if: always()
+        run: cat "out/${{ matrix.terminal }}/verdict" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s2-${{ matrix.terminal }}
+          path: |
+            out/${{ matrix.terminal }}/*.png
+            out/${{ matrix.terminal }}/*.log
+            out/${{ matrix.terminal }}/*.stdout
+            out/${{ matrix.terminal }}/verdict
+
+  foot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install foot, sway and tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq foot sway wlrctl grim imagemagick jq fonts-dejavu-core mesa-vulkan-drivers libgl1-mesa-dri
+      - name: Fetch the released Linux binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          gh release download v0.2.0 -R WPTK/earthwave -p '*linux-x86_64.tar.gz' -p SHA256SUMS
+          grep linux SHA256SUMS | sha256sum -c -
+          tar xzf earthwave-*.tar.gz
+          echo "EW=$PWD/earthwave" >> "$GITHUB_ENV"
+      - name: Run foot under headless sway, click, screenshot
+        run: |
+          chmod +x scripts/uat/s2/*.sh
+          scripts/uat/s2/foot_sway.sh "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/foot"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s2-foot
+          path: |
+            out/foot/*.png
+            out/foot/*.log
+            out/foot/*.stdout
+            out/foot/sway.log
+            out/foot/verdict
