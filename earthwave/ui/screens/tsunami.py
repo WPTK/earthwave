@@ -63,11 +63,16 @@ def render_alert(alert: TsunamiAlert, status: str, quake_line: str, time_zone: s
     if quake_line:
         text.append(f"Quake    {quake_line}\n", "grey70")
     text.append("\n")
-    text.append(alert.text or "(no bulletin text)")
+    kept = [line for line in alert.text.splitlines() if line.strip() != "ZCZC"]  # the start-of-message marker
+    text.append("\n".join(kept).lstrip("\n") or "(no bulletin text)")
     return text
 
 
 class TsunamiScreen(Screen):
+    DEFAULT_CSS = """
+    TsunamiScreen #gauges { border-top: solid $primary-darken-2; }  /* a rule sets the strip off from the bulletin */
+    """
+
     BINDINGS = [
         Binding("escape,t,q", "back", "Back"),
         Binding("j", "cursor_down", "Down", show=False),

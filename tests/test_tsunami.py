@@ -1083,7 +1083,7 @@ async def test_tsunami_screen_lists_alerts_and_shows_text():
         assert table.row_count == 2
         assert screen.selected().level == levels.WARNING  # in force first
         text = str(screen.query_one("#alert_text").render())
-        assert "ZCZC" in text and "Kamchatka" in text and "us6000qw60" in text
+        assert "WEAK51" in text and "Kamchatka" in text and "us6000qw60" in text
         await pilot.press("j")
         await pilot.pause()
         assert screen.selected().level == levels.WATCH
