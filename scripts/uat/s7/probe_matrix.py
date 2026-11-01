@@ -20,6 +20,8 @@ PROG = (
 CASES = {
     "default-conpty, no reply": dict(passthrough=False, terminal=None),
     "default-conpty, fake terminal answers sixel": dict(passthrough=False, terminal=FakeTerminal()),
+    "default-conpty, DA1 sixel injected ahead of ConPTY's own": dict(passthrough=False, terminal=FakeTerminal(da1_early=True)),
+    "default-conpty, DA1 no-sixel injected early": dict(passthrough=False, terminal=FakeTerminal(sixel=False, da1_early=True)),
     "passthrough, no reply": dict(passthrough=True, terminal=None),
     "passthrough, fake terminal answers sixel": dict(passthrough=True, terminal=FakeTerminal()),
     "passthrough, fake terminal answers no-sixel DA1": dict(passthrough=True, terminal=FakeTerminal(sixel=False)),
@@ -42,7 +44,9 @@ def main() -> None:
         pty.wait(15)
         res = pty.close()
         choice = [ln for ln in res.text.splitlines() if "CHOICE" in ln]
-        print(f"{name}\n  choice : {choice[-1].strip() if choice else 'none'}")
+        tail = choice[-1][choice[-1].index("CHOICE"):].strip() if choice else "none"
+        print(f"{name}\n  choice : {tail}")
+        print(f"  DCS bytes (ESC P) in the stream: {b'\x1bP' in res.raw}")
         print(f"  queries seen by host: {[(round(t, 3), q) for t, q in res.queries]}")
         print(f"  replies sent        : {[(round(t, 3), r[1:]) for t, r in res.replies]}")
 

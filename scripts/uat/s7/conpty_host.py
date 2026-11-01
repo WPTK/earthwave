@@ -80,10 +80,12 @@ class FakeTerminal:
     answer_cell: bool = True
     cols: int = 130
     rows: int = 32
+    da1_early: bool = False  # also answer DA1 when the cell-size query arrives, ahead of ConPTY's own DA1 answer
 
     def reply_to(self, query: str) -> str:
         if query == "16t" and self.answer_cell and self.cell:
-            return f"{ESC}[6;{self.cell[1]};{self.cell[0]}t"
+            early = (f"{ESC}[?62;4;22c" if self.sixel else f"{ESC}[?62;22c") if self.da1_early else ""
+            return f"{ESC}[6;{self.cell[1]};{self.cell[0]}t" + early
         if query == "14t" and self.answer_cell and self.cell:
             return f"{ESC}[4;{self.cell[1] * self.rows};{self.cell[0] * self.cols}t"
         if query in ("c", "0c") and self.answer_da1:
@@ -130,6 +132,9 @@ class ConPty:
         si = STARTUPINFOEXW()
         si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
         si.lpAttributeList = ctypes.addressof(self._attrs)
+        # Null standard handles with STARTF_USESTDHANDLES: without it a child of a parent whose own stdout is a pipe
+        # inherits that pipe instead of the pseudo console.
+        si.StartupInfo.dwFlags = 0x100
         pi = PROCESS_INFORMATION()
         import os
         import subprocess
