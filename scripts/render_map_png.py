@@ -31,8 +31,8 @@ from earthwave.config import Config, with_overrides  # noqa: E402
 from earthwave.models import Earthquake  # noqa: E402
 from earthwave.state.store import Store  # noqa: E402
 from earthwave.ui.graphics.probe import GraphicsChoice  # noqa: E402
-from earthwave.ui.graphics.smooth import render_smooth  # noqa: E402
 from earthwave.ui.graphics.sixel import encode  # noqa: E402
+from earthwave.ui.graphics.smooth import render_smooth  # noqa: E402
 from earthwave.ui.widgets.braille import coastline_canvas  # noqa: E402
 from earthwave.ui.widgets.map_panel import MapModel, pixel_scene  # noqa: E402
 
@@ -174,8 +174,10 @@ def main() -> None:
                 sixel += [[colors.sea] * width for _ in range(len(top) - height)]
                 name = f"{place}_{zoom}_{size_text}"
                 png(args.outdir / f"{name}_braille_over_sixel.png", top + gap + sixel)
-                print(f"  {name}: sixel {len(data) // 1024} KiB, {len(palette)} colours, "
-                      f"raster {raster_ms:.0f} ms, +encode {total_ms - raster_ms:.0f} ms")
+                print(
+                    f"  {name}: sixel {len(data) // 1024} KiB, {len(palette)} colours, "
+                    f"raster {raster_ms:.0f} ms, +encode {total_ms - raster_ms:.0f} ms"
+                )
 
 
 if __name__ == "__main__":

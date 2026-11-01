@@ -62,7 +62,9 @@ def render_smooth(scene: Scene, factor: int = FACTOR) -> tuple[bytes, list[RGB]]
             by_colour[colour] = len(palette)
             palette.append(colour)
             return by_colour[colour]
-        nearest = min(range(len(palette)), key=lambda i: sum((a - b) ** 2 for a, b in zip(palette[i], colour)))
+        nearest = min(
+            range(len(palette)), key=lambda i: sum((a - b) ** 2 for a, b in zip(palette[i], colour, strict=True))
+        )
         by_colour[colour] = nearest
         return nearest
 
@@ -81,5 +83,5 @@ def render_smooth(scene: Scene, factor: int = FACTOR) -> tuple[bytes, list[RGB]]
             start = (y * factor + dy) * big_w
             row = big[start : start + big_w]
             planes.extend(row[dx::factor] for dx in range(factor))
-        out += bytes([i if (i := get(block)) is not None else resolve(block) for block in zip(*planes)])
+        out += bytes([i if (i := get(block)) is not None else resolve(block) for block in zip(*planes, strict=True)])
     return bytes(out), palette
