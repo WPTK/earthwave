@@ -46,6 +46,7 @@ class DashboardScreen(Screen):
     def __init__(self):
         super().__init__()
         self.show_map = True
+        self._countable: set[str] = set()  # ids the magnitude and hours filter can show: what the unseen badge counts
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -103,13 +104,17 @@ class DashboardScreen(Screen):
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
-        # A search only hides rows; quakes the magnitude and hours filter excludes can never be seen, so they drop out.
-        app.tracker.retain({q.id for q in app.store.visible(replace(app.view, query=""), app.clock)})
+        # A search or filter only hides rows and is reversible, so attention lasts as long as the store holds the quake;
+        # only the unseen count follows the magnitude/hours filter (a search does not change it).
+        app.tracker.retain({q.id for q in app.store.all()})
+        in_filters = app.store.visible(replace(app.view, query=""), app.clock)
+        self._countable = {q.id for q in in_filters}
         width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
-        empty.update(Text(f"No quakes match {filter_summary(app.view)}. Press f to change filters."))
+        hint = "Press / to change the search." if in_filters else "Press f to change filters."  # what emptied it
+        empty.update(Text(f"No quakes match {filter_summary(app.view)}. {hint}"))
         self.refresh_ticker()
         self.refresh_tsunami()
         self.refresh_status(shown=len(rows))
@@ -150,7 +155,7 @@ class DashboardScreen(Screen):
             overdue=overdue,
             down=down,
             unknown=none_fresh and bool(down),
-            checking=none_fresh and not down,
+            checking=app.tsunami_feeds_loading() and not down,
             expiry=app.store.expiry,
         )
 
@@ -173,7 +178,7 @@ class DashboardScreen(Screen):
                 total=len(app.store),
                 next_poll=next_poll,
                 filter_text=filter_summary(app.view),
-                unseen=app.tracker.unseen(),
+                unseen=app.tracker.unseen(self._countable),
                 sort=app.sort.value,
                 alert_state=self.tsunami_state()[3],
             )
@@ -196,6 +201,9 @@ class DashboardScreen(Screen):
         box.focus()
 
     def action_toggle_map(self) -> None:
+        if self.has_class("narrow") and not self.has_class("map-full"):
+            self.notify(f"The map needs a terminal {MAP_MIN_WIDTH} columns wide", timeout=3)
+            return
         self.show_map = not self.show_map
         if not self.show_map:
             self.remove_class("map-full")
@@ -220,6 +228,9 @@ class DashboardScreen(Screen):
         self.call_after_refresh(self.refresh_view)
 
     def action_zoom_map(self) -> None:
+        if self.has_class("no-map") and not self.has_class("map-full"):
+            self.notify("The map is hidden, so there is nothing to zoom", timeout=3)
+            return
         self.query_one(MapPanel).action_cycle_zoom()
 
     def action_ack_all(self) -> None:
@@ -238,6 +249,9 @@ class DashboardScreen(Screen):
         self.earthwave.open_tsunami()
 
     def action_refresh_now(self) -> None:
+        if not self.earthwave.scheduler_running:
+            self.notify("Offline: nothing to refresh", timeout=2)
+            return
         self.earthwave.scheduler.refresh_now()
         self.notify("Refreshing", timeout=1.5)
 

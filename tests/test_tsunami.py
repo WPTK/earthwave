@@ -16,7 +16,7 @@ from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
 from earthwave.config import AlertsConfig, Config, with_overrides
 from earthwave.models import Batch, TsunamiAlert
-from earthwave.net import ReplayTransport, recording_start
+from earthwave.net import ReplayTransport, recording_start, retry_after, retry_after_of
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
 from earthwave.poll import Freshness, PollResult, Scheduler
@@ -285,6 +285,37 @@ async def test_tsunamigov_gives_up_on_a_cap_that_keeps_answering_4xx(clock, capl
     assert caplog.text.count("giving up") == 1
 
 
+async def test_tsunamigov_never_gives_up_on_a_cap_that_answers_429(clock, caplog):
+    cap_calls = []
+
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text="<feed xmlns='http://www.w3.org/2005/Atom'/>")
+        cap_calls.append(url)
+        return httpx.Response(429)
+
+    source = tsunamigov.TsunamiGovSource(clock)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(tsunamigov.MAX_ENTRY_FAILURES + 3):
+            batch = await source.fetch(client, None)
+    assert len(cap_calls) == tsunamigov.MAX_ENTRY_FAILURES + 3 and batch.meta["incomplete"] and not batch.alerts
+    assert "giving up" not in caplog.text
+
+
+async def test_tsunamigov_reports_the_longest_wait_when_every_feed_fails(clock):
+    def handler(request):
+        wait = "5" if str(request.url) == tsunamigov.FEEDS[0] else "120"
+        return httpx.Response(429, headers={"Retry-After": wait})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError) as raised:
+            await tsunamigov.TsunamiGovSource(clock).fetch(client, None)
+    assert retry_after_of(raised.value, clock.now()) == 120.0
+
+
 async def test_tsunamigov_keeps_retrying_through_a_cap_outage(clock):
     attempts = []
 
@@ -314,10 +345,10 @@ async def test_tsunamigov_keeps_retrying_through_a_cap_outage(clock):
 
 def test_nws_retry_after_accepts_seconds_and_http_dates():
     now = datetime(2026, 10, 10, 12, 0, 0, tzinfo=UTC)
-    assert nws.retry_after("7", now) == 7.0
-    assert nws.retry_after("Sat, 10 Oct 2026 12:00:09 GMT", now) == 9.0
-    assert nws.retry_after("Sat, 10 Oct 2026 11:00:00 GMT", now) == 0.0
-    assert nws.retry_after(None, now) == 5.0 and nws.retry_after("soon", now) == 5.0
+    assert retry_after("7", now) == 7.0
+    assert retry_after("Sat, 10 Oct 2026 12:00:09 GMT", now) == 9.0
+    assert retry_after("Sat, 10 Oct 2026 11:00:00 GMT", now) == 0.0
+    assert retry_after(None, now) == 5.0 and retry_after("soon", now) == 5.0
 
 
 def test_nws_sorts_alerts_with_and_without_timestamps():

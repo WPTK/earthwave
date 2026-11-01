@@ -12,6 +12,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch
+from earthwave.net import retry_after_of
 from earthwave.sources.base import Source, SourceHealth
 from earthwave.state.events import Event, SourceDegraded, SourceRecovered
 from earthwave.state.store import Store
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 
 BACKOFF_CAP = 600.0
 BACKOFF_FLOOR = 30.0  # base delay for sources whose own interval is 0 (startup chain)
+FETCH_DEADLINE = 120.0  # one poll's fetch and merge, end to end: a server that trickles bytes cannot stall a source
 JITTER = 0.1
 STALE_FACTOR = 2.5
 TICK = 0.5  # longest the loop sleeps, so refresh requests and countdowns stay responsive
@@ -49,6 +51,13 @@ class PollResult:
     events: tuple[Event, ...] = ()
     batch: Batch | None = None
     error: str | None = None
+
+
+def describe(exc: Exception) -> str:
+    """An error as the status bar shows it; the deadline's TimeoutError has no text of its own."""
+    if isinstance(exc, TimeoutError):
+        return f"no answer within {FETCH_DEADLINE:g} s"
+    return f"{type(exc).__name__}: {exc}"[:200]
 
 
 def backoff_delay(interval: float, failures: int, rng: random.Random) -> float:
@@ -152,13 +161,16 @@ class Scheduler:
         events: list[Event] = []
         batch = None
         error = None
+        asked = None
         try:
-            batch = await source.fetch(client, self._cursors.get(name))
+            async with asyncio.timeout(FETCH_DEADLINE):
+                batch = await source.fetch(client, self._cursors.get(name))
             events.extend(self._store.merge(batch, self._clock))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"[:200]
+            error = describe(exc)
+            asked = retry_after_of(exc, self._clock.now())
             log.warning("%s: poll failed: %s", name, error)
         health = status.health
         if error is None:
@@ -182,6 +194,8 @@ class Scheduler:
             if health.failures == 1:
                 events.append(SourceDegraded(name, error))
             delay = backoff_delay(source.interval(health), health.failures, self._rng)
+            if asked is not None:  # a 429 or 503 names its own wait; never come back sooner than that
+                delay = max(delay, asked)
             status.next_due = self._clock.monotonic() + delay
         status.in_flight = False
         result = PollResult(name, generation, tuple(events), batch, error)
@@ -196,12 +210,13 @@ class Scheduler:
 
         async def run() -> None:
             try:
-                batch = await job(client)
+                async with asyncio.timeout(FETCH_DEADLINE):
+                    batch = await job(client)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log.warning("%s: backfill failed: %r", source, exc)
-                self._on_done(PollResult(source, generation, error=f"{type(exc).__name__}: {exc}"[:200]))
+                self._on_done(PollResult(source, generation, error=describe(exc)))
                 return
             if generation != self.generation:
                 log.debug("%s: dropping backfill from generation %d (now %d)", source, generation, self.generation)

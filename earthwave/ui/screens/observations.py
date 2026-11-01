@@ -51,4 +51,5 @@ class ObservationsScreen(Screen):
         self.query_one(GaugeStrip).show(app.gauge_rows(), app.clock.now())
 
     def action_back(self) -> None:
+        self.earthwave.close_observations()
         self.app.pop_screen()
