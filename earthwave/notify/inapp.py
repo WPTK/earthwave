@@ -180,7 +180,8 @@ class AttentionTracker:
             self.ack(quake_id)
 
     def retain(self, quake_ids: set[str]) -> None:
-        """Drop attention for quakes the store no longer holds; a search or filter only hides rows."""
+        """Drop attention for quakes the store no longer holds; a search or filter only hides rows, so
+        their attention is kept (and returns when the filter is lowered)."""
         keep = (TSUNAMI_PREFIX, GAUGE_PREFIX)
         for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]
@@ -199,8 +200,13 @@ class AttentionTracker:
         item = self._items.get(quake_id)
         return item is not None and item.kind in _UNSEEN_KINDS and not item.acked
 
-    def unseen(self) -> int:
-        return sum(1 for item in self._items.values() if item.kind in _UNSEEN_KINDS and not item.acked)
+    def unseen(self, countable: set[str] | None = None) -> int:
+        """Rows still to be seen; with `countable`, only those ids (the ones the filter can show)."""
+        return sum(
+            1
+            for key, item in self._items.items()
+            if item.kind in _UNSEEN_KINDS and not item.acked and (countable is None or key in countable)
+        )
 
     def kind_of(self, quake_id: str) -> AttentionKind | None:
         item = self._items.get(quake_id)
