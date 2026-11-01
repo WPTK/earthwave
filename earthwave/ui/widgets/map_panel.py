@@ -29,7 +29,7 @@ from earthwave.ui.widgets.braille import (
     WORLD,
     Viewport,
     coastline_canvas,
-    land_cells,
+    dot_raster,
     project_cell,
     render_ascii,
     unproject,
@@ -39,7 +39,6 @@ from earthwave.ui.widgets.braille import (
 # Plain fallback for a bare `row_segments` call; the panel colours coast and land from the theme
 # (`MapPanel.DEFAULT_CSS`).
 COAST_STYLE = Style()
-LAND_MIN_DOTS = 3  # a cell is land when at least this many of its 8 dots are inside a land polygon
 HOME_STYLE = Style(color="bright_white", bold=True)
 WORLD_TOP = 84.0  # north edge of a world view too short to show all 180 degrees of latitude (Greenland ends at 83.6)
 MAJOR_MAG = AlertsConfig().major_magnitude  # with nothing selected, panned to or home, zoom goes to the latest of these
@@ -108,16 +107,16 @@ def world_view(pan_lon: int = 0, cols: int = 0, rows: int = 0) -> Viewport:
 
 @lru_cache(maxsize=32)
 def base_lines(cols: int, rows: int, view: Viewport, ascii_mode: bool) -> tuple[str, ...]:
-    """Coastline raster as text rows for one size and viewport. Cached: only markers change between ticks."""
-    canvas = coastline_canvas(cols, rows, view)
-    return tuple(render_ascii(canvas) if ascii_mode else canvas.render())
+    """Coast (and, in braille, land dots) as text rows for one size and viewport. Cached: only markers change."""
+    if ascii_mode:
+        return tuple(render_ascii(coastline_canvas(cols, rows, view)))
+    return dot_raster(cols, rows, view)[0]
 
 
 @lru_cache(maxsize=32)
 def land_rows(cols: int, rows: int, view: Viewport) -> tuple[bytes, ...]:
-    """Per cell row, one byte per column: 1 where the cell is land. Cached like `base_lines`."""
-    counts = land_cells(cols, rows, view)
-    return tuple(bytes(c >= LAND_MIN_DOTS for c in counts[r * cols : (r + 1) * cols]) for r in range(rows))
+    """Per cell row, one byte per column: 1 where the cell shows land dots (no coast dot). Cached with `base_lines`."""
+    return dot_raster(cols, rows, view)[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,12 +306,11 @@ def row_segments(
     tint: dict[int, Style] | None = None,
     land: bytes = b"",
     coast: Style = COAST_STYLE,
-    land_bg: Style | None = None,
+    land_style: Style | None = None,
 ) -> list[Segment]:
     """Split one raster row into styled runs: markers by column (any order), `tint` maps columns to a coast colour.
 
-    `land` flags the land cells of the row; they get the `land_bg` background under whatever is drawn there, except
-    a style that already sets a background or is reversed (the selected marker, a flashing alert), which keep theirs.
+    `land` flags the cells that hold land dots only; they take `land_style`. Markers go on top of everything.
     """
     tint = tint or {}
     by_col = {m.col: m for m in markers}
@@ -322,10 +320,10 @@ def row_segments(
     for col, ch in enumerate(base):
         if col in by_col:
             glyph, style = by_col[col].glyph, by_col[col].style
+        elif land_style is not None and col < len(land) and land[col]:
+            glyph, style = ch, land_style
         else:
             glyph, style = ch, tint.get(col, coast)
-        if land_bg is not None and col < len(land) and land[col] and style.bgcolor is None and not style.reverse:
-            style = style + land_bg
         if style == run_style:
             run += glyph
             continue
@@ -472,7 +470,7 @@ class MapModel:
         if self.cols < 1 or self.rows < 1:
             return Frame(self.cols, self.rows, view, (), {}, {})
         base = base_lines(self.cols, self.rows, view, self.ascii_mode)
-        land = land_rows(self.cols, self.rows, view)
+        land = () if self.ascii_mode else land_rows(self.cols, self.rows, view)
         selected_id = self.selected.id if self.selected else None
         markers = place_markers(
             self.quakes, selected_id, self.home, view, self.cols, self.rows, self.ascii_mode, self.tracker
@@ -496,7 +494,7 @@ class MapPanel(Widget, can_focus=True):
     COMPONENT_CLASSES = {"map--coast", "map--land"}
     DEFAULT_CSS = """
     MapPanel > .map--coast { color: $primary-lighten-1; }
-    MapPanel > .map--land { background: $surface-lighten-2; }
+    MapPanel > .map--land { color: $surface-lighten-3; }
     """
     BINDINGS = [
         Binding("left", "pan(-1, 0)", "West", show=False),
@@ -593,7 +591,7 @@ class MapPanel(Widget, can_focus=True):
         if y >= frame.rows or y >= len(frame.base):
             return Strip.blank(self.size.width, Style())
         coast = Style(color=self.get_component_rich_style("map--coast").color)  # the panel supplies the sea
-        land_bg = Style(bgcolor=self.get_component_rich_style("map--land").bgcolor)
+        land_style = Style(color=self.get_component_rich_style("map--land").color)
         land = frame.land[y] if y < len(frame.land) else b""
         markers = self._by_row.get(y, ())
-        return Strip(row_segments(frame.base[y], markers, self._tint_by_row.get(y), land, coast, land_bg))
+        return Strip(row_segments(frame.base[y], markers, self._tint_by_row.get(y), land, coast, land_style))

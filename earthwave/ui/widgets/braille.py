@@ -3,8 +3,8 @@
 Pure Python with no Textual dependency. A `BrailleCanvas(cols, rows)` is a grid of 2x4 dots per terminal
 cell. `coastline_canvas` rasterises the bundled Natural Earth 1:10m coastline for a viewport and caches
 the result; `render_ascii` is the 1x1 cell fallback for terminals without braille glyphs.
-The data file holds three levels of detail and `level_for` picks one from the dot size of the view. `land_cells`
-fills the matching land polygons (same three levels) and reports how many dots of each cell are land.
+The data file holds three levels of detail and `level_for` picks one from the dot size of the view. `dot_raster`
+fills the matching land polygons (same three levels) on the same dot grid as the coastline, so fill and outline agree.
 """
 
 from __future__ import annotations
@@ -276,6 +276,7 @@ def warm_coastline(level: int | None = None) -> None:
     """Load and prepare the coastline data (call off the UI thread to avoid a first-draw stall)."""
     for index in range(len(load_levels())) if level is None else (level,):
         _prepared_coastline(index)
+        _prepared_land(index)
 
 
 @lru_cache(maxsize=16)
@@ -305,7 +306,8 @@ def _prepared_land(level: int) -> tuple[tuple[tuple[tuple[float, float], ...], t
 
 @lru_cache(maxsize=16)
 def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
-    """Land dots per cell (0-8), row by row, by even-odd scanline fill of the land rings at each dot row."""
+    """Land dots per cell as braille bits, row by row: even-odd scanline fill of the land rings, sampled at dot centres
+    (the same dot coordinates `project` gives the coastline)."""
     width, height = cols * 2, rows * 4
     lon_scale = (width - 1) / (view.lon1 - view.lon0)
     lat_scale = (height - 1) / (view.lat1 - view.lat0)
@@ -330,21 +332,43 @@ def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
                 x0, slope = xs[i], (xs[i + 1] - xs[i]) / (y1 - y0)
                 for y in range(first, last + 1):
                     crossings[y].append(x0 + (y - y0) * slope)
-    counts = [0] * (cols * rows)
+    bits = [0] * (cols * rows)
     for y, row in enumerate(crossings):
         if len(row) < 2:
             continue
         row.sort()
-        base = (y >> 2) * cols
+        base, dy = (y >> 2) * cols, y & 3
+        left, right = _BITS[0][dy], _BITS[1][dy]
         for a, b in zip(row[::2], row[1::2], strict=False):
             i0, i1 = max(math.ceil(a), 0), min(math.floor(b), width - 1)
             if i0 > i1:
                 continue
             for col in range(i0 >> 1, (i1 >> 1) + 1):
-                counts[base + col] += min(i1, col * 2 + 1) - max(i0, col * 2) + 1
-    return bytes(min(c, 8) for c in counts)
+                bits[base + col] |= (left if i0 <= col * 2 else 0) | (right if i1 >= col * 2 + 1 else 0)
+    return bytes(bits)
 
 
-def land_cells(cols: int, rows: int, view: Viewport = WORLD) -> bytes:
-    """Land dots (0-8) per terminal cell, row-major, cached per (cols, rows, viewport)."""
-    return _land_cached(cols, rows, Viewport(*view))
+@lru_cache(maxsize=16)
+def _dot_raster_cached(cols: int, rows: int, view: Viewport) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
+    coast = _coastline_cached(cols, rows, view)
+    land = _land_cached(cols, rows, view)
+    glyphs, flags = [], []
+    for r in range(rows):
+        line, flag = [], bytearray(cols)
+        for c in range(cols):
+            bits = coast.cell_bits(c, r)
+            if not bits and (bits := land[r * cols + c]):
+                flag[c] = 1
+            line.append(chr(_BLANK + bits))
+        glyphs.append("".join(line))
+        flags.append(bytes(flag))
+    return tuple(glyphs), tuple(flags)
+
+
+def dot_raster(cols: int, rows: int, view: Viewport = WORLD) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
+    """Braille rows of land and coast on one dot grid, plus per row which cells hold land dots only.
+
+    A cell with any coast dot shows only its coast dots, so the outline is never swamped by fill; a cell without
+    shows its land dots (flag 1) or nothing. Cached per (cols, rows, viewport).
+    """
+    return _dot_raster_cached(cols, rows, Viewport(*view))

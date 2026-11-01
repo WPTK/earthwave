@@ -154,32 +154,46 @@ def test_row_segments_split_around_markers():
 
     from rich.style import Style
 
-    land, coast = Style(bgcolor="blue"), Style(color="cyan")
+    land, coast = Style(color="bright_black"), Style(color="cyan")
     segs = row_segments("abcde", [], None, bytes([0, 1, 1, 0, 0]), coast, land)
-    assert [(s.text, s.style) for s in segs] == [("a", coast), ("bc", coast + land), ("de", coast)]
+    assert [(s.text, s.style) for s in segs] == [("a", coast), ("bc", land), ("de", coast)]
 
 
-def test_land_background_never_overrides_a_marker_that_sets_its_own():
+def test_marker_stays_on_top_of_land_dots_and_tint_skips_land_cells():
     from rich.style import Style
 
     from earthwave.ui.widgets.map_panel import Marker
 
-    land = Style(bgcolor="blue")
-    selected = Marker(1, 0, "●", Style(color="red", reverse=True), (True, False, 0, 6.0))
-    flashing = Marker(2, 0, "●", Style(color="white", bgcolor="red"), (False, True, 0, 6.0))
-    plain = Marker(3, 0, "●", Style(color="green"), (False, False, 0, 5.0))
-    segs = row_segments("abcd", [selected, flashing, plain], None, bytes([1, 1, 1, 1]), Style(), land)
-    styles = [s.style for s in segs for _ in s.text]
-    assert styles[1] == selected.style and styles[2] == flashing.style
-    assert styles[3] == plain.style + land and styles[0] == Style() + land
+    land, coast, tint = Style(color="bright_black"), Style(color="cyan"), Style(color="red")
+    marker = Marker(1, 0, "●", Style(color="green"), (False, False, 0, 5.0))
+    segs = row_segments("abc", [marker], {1: tint, 2: tint}, bytes([1, 1, 1]), coast, land)
+    assert [(s.text, s.style) for s in segs] == [("a", land), ("●", marker.style), ("c", land)]
+    assert row_segments("ab", [], {0: tint}, bytes([0, 0]), coast, land)[0].style == tint
 
 
-def test_land_rows_flag_land_cells_and_are_cached():
+def test_land_rows_flag_land_dot_cells_and_are_cached():
     view = zoom_view(138, 37, 40, 198, 45)
     rows_ = land_rows(198, 45, view)
     assert len(rows_) == 45 and all(len(r) == 198 for r in rows_)
     assert land_rows(198, 45, view) is rows_
+    assert base_lines(198, 45, view, False) is base_lines(198, 45, view, False)
     assert 0 < sum(map(sum, rows_)) < 198 * 45
+    glyphs = base_lines(198, 45, view, False)
+    assert all(glyphs[r][c] != "⠀" for r, row in enumerate(rows_) for c, f in enumerate(row) if f)
+
+
+def test_idle_redraw_reuses_the_cached_raster():
+    model = MapModel()
+    model.resize(120, 30)
+    first = model.frame()
+    second = model.frame()
+    assert second.base is first.base and second.land is first.land
+
+
+def test_ascii_mode_draws_the_coast_only():
+    model = MapModel(ascii_mode=True)
+    model.resize(120, 30)
+    assert model.frame().land == ()
 
 
 # --- zoom and pan -----------------------------------------------------------------------------------------------
