@@ -1,0 +1,93 @@
+name: spike-s7-windows-terminal
+
+# S7 closure, test-only: does the v0.2.0 release exe choose and draw sixel in a REAL Windows Terminal (and stay on braille in
+# conhost)? Drives the portable Windows Terminal zip (already pinned by the vendored driver, no new download) with real input
+# and reads the screen and the pixels back. Never a PR; artifacts only.
+on:
+  push:
+    branches: [uat/s7-wt]
+    paths:
+      - ".github/workflows/spike-s7-wt.yml"
+      - "scripts/uat/s7/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  s7wt:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2025, arch: x64, experimental: false }
+          - { os: windows-11-arm, arch: arm64, experimental: true }
+    env:
+      PYTHONUTF8: "1"
+      PYTHONUNBUFFERED: "1"
+      OUT: ${{ github.workspace }}\s7-out
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.arch }}
+      - name: Install driver dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r scripts/uat/s7/realterm/requirements.txt
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+      - name: Fetch the released exe and the pinned Windows Terminal
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rel = "$env:RUNNER_TEMP\rel"
+          New-Item -ItemType Directory -Force $rel | Out-Null
+          Push-Location $rel
+          # The release has no arm64 build: the same x86_64 exe runs under emulation on windows-11-arm.
+          gh release download v0.2.0 -R WPTK/earthwave -p '*windows-x86_64.exe' -p SHA256SUMS
+          $exe = Get-ChildItem earthwave-*.exe | Select-Object -First 1
+          $want = (Select-String -Path SHA256SUMS -Pattern $exe.Name).Line.Split(' ')[0]
+          $got = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "exe hash mismatch: $got vs $want" }
+          "exe $($exe.Name) sha256 $got (matches SHA256SUMS)" | Tee-Object -FilePath "$env:OUT\exe.txt"
+          Pop-Location
+          "EW_EXE=$($exe.FullName)" | Add-Content $env:GITHUB_ENV
+          python scripts/uat/s7/realterm/fetch.py wt --arch ${{ matrix.arch }} --dest "$env:RUNNER_TEMP\tools\wt" | Tee-Object -FilePath "$env:OUT\fetch-wt.json"
+          if ($LASTEXITCODE -ne 0) { throw "fetch wt failed" }
+          "WT_EXE=$((Get-Content "$env:OUT\fetch-wt.json" | ConvertFrom-Json).exe)" | Add-Content $env:GITHUB_ENV
+      - name: Session facts
+        shell: pwsh
+        run: |
+          [Environment]::OSVersion | Out-String
+          "UserInteractive: $([Environment]::UserInteractive)  Arch: $env:PROCESSOR_ARCHITECTURE"
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { "$($_.DeviceName) $($_.Bounds)" }
+          if ($env:NO_COLOR) { throw "NO_COLOR is set on the runner" }
+      - name: Windows Terminal
+        shell: pwsh
+        run: |
+          python scripts/uat/s7/run_wt.py wt --exe $env:EW_EXE --tool-exe $env:WT_EXE --replay tests/fixtures/replay/usgs_short.jsonl --out "$env:OUT\wt" 2>&1 | Tee-Object -FilePath "$env:OUT\run-wt.log"
+          exit $LASTEXITCODE
+      - name: conhost (control, no sixel expected)
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/uat/s7/run_wt.py conhost --exe $env:EW_EXE --replay tests/fixtures/replay/usgs_short.jsonl --out "$env:OUT\conhost" 2>&1 | Tee-Object -FilePath "$env:OUT\run-conhost.log"
+          exit $LASTEXITCODE
+      - name: Leftover processes
+        if: always()
+        shell: pwsh
+        run: Get-Process | Where-Object { $_.ProcessName -match 'WindowsTerminal|OpenConsole|earthwave' } | Select-Object Id, ProcessName | Format-Table | Out-String
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s7-wt-${{ matrix.os }}
+          path: s7-out
+          if-no-files-found: warn
+          retention-days: 14

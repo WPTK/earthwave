@@ -1,0 +1,4 @@
+# Vendored from WPTK/wxbrief tests/uat_realterm at bc62698 (its own ruff rules); only real errors are checked here.
+line-length = 120
+[lint]
+select = ["F"]

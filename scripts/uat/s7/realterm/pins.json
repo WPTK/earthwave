@@ -1,0 +1,29 @@
+{
+  "wxbrief": {
+    "version": "0.3.0",
+    "url": "https://github.com/WPTK/wxbrief/releases/download/v0.3.0/wxbrief-0.3.0-windows-x86_64.exe",
+    "sums_url": "https://github.com/WPTK/wxbrief/releases/download/v0.3.0/SHA256SUMS",
+    "name": "wxbrief-0.3.0-windows-x86_64.exe",
+    "sha256": "6ff78a2c084c09cb47db652a6fab2aeb20d5fa11073e5a243c26b3e01c6a6cf5"
+  },
+  "wt": {
+    "version": "1.25.2733.0",
+    "url": "https://github.com/microsoft/terminal/releases/download/v1.25.2733.0/Microsoft.WindowsTerminal_1.25.2733.0_x64.zip",
+    "sha256": "bf3ef2012f6c44d8340a4c58125acc9498d19b580f9890dc043cdf831852e796"
+  },
+  "vscode": {
+    "version": "1.144.0",
+    "url": "https://update.code.visualstudio.com/1.144.0/win32-x64-archive/stable",
+    "sha256": "055722269e3c9531af0c50a8b757c14e8062a0d02fc973b038863d9732c567ea"
+  },
+  "wt_arm64": {
+    "version": "1.25.2733.0",
+    "url": "https://github.com/microsoft/terminal/releases/download/v1.25.2733.0/Microsoft.WindowsTerminal_1.25.2733.0_arm64.zip",
+    "sha256": "11b4fe264ecaa71b08cd84195536f68c669808155338e9f47f4da668b4cf0e26"
+  },
+  "vscode_arm64": {
+    "version": "1.144.0",
+    "url": "https://update.code.visualstudio.com/1.144.0/win32-arm64-archive/stable",
+    "sha256": "ec858e98192efd763a5f620180b511202540a0b491f8c629af5233d2d2bb71f5"
+  }
+}
