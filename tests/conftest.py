@@ -1,14 +1,22 @@
 import json
+import os
+import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psutil
 import pytest
 
 from earthwave.clock import ReplayClock
 from earthwave.models import Earthquake
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# Resident-memory ceiling for one test process (the pytest process, or each xdist worker). A runaway test then dies
+# on every platform, Windows included, where resource.setrlimit does not exist. Override with EARTHWAVE_TEST_RSS_MB.
+RSS_LIMIT_MB = int(os.environ.get("EARTHWAVE_TEST_RSS_MB", "2048"))
+RSS_EXIT_CODE = 70
 T0 = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
 
 
@@ -48,3 +56,32 @@ async def footer_keys(pilot, timeout: float = 2.0) -> list:
 def clock() -> ReplayClock:
     """A clock that only moves when the test advances it."""
     return ReplayClock(T0, real=lambda: 0.0)
+
+
+def watch_rss(limit_bytes: int, interval: float = 0.25, die=os._exit) -> threading.Thread:
+    """Start a daemon thread that ends this process (`die`) once its resident set passes `limit_bytes`.
+
+    The process is killed rather than the test failed: a test that is allocating without bound is not
+    interruptible from a thread, and under xdist the controller reports the lost worker as a failed run."""
+    proc = psutil.Process()
+
+    def loop() -> None:
+        while True:
+            rss = proc.memory_info().rss
+            if rss > limit_bytes:
+                sys.stderr.write(f"\nFATAL: test process using {rss >> 20} MB, over the {limit_bytes >> 20} MB limit\n")
+                sys.stderr.flush()
+                die(RSS_EXIT_CODE)
+                return
+            time.sleep(interval)
+
+    thread = threading.Thread(target=loop, name="rss-watchdog", daemon=True)
+    thread.start()
+    return thread
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _memory_limit():
+    """Applies to every process that runs tests: the plain pytest process and each xdist worker."""
+    watch_rss(RSS_LIMIT_MB << 20)
+    yield
