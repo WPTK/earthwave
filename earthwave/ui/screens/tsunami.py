@@ -72,6 +72,7 @@ class TsunamiScreen(Screen):
     def __init__(self):
         super().__init__()
         self._rows: list[TsunamiAlert] = []
+        self._ready = False  # the table and its columns exist only once the screen has composed and mounted
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -90,6 +91,7 @@ class TsunamiScreen(Screen):
         table = self.query_one(DataTable)
         table.add_columns("LEVEL", "STATUS", "SOURCE", "ISSUED", "EXPIRES", "AREAS")  # the long column goes last
         table.focus()
+        self._ready = True
         self.refresh_alerts()
         self.refresh_gauges()
 
@@ -98,6 +100,8 @@ class TsunamiScreen(Screen):
         return self._rows[table.cursor_row] if self._rows and table.cursor_row < len(self._rows) else None
 
     def refresh_alerts(self) -> None:
+        if not self._ready:  # a poll can land right after the screen is pushed, before it has composed
+            return
         app = self.earthwave
         table = self.query_one(DataTable)
         keep = self.selected()
