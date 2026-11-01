@@ -5,6 +5,12 @@
 Acquire is an atomic mkdir of ``<locks>/gilead-heavy`` with an ``owner.json`` inside. If it is held, wait and retry.
 A lock older than STALE_HOURS is reported and never stolen. Free RAM must be >= 6 GB first. Release is in ``finally``.
 Windows only for the Job Object; elsewhere the command just runs under the lock.
+
+    python scripts/uat/locks.py --wait 600 desktop "WT pixel pass" -- python tools/wt_pass.py
+
+``desktop`` also needs the desktop idle for IDLE_SECONDS (GetLastInputInfo) before the lock is taken, and again every
+IDLE_RECHECK seconds while the command runs; when someone touches the machine the run is stopped, the lock released and
+the exit status is 4 (retry later). Options such as ``--wait`` go before the kind (argparse hands later ones to the command).
 """
 
 from __future__ import annotations
@@ -22,6 +28,26 @@ LOCKS = Path(os.environ.get("UAT_LOCKS", r"C:\Users\billp\uat-shared\locks"))
 STALE_HOURS = 3
 MIN_FREE_GB = 6
 CAP_BYTES = 4 * 1024**3
+
+
+IDLE_SECONDS = 300
+IDLE_RECHECK = 60
+
+
+def idle_seconds() -> float:
+    """Seconds since the last keyboard or mouse input on the Windows desktop (GetLastInputInfo); inf elsewhere."""
+    if sys.platform != "win32":
+        return float("inf")
+    import ctypes
+    from ctypes import wintypes
+
+    class LastInput(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    info = LastInput(ctypes.sizeof(LastInput), 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        raise OSError(ctypes.get_last_error(), "GetLastInputInfo")
+    return ((ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
 def free_ram_gb() -> float:
@@ -91,10 +117,26 @@ class Lock:
         self.release()
 
 
-def run_capped(argv: list[str], cap: int = CAP_BYTES) -> int:
-    """Run argv in a Job Object that kills everything over ``cap`` bytes and when the job closes."""
+def _wait_guarded(proc: subprocess.Popen, guard) -> int:
+    """Wait for ``proc``; every IDLE_RECHECK seconds ask ``guard()`` and stop the wait (return 4) when it says no."""
+    while True:
+        try:
+            return proc.wait(timeout=IDLE_RECHECK if guard else None)
+        except subprocess.TimeoutExpired:
+            if guard and not guard():
+                print(f"[locks] desktop no longer idle (< {IDLE_SECONDS} s since input); stopping the run", file=sys.stderr)
+                return 4
+
+
+def run_capped(argv: list[str], cap: int = CAP_BYTES, guard=None) -> int:
+    """Run argv in a Job Object that kills everything over ``cap`` bytes and when the job closes. ``guard`` (desktop
+    runs) is rechecked every minute; when it returns False the job is closed, which ends the whole process tree."""
     if sys.platform != "win32":
-        return subprocess.call(argv)
+        proc = subprocess.Popen(argv)
+        code = _wait_guarded(proc, guard)
+        if code == 4 and proc.poll() is None:
+            proc.kill()
+        return code
     import ctypes
     from ctypes import wintypes
 
@@ -136,7 +178,7 @@ def run_capped(argv: list[str], cap: int = CAP_BYTES) -> int:
     proc = subprocess.Popen(argv)
     k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle)))  # noqa: SLF001
     try:
-        return proc.wait()
+        return _wait_guarded(proc, guard)
     finally:
         k32.CloseHandle(wintypes.HANDLE(job))  # kills anything still in the job
 
@@ -149,13 +191,22 @@ def main() -> int:
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     a = ap.parse_args()
     cmd = a.cmd[1:] if a.cmd[:1] == ["--"] else a.cmd
-    lock = Lock(f"gilead-{a.kind}", a.purpose)
+    if not cmd:
+        ap.error("no command after the purpose (options such as --wait go before the kind)")
+    desktop = a.kind == "desktop"
+    if desktop and idle_seconds() < IDLE_SECONDS:
+        print(f"[locks] desktop idle {idle_seconds():.0f} s < {IDLE_SECONDS} s; not acquiring, retry later", file=sys.stderr)
+        return 4
+    lock = Lock(f"gilead-{a.kind}", a.purpose, session="earthwave-uat-phase3")
     lock.acquire(a.wait)
     try:
+        if desktop and idle_seconds() < IDLE_SECONDS:  # the wait for the lock may have been long
+            print("[locks] desktop became active while waiting; releasing", file=sys.stderr)
+            return 4
         if free_ram_gb() < MIN_FREE_GB:
             print(f"[locks] free RAM {free_ram_gb():.1f} GB < {MIN_FREE_GB} GB; not running", file=sys.stderr)
             return 3
-        return run_capped(cmd)
+        return run_capped(cmd, guard=(lambda: idle_seconds() >= IDLE_SECONDS) if desktop else None)
     finally:
         lock.release()
 

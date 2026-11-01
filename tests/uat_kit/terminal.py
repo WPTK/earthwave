@@ -65,6 +65,27 @@ KEYS = {
     "pageup": f"{ESC}[5~",
     "pagedown": f"{ESC}[6~",
     "space": " ",
+    "backspace": "\x7f",
+    "delete": f"{ESC}[3~",
+    "insert": f"{ESC}[2~",
+    "ctrl+c": "\x03",
+    "ctrl+l": "\x0c",
+    "ctrl+p": "\x10",
+    "ctrl+q": "\x11",
+    "ctrl+s": "\x13",
+    "ctrl+z": "\x1a",
+    "f1": f"{ESC}OP",
+    "f2": f"{ESC}OQ",
+    "f3": f"{ESC}OR",
+    "f4": f"{ESC}OS",
+    "f5": f"{ESC}[15~",
+    "f6": f"{ESC}[17~",
+    "f7": f"{ESC}[18~",
+    "f8": f"{ESC}[19~",
+    "f9": f"{ESC}[20~",
+    "f10": f"{ESC}[21~",
+    "f11": f"{ESC}[23~",
+    "f12": f"{ESC}[24~",
 }
 
 
@@ -294,15 +315,125 @@ class Terminal:
         """Each argument is a named key (``"enter"``, ``"escape"``, ``"down"``) or literal text typed as is."""
         for key in keys:
             self.send_raw(KEYS.get(key.lower(), key))
-            time.sleep(0.08)  # a person is never faster; lets the app handle one key before the next
+            time.sleep(0.1)  # a person is never faster; lets the app handle one key before the next
+        time.sleep(0.3)  # and the last key is drawn before the caller looks (Textual repaints a few frames later; a lone
+        # Escape is held back by the parser until it is sure no sequence follows, so a following key must not race it)
 
-    def click(self, col: int, row: int) -> None:
-        """Move the pointer in, press and release the left button, as a real terminal reports a click."""
+    def _approach(self, col: int, row: int) -> None:
+        """Pointer motion into the cell, as a real terminal reports it before any press (any-motion mode, 1003)."""
         for c in (max(col - 4, 0), max(col - 1, 0), col):
             self._run(self._t.mouse.move(c, row))
             time.sleep(0.03)
-        self._run(self._t.mouse.click(col, row))
+
+    def click(
+        self,
+        col: int,
+        row: int,
+        *,
+        button: str = "left",
+        clicks: int = 1,
+        shift: bool = False,
+        ctrl: bool = False,
+        alt: bool = False,
+    ) -> None:
+        """Move the pointer in, press and release a button, as a real terminal reports a click. ``clicks`` 2 or 3 are
+        a double and a triple click (press/release pairs sent back to back, inside any application's click chain
+        window). ``shift``/``ctrl``/``alt`` set the modifier bits of the report, as a terminal that passes them does."""
+        self._approach(col, row)
+        self._run(self._t.mouse.click(col, row, button=button, clicks=clicks, shift=shift, ctrl=ctrl, alt=alt))
         time.sleep(0.12)
+
+    def right_click(self, col: int, row: int, **mods: bool) -> None:
+        self.click(col, row, button="right", **mods)
+
+    def middle_click(self, col: int, row: int, **mods: bool) -> None:
+        self.click(col, row, button="middle", **mods)
+
+    def double_click(self, col: int, row: int, **mods: bool) -> None:
+        self.click(col, row, clicks=2, **mods)
+
+    def triple_click(self, col: int, row: int, **mods: bool) -> None:
+        self.click(col, row, clicks=3, **mods)
+
+    def hover(self, col: int, row: int) -> None:
+        """Motion only, ending on the cell, no button."""
+        self._approach(col, row)
+        time.sleep(0.1)
+
+    def wheel(self, direction: str, amount: int = 1, at: tuple[int, int] | None = None) -> None:
+        """Wheel ``direction`` (``up`` ``down`` ``left`` ``right``) ``amount`` notches with the pointer over ``at``."""
+        if at is None:
+            self._run(self._t.mouse.scroll(direction, amount=amount))  # tui-test reports these at cell (1, 1)
+        else:
+            # tui-test cannot place a wheel report (it always says column 1, row 1), so with a position the SGR report is
+            # written as a terminal writes it: button 64 up, 65 down, 66 left, 67 right, 1-based cell.
+            self._approach(*at)
+            code = {"up": 64, "down": 65, "left": 66, "right": 67}[direction]
+            for _ in range(amount):
+                self.send_raw(f"\x1b[<{code};{at[0] + 1};{at[1] + 1}M")
+                time.sleep(0.03)
+        time.sleep(0.12)
+
+    def drag(self, start: tuple[int, int], end: tuple[int, int], *, button: str = "left", steps: int = 4) -> None:
+        """Press on ``start``, move through ``steps`` cells towards ``end`` with the button held, release on ``end``.
+        ``end`` may lie outside the window (negative or past the last column): the release then reports there, as a
+        terminal that keeps tracking outside the window does."""
+        self._approach(*start)
+        self._run(self._t.mouse.down(*start, button=button))
+        time.sleep(0.05)
+        for i in range(1, steps + 1):
+            x = max(start[0] + round((end[0] - start[0]) * i / steps), 0)
+            y = max(start[1] + round((end[1] - start[1]) * i / steps), 0)
+            # tui-test's move() always reports "no button" (35); a terminal reports motion with a button held as
+            # 32 + button, so that report is written directly.
+            self.send_raw(f"\x1b[<{32 + {'left': 0, 'middle': 1, 'right': 2}[button]};{x + 1};{y + 1}M")
+            time.sleep(0.04)
+        self._run(self._t.mouse.up(*end, button=button))
+        time.sleep(0.12)
+
+    def mouse_down(self, col: int, row: int, *, button: str = "left") -> None:
+        self._approach(col, row)
+        self._run(self._t.mouse.down(col, row, button=button))
+
+    def mouse_up(self, col: int, row: int, *, button: str = "left") -> None:
+        self._run(self._t.mouse.up(col, row, button=button))
+        time.sleep(0.12)
+
+    def legacy_mouse(self, col: int, row: int, *, encoding: str = "x10", button: int = 0, release: bool = True) -> str:
+        """Send a press (and release) in a legacy encoding, byte for byte as a terminal that has mouse mode 1000 but
+        not 1006 would: ``x10``/``normal`` (``ESC [ M`` then three bytes, 32-based) or ``urxvt`` (``ESC [ b ; x ; y M``,
+        mode 1015). ``button`` is 0 left, 1 middle, 2 right, 64 wheel up, 65 wheel down. Cells are 0-based; X10 cannot
+        address past column 222. Returns the bytes sent. Real-input only in the sense that the bytes are the terminal's
+        own format; the terminal itself did not generate them (this kit cannot make tui-test speak the old encodings)."""
+        x, y = col + 1, row + 1
+
+        def one(code: int) -> str:
+            if encoding in ("x10", "normal", "1000"):
+                if x > 222 or y > 222:
+                    raise ValueError("X10 mouse encoding cannot address past 222")
+                return f"{ESC}[M{chr(32 + code)}{chr(32 + x)}{chr(32 + y)}"
+            if encoding in ("urxvt", "1015"):
+                return f"{ESC}[{32 + code};{x};{y}M"
+            raise ValueError(f"unknown mouse encoding {encoding!r}")
+
+        sent = one(button)
+        if release and button < 64:
+            sent += one(3)  # X10 has no per-button release: button code 3 means 'released'
+        self._approach(col, row)
+        self.send_raw(sent)
+        time.sleep(0.15)
+        return sent
+
+    def arrow(self, name: str, *, application: bool = True) -> None:
+        """An arrow key as a terminal in application-cursor mode (``ESC O A``) sends it, or normal mode (``ESC [ A``)."""
+        letter = {"up": "A", "down": "B", "right": "C", "left": "D"}[name]
+        self.send_raw(f"{ESC}{'O' if application else '['}{letter}")
+        time.sleep(0.12)
+
+    def paste(self, text: str, *, bracketed: bool = True) -> None:
+        """Paste ``text`` as a terminal does: wrapped in bracketed-paste markers, or raw (the characters as typed)."""
+        self.send_raw(f"{ESC}[200~{text}{ESC}[201~" if bracketed else text)
+        time.sleep(0.2)
 
     def click_text(self, needle: str) -> tuple[int, int]:
         """Click in the middle of the first place ``needle`` is on screen; returns the cell."""
@@ -329,6 +460,17 @@ class Terminal:
     def screen(self) -> Screen:
         lines = [line.rstrip() for line in self._run(self._t.text()).split("\n")]
         return Screen(tuple((lines + [""] * self.rows)[: self.rows]))
+
+    def modes_left_on(self) -> list[str]:
+        """Terminal modes that differ from a fresh terminal's, from the emulator's state: alternate screen,
+        application keys, bracketed paste, focus events, mouse tracking, hidden cursor. Meaningful after the program
+        ended (``wait_exit``) and before ``close``."""
+        st = self.state()
+        defaults = {"cursor_visible": True, "wraparound": True}
+        left = [k for k, v in st.modes.items() if v != defaults.get(k, False)]
+        if st.mouse_mode != "none":
+            left.append(f"mouse:{st.mouse_mode}")
+        return sorted(left)
 
     def cells(self) -> list[list[Any]]:
         """Every cell of the screen as ``rows`` lists of ``cols`` tui-test Cells: char, fg, bg (``#rrggbb`` or
