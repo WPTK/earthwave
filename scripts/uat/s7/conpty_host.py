@@ -125,7 +125,8 @@ class ConPty:
         k32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
         self._attrs = ctypes.create_string_buffer(size.value)
         k32.InitializeProcThreadAttributeList(self._attrs, 1, 0, ctypes.byref(size))
-        k32.UpdateProcThreadAttribute(self._attrs, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, self.hpc, ctypes.sizeof(HPCON), None, None)
+        if not k32.UpdateProcThreadAttribute(self._attrs, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, self.hpc, ctypes.sizeof(HPCON), None, None):
+            raise OSError(f"UpdateProcThreadAttribute failed: {ctypes.get_last_error()}")
         si = STARTUPINFOEXW()
         si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
         si.lpAttributeList = ctypes.addressof(self._attrs)

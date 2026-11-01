@@ -27,6 +27,12 @@ CASES = {
 
 
 def main() -> None:
+    try:  # sanity: does the pseudo console carry a child's output to the host at all?
+        pty = ConPty(["cmd.exe", "/c", "echo hello-from-pty"])
+        pty.wait(10)
+        print("sanity echo through the pty:", "hello-from-pty" in pty.close().text)
+    except OSError as exc:
+        print("sanity:", exc)
     for name, kw in CASES.items():
         try:
             pty = ConPty([sys.executable, "-c", PROG], **kw)

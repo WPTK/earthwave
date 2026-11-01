@@ -1,0 +1,83 @@
+name: spike-s8b-hosts-redirect
+
+# Spike only (push to uat/spikes, never a PR). Edits the hosts file of the CI runner, which is thrown away after the job.
+on:
+  push:
+    branches: [uat/spikes]
+    paths:
+      - ".github/workflows/spike-s8b.yml"
+      - "scripts/uat/s8b/**"
+      - "tests/uat/test_spike_s8b.py"
+
+permissions:
+  contents: read
+
+jobs:
+  s8b:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-14]
+    env:
+      S8B_DISPOSABLE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the kit
+        run: pip install -e ".[dev]"
+      - name: Fetch the released exe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          case "$RUNNER_OS" in
+            Windows) pat='*windows-x86_64.exe' ;;
+            Linux) pat='*linux-x86_64.tar.gz' ;;
+            macOS) pat='*macos-arm64.tar.gz' ;;
+          esac
+          gh release download v0.2.0 -R WPTK/earthwave -p "$pat" -p SHA256SUMS
+          if [ "$RUNNER_OS" = macOS ]; then shasum -a 256 -c <(grep macos SHA256SUMS); else grep -i "${pat#\*}" SHA256SUMS | sha256sum -c -; fi
+          if [ "$RUNNER_OS" != Windows ]; then tar xzf earthwave-*.tar.gz; chmod +x earthwave; echo "EARTHWAVE_EXE=$PWD/earthwave" >> "$GITHUB_ENV"; else echo "EARTHWAVE_EXE=$(cygpath -w "$PWD/$(ls earthwave-*.exe)")" >> "$GITHUB_ENV"; fi
+          echo "S8B_DIR=$RUNNER_TEMP/s8b-work" >> "$GITHUB_ENV"
+          echo "S8B_OUT=$GITHUB_WORKSPACE/s8b-out" >> "$GITHUB_ENV"
+      - name: Start the local TLS origin on 443
+        shell: bash
+        run: |
+          mkdir -p "$S8B_DIR" "$S8B_OUT"
+          PY=$(python -c 'import sys;print(sys.executable)')
+          if [ "$RUNNER_OS" = Windows ]; then
+            nohup "$PY" scripts/uat/s8b/origin.py --dir "$S8B_DIR" > "$S8B_OUT/origin.out" 2>&1 &
+          else
+            sudo nohup "$PY" scripts/uat/s8b/origin.py --dir "$S8B_DIR" > "$S8B_OUT/origin.out" 2>&1 &
+          fi
+          for i in $(seq 40); do [ -f "$S8B_DIR/listening.json" ] && break; sleep 0.5; done
+          cat "$S8B_DIR/listening.json" || (cat "$S8B_OUT/origin.out"; exit 1)
+      - name: Point the feed names at it (hosts file of this runner)
+        shell: bash
+        run: |
+          PY=$(python -c 'import sys;print(sys.executable)')
+          if [ "$RUNNER_OS" = Windows ]; then "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; else sudo -E "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; fi
+          python -c "import socket;print(socket.getaddrinfo('earthquake.usgs.gov',443))"
+      - name: Run the exe through the fake origin
+        shell: bash
+        run: python -m pytest tests/uat/test_spike_s8b.py -p no:xdist -p no:cacheprovider -q -s
+      - name: Origin log
+        if: always()
+        shell: bash
+        run: |
+          python - <<'EOF' > "$S8B_OUT/origin-log.json" || true
+          import json, os, urllib.request
+          info = json.load(open(os.environ["S8B_DIR"] + "/listening.json"))
+          print(urllib.request.urlopen(f"http://127.0.0.1:{info['control']}/log", timeout=10).read().decode())
+          EOF
+          head -c 1500 "$S8B_OUT/origin-log.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s8b-${{ matrix.os }}
+          path: s8b-out
