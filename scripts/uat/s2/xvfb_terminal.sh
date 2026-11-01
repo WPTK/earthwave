@@ -21,6 +21,11 @@ trap 'kill $XVFB 2>/dev/null' EXIT
 for _ in $(seq 50); do xdotool getdisplaygeometry >/dev/null 2>&1 && break; sleep 0.2; done
 
 APP="$EW --no-config --replay $FIX --hours 720 --min-mag 2.5 --glyphs unicode"
+if [ "${WRAP_INPUT:-0}" = 1 ]; then
+  # log every byte the app receives (terminal replies and keys) with timing, to see where a stray key came from
+  printf '#!/usr/bin/env bash\nexec script -qef --log-in "%s/app-input.bin" --log-timing "%s/app-input.tm" -c "%s" /dev/null\n' "$OUT" "$OUT" "$APP" >"$OUT/runapp.sh"
+  APP="bash $OUT/runapp.sh"
+fi
 mkdir -p "$OUT/home" ; export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_RUNTIME_DIR="$OUT/run"
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"; chmod 700 "$XDG_RUNTIME_DIR"
 
