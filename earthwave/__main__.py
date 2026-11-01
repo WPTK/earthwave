@@ -24,6 +24,8 @@ from earthwave.notify.desktop import default_notifier
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.history import History, default_path
 from earthwave.state.store import Store
+from earthwave.ui.graphics.probe import BRAILLE
+from earthwave.ui.graphics.probe import resolve as resolve_graphics
 from earthwave.ui.widgets.quake_list import QuakeList
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
@@ -194,6 +196,7 @@ def run(args: argparse.Namespace) -> int:
     notifier = default_notifier() if notifying else None
     # a replayed past must not enter the real history
     history, history_error = (None, None) if args.replay else open_history(config, clock)
+    graphics = resolve_graphics(config.view.map_renderer) if config.view.map else BRAILLE  # before Textual owns stdin
     app = EarthwaveApp(
         config,
         clock=clock,
@@ -203,6 +206,7 @@ def run(args: argparse.Namespace) -> int:
         history=history,
         offline=args.offline,
         history_error=history_error,
+        graphics=graphics,
     )
     app.run()
     return app.return_code or 0
