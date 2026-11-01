@@ -33,6 +33,7 @@ class StatusInfo:
     sort: str = "time"
     alert_state: str = "none"  # none | info | active | alarm
     alert_level: str | None = None  # the highest actionable level in force, which colours the bar
+    offline: bool = False  # nothing is fetched, so the feeds have no health to report
 
 
 def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
@@ -49,6 +50,9 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.unseen:
         text.append(f" {glyphs.bar} ", "grey42")
         text.append(f" {info.unseen} unseen ", "bold black on cyan")
+    if info.offline:
+        text.append(f" {glyphs.bar} ", "grey42")
+        text.append("offline, showing saved history", "grey70")
     unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     if info.sources and not unhealthy:
         text.append(f" {glyphs.bar} ", "grey42")

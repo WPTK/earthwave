@@ -132,21 +132,65 @@ async def test_tsunami_screen_fits_without_a_sideways_scroll():
         assert "AREAS" not in screen_text(app)  # the areas are in the text below, not cut off in a cell
 
 
-def _hue(style: str) -> str:
-    """The plain colour word for a Rich style, read off the colour it actually renders in."""
+def _hue_name(red: int, green: int, blue: int) -> str:
     import colorsys
 
+    hue = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)[0] * 360
+    return "red" if hue < 20 or hue >= 320 else "orange" if hue < 42 else "yellow" if hue < 70 else "blue"
+
+
+def _hue(app, style: str) -> str:
+    """The plain colour word for a Rich style, read off the colour the app renders it in: Textual maps the sixteen
+    ANSI colours through its own terminal theme (ANSI yellow is orange there), so Rich's default theme is not it."""
     from rich.style import Style
 
-    red, green, blue = Style.parse(style).color.get_truecolor()
-    hue = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)[0] * 360
-    return "red" if hue < 20 or hue >= 340 else "orange" if hue < 40 else "yellow" if hue < 70 else "blue"
+    return _hue_name(*Style.parse(style).color.get_truecolor(app.ansi_theme))
 
 
 def test_help_names_the_colours_it_shows():
     from earthwave.ui.screens.help import HELP_TEXT
-    from earthwave.ui.theme import LEVEL_COLORS
+    from earthwave.ui.theme import LEVEL_COLORS, mag_color
 
+    app = week_app()
     for level in ("WARNING", "ADVISORY", "WATCH"):  # what the level word really renders in, not a literal
-        assert f"{level.title()} {_hue(LEVEL_COLORS[level])}" in HELP_TEXT, level
-    assert "yellow <6.5" not in HELP_TEXT
+        assert f"{level.title()} {_hue(app, LEVEL_COLORS[level])}" in HELP_TEXT, level
+    assert len({_hue(app, LEVEL_COLORS[level]) for level in ("WARNING", "ADVISORY", "WATCH")}) == 3  # told apart
+    for mag, word in [(6.0, "yellow"), (6.7, "orange"), (7.5, "red")]:  # the bands the help names by hue
+        assert _hue(app, mag_color(mag)) == word, mag
+    assert "yellow <6.5, orange <7, red 7+" in HELP_TEXT
+
+
+async def test_each_tsunami_level_renders_a_different_colour_everywhere():
+    """Read off the rendered screen and the widgets' computed styles: a Warning, an Advisory and a Watch call for
+    different actions, so the panel word, banner, status bar and panel border differ between them."""
+    from dataclasses import replace
+
+    from earthwave.models import Batch
+    from earthwave.state.events import TsunamiIssued
+    from uat.harness import kam, rendered_fill
+
+    shown: dict[str, dict[str, str]] = {}
+    for level in ("WARNING", "ADVISORY", "WATCH"):
+        app = kam_alert_app(quake=False)
+        alert = replace(kam(1), level=level)
+        app.store.merge(Batch("tsunamigov", app.clock.now(), alerts=(alert,)), app.clock)
+        async with app.run_test(size=(120, 30)) as pilot:
+            app.tracker.observe([TsunamiIssued(alert)])
+            app.sync_tsunami()
+            app.dashboard.refresh_view()
+            await pilot.pause()
+            banner, status, panel = (app.dashboard.query_one(i) for i in ("#banner", "#status", "#tsunami"))
+            assert banner.display
+            shown[level] = {
+                "word": rendered_fill(app, level),
+                "banner": banner.styles.background.hex,
+                "status": status.styles.background.hex,
+                "border": panel.styles.border_top[1].hex,
+            }
+    for part in ("word", "banner", "status", "border"):
+        colours = {level: shown[level][part] for level in shown}
+        assert len(set(colours.values())) == 3, (part, colours)
+    from rich.color import Color
+
+    hues = {level: _hue_name(*Color.parse(shown[level]["word"]).get_truecolor()) for level in shown}
+    assert hues == {"WARNING": "red", "ADVISORY": "orange", "WATCH": "yellow"}

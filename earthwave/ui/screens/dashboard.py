@@ -176,7 +176,7 @@ class DashboardScreen(Screen):
             shown = len(self.query_one(QuakeList).rows)
         _, actionable, _, state = self.tsunami_state()
         sched = app.scheduler
-        lines = tuple(
+        lines = () if app.offline else tuple(  # offline polls nothing: every feed would read "loading" all session
             SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
             for name in sched.statuses
         )
@@ -194,6 +194,7 @@ class DashboardScreen(Screen):
                 sort=app.sort.value,
                 alert_state=state,
                 alert_level=actionable[0].level if actionable else None,  # highest first
+                offline=app.offline,
             )
         )
 

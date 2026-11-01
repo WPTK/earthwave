@@ -87,8 +87,14 @@ class HistoryScreen(Screen):
         self.set_class(small, "too-small")
         if small:
             self.query_one(TooSmall).show(event.size.width, event.size.height)
-        else:  # hiding the list dropped its focus
+        else:  # hiding the list dropped its focus; the header is padded to the list's width, which has changed
             self.call_after_refresh(self.query_one(QuakeList).focus)
+            self.call_after_refresh(self._draw_header)
+
+    def _draw_header(self) -> None:
+        if self.query("#history_header"):
+            width = self.query_one(QuakeList).scrollable_content_region.width
+            self.query_one("#history_header", Static).update(header_text(width, self.earthwave.config.home.enabled))
 
     def on_mount(self) -> None:
         self.day = self.today()
@@ -123,10 +129,8 @@ class HistoryScreen(Screen):
             f"History {day:%A}  {fmt_time(start, zone)} to {fmt_time(end, zone)}"
         )
         self.query_one("#history_stats", Static).update(stats)
-        quake_list = self.query_one(QuakeList)
-        width = quake_list.scrollable_content_region.width
-        self.query_one("#history_header", Static).update(header_text(width, app.config.home.enabled))
-        quake_list.set_rows(quakes)
+        self._draw_header()
+        self.query_one(QuakeList).set_rows(quakes)
 
     def action_day(self, step: int) -> None:
         if self.day is None:

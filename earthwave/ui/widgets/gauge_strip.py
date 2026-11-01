@@ -13,6 +13,7 @@ from textual.widgets import Sparkline, Static
 from earthwave.sources.geo import COOPS_MAX_KM
 from earthwave.state.store import GAUGE_FRESH
 from earthwave.ui.labels import fmt_age
+from earthwave.ui.theme import YELLOW
 
 MAX_POINTS = 240  # sparkline samples drawn per row; the "24 h max" summary reads every stored residual
 NAME_WIDTH = 26
@@ -111,7 +112,7 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
         return Text(f"{peak:+.3f} m stale", style="grey50", no_wrap=True)
     lag = residual_lag(row)
     if lag is not None:  # detection is blind here: an old residual must not read as the current, calm value
-        return Text(f"resid {fmt_age(lag.total_seconds())} old", style="yellow", no_wrap=True)
+        return Text(f"resid {fmt_age(lag.total_seconds())} old", style=YELLOW, no_wrap=True)
     if is_over_now(row, now):
         return Text(f"{peak:+.3f} m !", style="bold red", no_wrap=True)
     if abs(peak) >= row.threshold_m:  # it settled: the peak is history, not a current exceedance

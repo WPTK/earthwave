@@ -9,7 +9,7 @@ from textual.widgets import Static
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import LEVEL_COLORS, mark_level
+from earthwave.ui.theme import LEVEL_COLORS, YELLOW, mark_level
 
 
 def fmt_until(expires: datetime | None, now: datetime) -> str:
@@ -39,12 +39,11 @@ def build_panel(
     text = Text(no_wrap=True, overflow="ellipsis")
     for alert in alerts[:max_lines]:
         text.append(f"{alert.level:<11}", LEVEL_COLORS[alert.level])
-        text.append(f" {alert.headline} ", "white")
-        if alert.id in overdue:
-            text.append("OVERDUE, awaiting follow-up", "bold red")
+        if alert.id in overdue:  # the status goes first: the headline is long and the end of the line is what is cut
+            text.append(" OVERDUE, awaiting follow-up", "bold red")
         else:
-            text.append(fmt_until(expiry(alert), now), "grey62")
-        text.append("\n")
+            text.append(f" {fmt_until(expiry(alert), now)}", "grey62")
+        text.append(f"  {alert.headline}\n", "white")
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
     if not alerts and not unknown:
@@ -53,12 +52,12 @@ def build_panel(
         if unknown:
             text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", "bold red")
         else:
-            text.append(f"Partial: {', '.join(down)}", "yellow")
+            text.append(f"Partial: {', '.join(down)}", YELLOW)
     return text
 
 
 def offline_panel() -> Text:
-    return Text("Tsunami feeds not checked (offline)", style="bold yellow")
+    return Text("Tsunami feeds not checked (offline)", style=f"bold {YELLOW}")
 
 
 class TsunamiPanel(Static):
