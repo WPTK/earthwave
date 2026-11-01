@@ -42,9 +42,9 @@ def fmt_time(dt: datetime, time_zone: str = "local") -> str:
 
 
 def fmt_distance(quake: Earthquake, lat: float, lon: float) -> str:
-    """Distance and compass direction of the quake as seen from (lat, lon), e.g. '1234km NNE'."""
+    """Distance and compass direction of the quake as seen from (lat, lon), e.g. '1234 km NNE'."""
     km = haversine_km(lat, lon, quake.lat, quake.lon)
-    return f"{km:.0f}km {compass(bearing_deg(lat, lon, quake.lat, quake.lon))}"
+    return f"{km:.0f} km {compass(bearing_deg(lat, lon, quake.lat, quake.lon))}"
 
 
 def fmt_hours(hours: float) -> str:
