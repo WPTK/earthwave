@@ -85,7 +85,8 @@ class Batch:
     """What one fetch returns. `cursor` is opaque to the scheduler and handed back to the same source's next fetch.
 
     `backfill` batches (startup feeds, filter queries) merge silently. `coverage` is (hours, min_magnitude): the
-    window of quakes this batch is known to contain completely.
+    window of quakes this batch is known to contain completely. `listed` is set only for a summary feed, which is
+    complete by construction: the store then drops stored quakes in the window that the feed no longer names.
     """
 
     source: str
@@ -98,4 +99,6 @@ class Batch:
     backfill: bool = False
     cursor: str | None = None
     coverage: tuple[float, float] | None = None
+    generated: datetime | None = None  # when the source made its answer; coverage counts from here, not the fetch
+    listed: frozenset[str] | None = None  # every id a complete listing names; None when the batch is no such listing
     meta: dict = field(default_factory=dict)

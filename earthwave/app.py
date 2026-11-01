@@ -27,7 +27,15 @@ from earthwave.sources.ndbc import DartSource
 from earthwave.sources.nws import NwsSource
 from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
-from earthwave.state.events import GaugeAnomaly, QuakeMajor, QuakeNew, SourceDegraded, SourceRecovered
+from earthwave.state.events import (
+    GaugeAnomaly,
+    QuakeMajor,
+    QuakeNew,
+    QuakeRemoved,
+    QuakeRenamed,
+    SourceDegraded,
+    SourceRecovered,
+)
 from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification
@@ -115,6 +123,7 @@ class EarthwaveApp(App):
         self.dashboard = DashboardScreen()
         self._previous_visible: set[str] = set()
         self._coverage_checked = False
+        self._backfill: asyncio.Task | None = None
 
     def _enabled_sources(self, config: Config) -> list[Source]:
         poll, enabled = config.poll, config.sources
@@ -173,9 +182,12 @@ class EarthwaveApp(App):
             self.history, self.history_error = None, f"{type(exc).__name__}: {exc}"
             return
         self.history.start()
-        self.store.merge(Batch("history", self.clock.now(), quakes=tuple(quakes), backfill=True), self.clock)
+        events = self.store.merge(Batch("history", self.clock.now(), quakes=tuple(quakes), backfill=True), self.clock)
         major = {q.id for q in quakes if q.id in unseen and q.mag >= self.config.alerts.major_magnitude}
         self.tracker.restore(unseen - major, major)
+        renamed = [e for e in events if isinstance(e, QuakeRenamed)]  # saved before a preferred id changed
+        self.tracker.observe(renamed)
+        self.history.record((), set(), (), self.clock.now(), replaced={e.old_id for e in renamed})
 
     @work(exclusive=True, exit_on_error=False)
     async def _run_scheduler(self) -> None:
@@ -256,9 +268,18 @@ class EarthwaveApp(App):
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
         steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
-        if steady and not result.error and not self.usgs.starting and not self._coverage_checked:
-            self._coverage_checked = True  # the first good steady answer: the network is up, so the backfill can run
-            self._backfill_if_needed(force=False)
+        if (
+            steady
+            and not result.error
+            and not self.usgs.starting
+            and (not self._coverage_checked or self.store.coverage_lapsed)
+        ):
+            # the first good steady answer, or one after an outage longer than the feed's window: the network is up,
+            # so the backfill can run. A lapse stays marked until a backfill lands, so a failed one retries on the
+            # next poll, and never two at once.
+            self._coverage_checked = True
+            if self._backfill is None or self._backfill.done():
+                self._backfill_if_needed(force=False)
         self.sync_tsunami()
         self.sync_gauges()
         if not self.screen_stack:  # a poll that lands while the app is shutting down
@@ -276,12 +297,19 @@ class EarthwaveApp(App):
         if self.history is None:
             return
         batch = result.batch
-        if batch is None or batch.not_modified or not (batch.quakes or batch.alerts):
+        if batch is None or batch.not_modified:
+            return
+        gone = {e.old_id for e in result.events if isinstance(e, QuakeRenamed)}
+        gone |= {e.quake_id for e in result.events if isinstance(e, QuakeRemoved)}  # a removed quake must not return
+        if not (batch.quakes or batch.alerts or gone):
             return
         unseen = {e.quake.id for e in result.events if isinstance(e, QuakeNew | QuakeMajor)}
+        unseen |= {
+            e.quake.id for e in result.events if isinstance(e, QuakeRenamed) and self.tracker.is_unseen(e.quake.id)
+        }
         current = (q for b in batch.quakes if (q := self.store.get(b.id)) is not None)
         merged = {a.id: a for b in batch.alerts if (a := self.store.get_alert(b.id)) is not None}  # one per product
-        self.history.record(current, unseen, merged.values(), batch.fetched_at)
+        self.history.record(current, unseen, merged.values(), batch.fetched_at, replaced=gone)
 
     def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
         """(tsunami feeds late or failing, whether no tsunami feed is fresh). A feed not polled yet is not an outage,
@@ -403,7 +431,11 @@ class EarthwaveApp(App):
             end = self.clock.now()
             start = end - timedelta(hours=self.view.hours)
             min_mag = self.view.min_magnitude
-            self.scheduler.submit_backfill("usgs", self.client, lambda c: self.usgs.fetch_range(c, start, end, min_mag))
+            self._backfill = self.scheduler.submit_backfill(
+                "usgs", self.client, lambda c: self.usgs.fetch_range(c, start, end, min_mag)
+            )
+        else:
+            self.store.coverage_lapsed = False  # what lapsed does not touch this view
 
     def apply_filters(self, min_magnitude: float, hours: float) -> None:
         """New filters: bump the generation, switch the steady feed if needed and backfill what the feeds miss."""
