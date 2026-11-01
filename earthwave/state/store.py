@@ -494,14 +494,18 @@ class Store:
     def _disjoint(a: TsunamiAlert, b: TsunamiAlert) -> bool:
         return bool(a.areas and b.areas and not {x.lower() for x in a.areas} & {x.lower() for x in b.areas})
 
-    @staticmethod
-    def _same_product(stored: TsunamiAlert, alert: TsunamiAlert) -> bool:
+    def _same_product(self, stored: TsunamiAlert, alert: TsunamiAlert) -> bool:
         """The same WMO header and month. Another source's key may sit a few minutes off: a CAP read without its
         bulletin has only its own sent time to build the header from."""
         if stored.dedupe_key == alert.dedupe_key:
             return True
         if stored.source == alert.source:
             return False
+        if QUIET[0] in (stored.level, alert.level) or QUIET[1] in (stored.level, alert.level):
+            return False  # a cancellation or statement is its own product, whatever its header minute
+        linked = {self._alias.get(r, r) for r in alert.references}
+        if stored.id in linked or alert.id in {self._alias.get(r, r) for r in stored.references}:
+            return False  # an update or follow-up never repeats the product it refers to
         a, b = KEY_PARTS.match(stored.dedupe_key), KEY_PARTS.match(alert.dedupe_key)
         if not a or not b or a["head"] != b["head"] or a["month"] != b["month"]:
             return False
@@ -514,6 +518,7 @@ class Store:
         polygon_first = new if new.geometry and new.geometry[0] == "polygon" else old
         return replace(
             old,
+            dedupe_key=new.dedupe_key if new.id == old.id else old.dedupe_key,  # the bulletin's header key wins
             level=top.level,
             headline=top.headline,
             areas=tuple(dict.fromkeys((*old.areas, *new.areas))),

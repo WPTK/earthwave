@@ -486,3 +486,30 @@ async def test_one_stalled_jma_report_does_not_use_the_whole_budget(monkeypatch)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         batch = await feed.source.fetch(client, None)
     assert len(batch.alerts) == 1 and batch.meta["incomplete"]
+
+
+def test_a_cancellation_or_follow_up_from_another_source_is_not_folded_into_the_warning(now_clock):
+    cap_only, full, nws = pheb_pair()
+    cancel = replace(nws, id="nws-c", level=levels.CANCELLATION, references=(full.id,))
+    store = Store()
+    store.merge(Batch("tsunamigov", NOW, alerts=(cap_only,)), now_clock)
+    events = store.merge(Batch("nws", NOW, alerts=(cancel,)), now_clock)  # same header minute skew, other product
+    assert any(type(e).__name__ == "TsunamiCancelled" for e in events)
+    assert store.active_alerts(now_clock) == []
+
+
+def test_an_update_referencing_the_warning_supersedes_it_across_the_skew(now_clock):
+    cap_only, _full, nws = pheb_pair()
+    update = replace(nws, id="nws-u", references=(cap_only.id,), text="update")
+    store = Store()
+    store.merge(Batch("tsunamigov", NOW, alerts=(cap_only,)), now_clock)
+    store.merge(Batch("nws", NOW, alerts=(update,)), now_clock)
+    assert {a.id for a in store.active_alerts(now_clock)} == {"nws-u"}
+
+
+def test_the_bulletin_replaces_the_cap_only_key_with_the_header_key(now_clock):
+    cap_only, full, _nws = pheb_pair()
+    store = Store()
+    store.merge(Batch("tsunamigov", NOW, alerts=(cap_only,)), now_clock)
+    store.merge(Batch("tsunamigov", NOW, alerts=(full,)), now_clock)
+    assert store.active_alerts(now_clock)[0].dedupe_key == full.dedupe_key

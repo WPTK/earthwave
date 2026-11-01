@@ -301,7 +301,11 @@ class TsunamiGovSource:
             skipped = True
         if not read_feeds:  # nothing was learned: an outage, not an empty feed
             now = self._clock.now()
-            raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0) if failures else TimeoutError()
+            raise (
+                max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0)
+                if failures
+                else TimeoutError("no tsunami.gov feed read in full")
+            )
         for entry_id in done:  # nothing above awaits from here on, so a cancelled poll never leaves _seen ahead
             self._failures.pop(entry_id, None)
             self._seen[entry_id] = None
