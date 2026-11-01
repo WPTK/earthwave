@@ -486,3 +486,16 @@ async def test_relaunch_joins_ids_saved_before_a_preferred_id_change(tmp_path, o
         assert app.tracker.is_unseen("us1") and not app.tracker.is_unseen("ak1")
     saved, _ = History(path, 90, clock).load_since(T0 - timedelta(days=1))
     assert [q.id for q in saved] == ["us1"]
+
+
+async def test_history_shows_the_too_small_message_below_the_minimum(tmp_path):
+    app = _app(tmp_path / "h.sqlite", ReplayClock(T0, real=lambda: 0.0))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, HistoryScreen) and app.screen.has_class("too-small")
+        assert "Terminal too small: 80x24" in str(app.screen.query_one("#too_small").render())
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        assert not app.screen.has_class("too-small")

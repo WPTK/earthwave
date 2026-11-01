@@ -7,7 +7,7 @@ from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
 from earthwave.ui.screens.help import HelpScreen
 from earthwave.ui.widgets.quake_list import QuakeList
-from uat.harness import screen_text, week_app
+from uat.harness import kam_alert_app, screen_text, week_app
 
 
 async def test_map_zoom_cycles_world_region_home_world(size):
@@ -120,3 +120,20 @@ async def test_help_screen_lists_keys_and_closes_with_both_keys(size):
         await pilot.press("question_mark", "escape")
         await pilot.pause()
         assert app.screen is app.dashboard
+
+
+async def test_tsunami_screen_fits_without_a_sideways_scroll():
+    app = kam_alert_app(0, 1)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        table = app.screen.query_one("#alert_table")
+        assert table.max_scroll_x == 0  # STATUS, EXPIRES and the rest are all on screen
+        assert "AREAS" not in screen_text(app)  # the areas are in the text below, not cut off in a cell
+
+
+async def test_help_names_the_colours_it_shows():
+    from earthwave.ui.screens.help import HELP_TEXT
+
+    assert "Watch yellow" not in HELP_TEXT and "yellow <6.5" not in HELP_TEXT
+    assert "Advisory and Watch orange" in HELP_TEXT
