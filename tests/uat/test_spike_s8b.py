@@ -45,6 +45,7 @@ def snap(term: Terminal, name: str) -> str:
     return text
 
 
+@pytest.mark.timeout(900)  # two 120 s backoffs plus the natural 60 s polls
 def test_quake_then_503_then_reset_then_recovery():
     info = json.loads((WORK / "listening.json").read_text())
     env = {"SSL_CERT_FILE": info["ca"]}
