@@ -342,6 +342,63 @@ async def test_spare_rows_show_legend_then_strongest_quakes(sixel):
         assert panel.render_line(panel.model.map_rows).text == strips[0].text
 
 
+async def test_zoom_repaints_the_title_and_the_rows_the_legend_left(monkeypatch):
+    from textual.geometry import Region
+    from textual.widget import Widget
+
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(200, 60)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
+        old_top, rows, gutter = panel.model.map_rows, panel.model.rows, panel.gutter
+        assert old_top < rows and "7+" in panel._spare_strips()[0].text
+        calls: list[Region] = []
+        real = Widget.refresh
+
+        def spy(self, *regions, **kwargs):
+            if self is panel:
+                calls.extend(regions)
+            return real(self, *regions, **kwargs)
+
+        monkeypatch.setattr(Widget, "refresh", spy)
+        panel.action_cycle_zoom()
+        await pilot.pause()
+        assert panel.model.map_rows == panel.model.rows  # a zoomed view takes the whole panel
+        assert panel.border_title.endswith(panel.model.shown) and "world" not in panel.border_title
+        # the cells are not repainted as a whole (the picture stays), so the title row and the rows that held the
+        # legend must be repainted on their own
+        # (regions are content-relative, so the border row above the content is at minus the gutter)
+        assert any(r.y == -gutter.top and r.height == 1 and r.width == panel.outer_size.width for r in calls)
+        assert any(r.y <= old_top and r.bottom >= rows for r in calls)
+        assert not any("7+" in panel.render_line(y).text for y in range(panel.size.height))
+
+
+async def test_filter_change_repaints_the_list_under_the_map(monkeypatch):
+    from textual.widget import Widget
+
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(200, 60)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
+        before = panel._spare_strips()[1].text
+        calls = []
+        real = Widget.refresh
+
+        def spy(self, *regions, **kwargs):
+            if self is panel:
+                calls.extend(regions)
+            return real(self, *regions, **kwargs)
+
+        monkeypatch.setattr(Widget, "refresh", spy)
+        panel.set_quakes(sorted(panel.model.quakes, key=lambda q: q.mag)[:5], None)  # only the weakest five remain
+        await pilot.pause()
+        assert panel._spare_strips()[1].text != before
+        assert any(r.y >= panel.model.map_rows for r in calls)  # the text rows, not the picture
+        assert panel.border_title.endswith(panel.model.shown)
+
+
 def test_cell_reply_reads_the_answer_with_or_without_the_escape():
     from earthwave.ui.graphics.probe import CellReply
 

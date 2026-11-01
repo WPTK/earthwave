@@ -668,6 +668,7 @@ class MapPanel(Widget, can_focus=True):
         self._reprobe: Timer | None = None
         self._spare: list[Strip] | None = None
         self._spare_key: tuple[str, ...] = ()
+        self._spare_top: int | None = None  # the map rows when the text rows were last repainted
         self._holes: tuple[tuple[int, int, int, int], ...] = ()  # cell rectangles of toasts over the image
         self._rgb_cache: dict[tuple[str, int], RGB] = {}
 
@@ -751,6 +752,10 @@ class MapPanel(Widget, can_focus=True):
     def _update_title(self) -> None:
         sep = "·" if self._glyphs.unicode else "-"
         self.border_title = f"Map {sep} {self.model.shown}"
+        if self._sixel and self.is_attached:
+            # setting the title calls refresh(), which in sixel mode leaves the cells alone: repaint the title row
+            offset = self.content_offset  # regions are content-relative: the border row is at minus the offset
+            super().refresh(Region(-offset.x, -offset.y, self.outer_size.width, 1))
 
     # --- pixel image ----------------------------------------------------------------------------------------------
 
@@ -814,13 +819,12 @@ class MapPanel(Widget, can_focus=True):
         picture are still blank and untouched, so nothing needs repainting and the map never shows an empty frame
         between the two pictures (a pan or zoom). False when the picture is not on the terminal to start with."""
         driver = getattr(self.app, "_driver", None)
-        if driver is None or self._on_terminal is None or self._stale:
+        if driver is None:
             return False
-        before = self._on_terminal
         driver.write("\x1b[?2026h")
         self.emit_image(driver.write)
         driver.write("\x1b[?2026l")
-        return self._on_terminal != before
+        return self._on_terminal == self._scene and not self._stale
 
     def invalidate_image(self) -> None:
         """The cells under the image were repainted by something this panel did not see (another screen came and
@@ -931,17 +935,28 @@ class MapPanel(Widget, can_focus=True):
         self._spare = None
         if self._sixel and not regions and not kwargs and not self._sync_image():
             # the picture is unchanged (or still being drawn): leave the one on the terminal alone, and repaint only
-            # the rows under it when their text changed
-            before = self._spare_key
-            self._spare_strips()
-            if self._spare_key != before:
-                top = self.model.map_rows
-                super().refresh(Region(0, top, self.size.width, self.model.rows - top))
+            # the text rows that changed (the legend and list under a world map, and the rows they leave or take)
+            self._repaint_text_rows()
             return self
         return super().refresh(*regions, **kwargs)
 
+    def _repaint_rows(self, first: int, last: int) -> None:
+        """Repaint content rows `first` to `last` (not the border, not the rest)."""
+        super().refresh(Region(0, first, self.size.width, max(0, last - first)))  # regions are content-relative
+
+    def _repaint_text_rows(self) -> None:
+        before_key, before_top = self._spare_key, self._spare_top
+        self._spare_strips()
+        top = self.model.map_rows
+        if before_top is None:
+            before_top = top
+        if self._spare_key != before_key or top != before_top:
+            self._repaint_rows(min(top, before_top), self.model.rows)
+        self._spare_top = top
+
     def render_lines(self, crop):
-        if self._sixel and crop.y < self.model.map_rows:
+        gutter = self.gutter
+        if self._sixel and crop.y < gutter.top + self.model.map_rows and crop.bottom > gutter.top:
             self._stale = True  # the compositor is about to write these cells (even from its cache), erasing the image
         return super().render_lines(crop)
 
