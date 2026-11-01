@@ -59,6 +59,7 @@ function Run($label, $argv) {
     $o = "$out\$label.stdout.txt"; $e = "$out\$label.stderr.txt"
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = Start-Process -FilePath $exe -ArgumentList $argv -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e -WorkingDirectory $work
+    $null = $p.Handle  # PS 5.1: without touching the handle ExitCode comes back empty
     if (-not $p.WaitForExit(180000)) { $p.Kill(); Add-Content "$out\$label.txt" 'TIMEOUT, killed' }
     Add-Content "$out\$label.txt" "exit code: $($p.ExitCode)`nseconds: $([math]::Round($sw.Elapsed.TotalSeconds, 1))"
 }
