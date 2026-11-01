@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 
@@ -42,6 +43,7 @@ from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
+from earthwave.ui.graphics.probe import BRAILLE, GraphicsChoice
 from earthwave.ui.labels import fmt_age, fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
@@ -88,6 +90,7 @@ class EarthwaveApp(App):
         history: History | None = None,
         offline: bool = False,
         history_error: str | None = None,
+        graphics: GraphicsChoice | None = None,
     ):
         super().__init__()
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
@@ -96,6 +99,8 @@ class EarthwaveApp(App):
         self.store = store if store is not None else Store(config.alerts, config.home)
         self.tracker = AttentionTracker(self.clock)
         self.glyphs = resolve_glyphs(config.view.glyphs)
+        self.graphics = graphics or BRAILLE
+        self._overlays: list[Callable[[Callable[[str], None]], None]] = []
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
         # The steady feed must hold every quake that can alert, whatever magnitude the display filter hides.
@@ -127,6 +132,23 @@ class EarthwaveApp(App):
         self._previous_visible: set[str] = set()
         self._coverage_checked = False
         self._backfill: asyncio.Task | None = None
+
+    def add_overlay(self, emit: Callable[[Callable[[str], None]], None]) -> None:
+        """Register a widget that draws outside Textual's cell grid (the sixel map); it is called with the driver's
+        write function at the end of every screen update."""
+        self._overlays.append(emit)
+
+    def remove_overlay(self, emit: Callable[[Callable[[str], None]], None]) -> None:
+        if emit in self._overlays:
+            self._overlays.remove(emit)
+
+    def _end_update(self) -> None:
+        """Textual brackets each screen update in a synchronized update; overlays draw inside it, so the cells and the
+        image they sit on appear together."""
+        if self._driver is not None:
+            for emit in tuple(self._overlays):
+                emit(self._driver.write)
+        super()._end_update()
 
     def _enabled_sources(self, config: Config) -> list[Source]:
         poll, enabled = config.poll, config.sources

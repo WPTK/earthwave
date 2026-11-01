@@ -75,7 +75,9 @@ class DashboardScreen(Screen):
                 yield Static("", id="empty")
                 yield QuakeList(app.clock, app.tracker, app.glyphs, app.config.home, id="quakes")
             with Vertical(id="right"):
-                yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
+                yield MapPanel(
+                    app.tracker, app.glyphs, app.config.home, ticks=app.ticking, graphics=app.graphics, id="map"
+                )
                 yield TsunamiPanel(id="tsunami")
         search = Input(placeholder="search place", id="search")
         search.border_subtitle = "Enter apply, Esc cancel"  # in view for as long as the box is open, typed text or not
@@ -89,6 +91,10 @@ class DashboardScreen(Screen):
         self.query_one(QuakeList).focus()
         self._layout(self.size.width, self.size.height)
         self.refresh_view()
+
+    def on_screen_resume(self) -> None:
+        """Back from another screen: its repaint erased the map image, so the map sends it again."""
+        self.query_one(MapPanel).invalidate_image()
 
     def on_resize(self, event: events.Resize) -> None:
         self._layout(event.size.width, event.size.height)

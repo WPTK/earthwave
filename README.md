@@ -49,6 +49,10 @@ earthwave --help                       # everything else
 
 Use a terminal at least 100 columns wide and 30 rows tall; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
 
+On a terminal that supports sixel graphics (Windows Terminal 1.22 or later, foot, WezTerm, xterm with sixel) the map can
+be drawn at pixel resolution. Set `map_renderer = "sixel"` under `[view]` in the config file to turn it on; the default,
+`auto`, keeps the braille map until sixel has been through more terminals, and `braille` forces it.
+
 ## Keys
 
 `?` opens the full list. The main ones:

@@ -6,6 +6,8 @@ the same projection the raster uses and composes frames. `MapPanel` is the widge
 
 from __future__ import annotations
 
+import logging
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -24,6 +26,9 @@ from earthwave.notify.inapp import TSUNAMI_PREFIX, AttentionTracker
 from earthwave.sources import levels
 from earthwave.sources.geo import haversine_km
 from earthwave.ui.glyphs import Glyphs
+from earthwave.ui.graphics.probe import FALLBACK_CELL, GraphicsChoice
+from earthwave.ui.graphics.raster import Palette, Scene, Shape, compose
+from earthwave.ui.graphics.sixel import RGB, encode
 from earthwave.ui.theme import LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
     WORLD,
@@ -36,6 +41,8 @@ from earthwave.ui.widgets.braille import (
     warm_coastline,
 )
 
+log = logging.getLogger(__name__)
+
 # Plain fallback for a bare `row_segments` call; the panel colours coast and land from the theme
 # (`MapPanel.DEFAULT_CSS`).
 COAST_STYLE = Style()
@@ -45,6 +52,8 @@ WORLD_TOP = 84.0  # north edge of a world view too short to show all 180 degrees
 MAJOR_MAG = AlertsConfig().major_magnitude  # with nothing selected, panned to or home, zoom goes to the latest of these
 WORLD_PAN_STEP = 30  # degrees of longitude per arrow press at world zoom
 PAN_GRID = 5  # panned view centres snap to this many degrees so rasters are reused from the cache
+IMAGE_CACHE = 4  # encoded sixel images kept (a few hundred KB each): the views the user is flipping between
+WRITE_CHUNK = 8192  # Textual writes Windows output in chunks this size, and so does the image
 TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
 
 # Magnitude band -> marker. Bands: <4.5, 4.5-5.4, 5.5-6.4, 6.5+.
@@ -492,7 +501,91 @@ class MapModel:
         return ["".join(r) for r in rows]
 
 
+@dataclass(frozen=True, slots=True)
+class PixelColors:
+    """Colours of the pixel map that do not come from a marker's own style (the panel fills them from the theme)."""
+
+    sea: RGB
+    land: RGB
+    coast: RGB
+    outline: RGB = (6, 10, 18)  # one pixel edge round every marker, so it reads on sea, land and coast alike
+    home: RGB = (255, 255, 255)
+    attention: RGB = (255, 255, 255)
+
+
+def _truecolor(color, theme) -> RGB:
+    """RGB of a Rich colour (None reads as black); ANSI names resolve through the app's ANSI theme."""
+    if color is None:
+        return (0, 0, 0)
+    t = color.get_truecolor(theme)
+    return (t.red, t.green, t.blue)
+
+
+MARKER_RADIUS = (0.3, 0.42, 0.6, 0.85)  # marker disc radius per magnitude band, in cell widths
+PIXEL_BAND = 6  # a sixel band; the image height is a whole number of them
+
+
+def pixel_size(cols: int, rows: int, cell: tuple[int, int]) -> tuple[int, int]:
+    """Image size in pixels for a panel of `cols` x `rows` cells: full width, height cut to whole sixel bands."""
+    return cols * cell[0], rows * cell[1] // PIXEL_BAND * PIXEL_BAND
+
+
+def pixel_scene(
+    model: MapModel, cell: tuple[int, int], colors: PixelColors, rgb_of: Callable[[str], RGB]
+) -> Scene | None:
+    """The model's frame as a pixel `Scene`: the same view, markers and tsunami tint, drawn at pixel resolution.
+
+    `rgb_of` turns a style colour name (`mag_color`, `LEVEL_COLORS`) into RGB. Attention is a steady white ring
+    rather than a blink: the image is only re-sent when the picture changes.
+    """
+    width, height = pixel_size(model.cols, model.rows, cell)
+    if width < 1 or height < PIXEL_BAND:
+        return None
+    cw = cell[0]
+    view = model.view()
+    palette = Palette(colors.sea, colors.land, colors.coast, colors.outline)
+    tints: dict[tuple[int, int], int] = {}
+    shapes: list[Shape] = []
+    for mark in sorted(model.tsunami, key=lambda m: levels.RANK.get(m.level, 0)):
+        index = palette.index(rgb_of(LEVEL_COLORS.get(mark.level, "dodger_blue2")))
+        if mark.geometry:
+            for place in geometry_cells(mark.geometry, view, model.cols, model.rows, False):
+                tints[place] = index
+        if mark.source is not None:
+            shapes.append(Shape(mark.source[1], mark.source[0], cw * 1.3, None, ring=index, ring_width=2))
+    selected_id = model.selected.id if model.selected else None
+    tracker = model.tracker
+
+    def rank(quake: Earthquake) -> tuple[bool, bool, float]:
+        return quake.id == selected_id, tracker is not None and tracker.kind_of(quake.id) is not None, quake.mag
+
+    for quake in sorted(model.quakes, key=rank):
+        selected, attended, _ = rank(quake)
+        radius = max(2.0, cw * MARKER_RADIUS[marker_band(quake.mag)])
+        ring = palette.index(colors.attention) if selected or attended else None
+        shapes.append(Shape(quake.lon, quake.lat, radius, palette.index(rgb_of(mag_color(quake.mag))), ring=ring))
+    if model.home is not None:
+        shapes.append(Shape(model.home.lon, model.home.lat, max(2.0, cw * 0.45), palette.index(colors.home)))
+    return Scene(
+        view,
+        width,
+        height,
+        tuple(palette.colours),
+        cell,
+        tuple((c, r, i) for (c, r), i in sorted(tints.items())),
+        tuple(shapes),
+    )
+
+
 class MapPanel(Widget, can_focus=True):
+    """The map. With `graphics` set to a sixel choice it draws a pixel image instead of braille cells.
+
+    The image is not part of Textual's cell grid: it is written to the terminal after the cells, inside the same
+    synchronized update (`EarthwaveApp._end_update` calls `emit_image`). The cells under it are blank, so whatever
+    Textual repaints there (a modal, a toast, a resize) erases the image and `emit_image` puts it back; when nothing
+    repaints the map, nothing is written.
+    """
+
     COMPONENT_CLASSES = {"map--coast", "map--land"}
     DEFAULT_CSS = """
     MapPanel > .map--coast { color: $primary-lighten-1; }
@@ -511,6 +604,7 @@ class MapPanel(Widget, can_focus=True):
         glyphs: Glyphs,
         home: HomeConfig | None = None,
         ticks: bool = True,
+        graphics: GraphicsChoice | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -520,27 +614,53 @@ class MapPanel(Widget, can_focus=True):
         self._frame: Frame | None = None
         self._by_row: dict[int, list[Marker]] = {}
         self._tint_by_row: dict[int, dict[int, Style]] = {}
+        self._sixel = graphics is not None and graphics.renderer == "sixel"
+        self._cell = (graphics.cell if graphics is not None else None) or FALLBACK_CELL
+        self._scene: Scene | None = None  # the picture wanted now
+        self._images: OrderedDict[Scene, str] = OrderedDict()  # encoded pictures, most recent last
+        self._building: Scene | None = None
+        self._on_terminal: Scene | None = None  # the picture last written, None once something may have erased it
+        self._stale = True  # Textual has repainted the cells since the image was written
+        self._attention_seen = False
+        self._rgb_cache: dict[tuple[str, int], RGB] = {}
+
+    @property
+    def renderer(self) -> str:
+        return "sixel" if self._sixel else "braille"
 
     def on_mount(self) -> None:
         self.model.resize(self.size.width, self.size.height)
         self._update_title()
+        if self._sixel:
+            register = getattr(self.app, "add_overlay", None)
+            if register is not None:
+                register(self.emit_image)
+            self.app.theme_changed_signal.subscribe(self, lambda _theme: self.refresh())
         if self._ticks:
             self.set_interval(TICK_SECONDS, self._tick)
 
+    def on_unmount(self) -> None:
+        if self._sixel and (unregister := getattr(self.app, "remove_overlay", None)) is not None:
+            unregister(self.emit_image)
+
     def _tick(self) -> None:
-        if self.model.has_attention():
+        if self._sixel:  # the picture is re-sent only when it differs, so a tick that changes nothing is free
+            if self.model.has_attention() or self._attention_seen:
+                self.refresh()
+        elif self.model.has_attention():
             self.refresh()
 
     def on_resize(self, event: Resize) -> None:
         cols, rows = self.size.width, self.size.height  # content size: event.size still includes the border
         self.model.resize(cols, rows)
-        self.run_worker(
-            partial(warm_world, cols, rows, self.model.ascii_mode),
-            thread=True,
-            group="warm",
-            exclusive=True,
-            exit_on_error=False,
-        )
+        if not self._sixel:
+            self.run_worker(
+                partial(warm_world, cols, rows, self.model.ascii_mode),
+                thread=True,
+                group="warm",
+                exclusive=True,
+                exit_on_error=False,
+            )
         self.refresh()
 
     # --- data and keys --------------------------------------------------------------------------------------------
@@ -574,13 +694,118 @@ class MapPanel(Widget, can_focus=True):
         sep = "·" if self._glyphs.unicode else "-"
         self.border_title = f"Map {sep} {self.model.shown}"
 
+    # --- pixel image ----------------------------------------------------------------------------------------------
+
+    def pixel_colors(self) -> PixelColors:
+        """Sea, land and coast as the braille map shows them: from the panel's background and component styles."""
+        sea = self.background_colors[1]
+        theme = self.app.ansi_theme
+        return PixelColors(
+            (sea.r, sea.g, sea.b),
+            _truecolor(self.get_component_rich_style("map--land").bgcolor, theme),
+            _truecolor(self.get_component_rich_style("map--coast").color, theme),
+        )
+
+    def rgb_of(self, name: str) -> RGB:
+        theme = self.app.ansi_theme
+        key = (name, id(theme))
+        if key not in self._rgb_cache:
+            self._rgb_cache[key] = _truecolor(Style.parse(name).color, theme)
+        return self._rgb_cache[key]
+
+    def _sync_image(self) -> bool:
+        """Work out the picture the model calls for; True when the cells must be repainted for a new, ready image."""
+        scene = pixel_scene(self.model, self._cell, self.pixel_colors(), self.rgb_of)
+        self._attention_seen = self.model.has_attention()
+        if scene == self._scene:
+            return False
+        self._scene = scene
+        if scene is None or scene in self._images:
+            return True
+        if scene != self._building:
+            self._building = scene
+            self.run_worker(
+                partial(self._build, scene), thread=True, group="sixel", exclusive=True, exit_on_error=False
+            )
+        return False
+
+    def _build(self, scene: Scene) -> None:
+        """Worker thread: rasterise and encode `scene`, then hand it back to the event loop."""
+        data = encode(compose(scene), scene.width, scene.height, scene.palette)
+        self.app.call_from_thread(self._built, scene, data)
+
+    def _built(self, scene: Scene, data: str) -> None:
+        self._images[scene] = data
+        while len(self._images) > IMAGE_CACHE:
+            self._images.popitem(last=False)
+        if self._building == scene:
+            self._building = None
+        if scene == self._scene:  # still what is wanted: repaint the cells, the image follows in the same update
+            super().refresh()
+
+    def invalidate_image(self) -> None:
+        """The cells under the image were repainted by something this panel did not see (another screen came and
+        went): repaint them so the image follows."""
+        if self._sixel:
+            self._on_terminal = None
+            self._stale = True
+            super().refresh()
+
+    def emit_image(self, write: Callable[[str], None]) -> None:
+        """Write the picture to the terminal if the cells under it were repainted since it was last written.
+
+        Called after every screen update, inside the synchronized update. Writes nothing while another screen is on
+        top (the modal's repaint has erased it and it must not draw over the dialog), nothing while the map is hidden,
+        and nothing when the picture on the terminal is the wanted one and untouched.
+        """
+        if not self._sixel:
+            return
+        try:
+            on_top = self.app.screen is self.screen
+        except Exception:  # not mounted, or the screen stack is empty: shutting down
+            return
+        region = self.content_region
+        if not on_top or not self.display or region.width < 1 or region.height < 1:
+            self._on_terminal = None
+            return
+        scene = self._scene
+        data = self._images.get(scene) if scene is not None else None
+        if data is None or (not self._stale and self._on_terminal == scene):
+            return
+        if (region.width, region.height) != (self.model.cols, self.model.rows):
+            return  # the model has not seen the new size yet; the resize that follows repaints
+        try:
+            self._images.move_to_end(scene)
+            write(f"\x1b7\x1b[{region.y + 1};{region.x + 1}H")
+            for start in range(0, len(data), WRITE_CHUNK):
+                write(data[start : start + WRITE_CHUNK])
+            write("\x1b8")
+        except Exception as exc:  # a terminal that takes the image badly gets the braille map instead
+            log.warning("sixel output failed (%r); falling back to braille", exc)
+            self._sixel = False
+            self._on_terminal = None
+            self.refresh()
+            return
+        self._on_terminal = scene
+        self._stale = False
+
     # --- rendering ------------------------------------------------------------------------------------------------
 
     def refresh(self, *regions, **kwargs):
         self._frame = None
+        if self._sixel and not regions and not kwargs and not self._sync_image():
+            return self  # the picture is unchanged (or still being drawn): leave the one on the terminal alone
         return super().refresh(*regions, **kwargs)
 
+    def render_lines(self, crop):
+        if self._sixel:
+            self._stale = True  # the compositor is about to write these cells (even from its cache), erasing the image
+        return super().render_lines(crop)
+
     def render_line(self, y: int) -> Strip:
+        if self._sixel:
+            self._stale = True  # these cells are about to be written, which erases the image under them
+            return Strip.blank(self.size.width, self.rich_style)
         if self._frame is None:
             self._frame = self.model.frame()
             self._by_row = {}

@@ -32,6 +32,7 @@ class ViewConfig:
     hours: float = 24
     glyphs: str = "auto"
     map: bool = True
+    map_renderer: str = "auto"
     time_zone: str = "local"
 
 
@@ -91,6 +92,7 @@ class Config:
 
 CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("view", "glyphs"): ("auto", "unicode", "ascii"),
+    ("view", "map_renderer"): ("auto", "braille", "sixel"),
     ("view", "time_zone"): ("local", "UTC"),
     ("alerts", "pager_min"): ("green", "yellow", "orange", "red"),
 }
@@ -131,6 +133,7 @@ min_magnitude = 2.5          # hide quakes below this magnitude
 hours = 24                   # show quakes from the last N hours
 glyphs = "auto"              # auto | unicode | ascii
 map = true
+map_renderer = "auto"       # auto | braille | sixel; auto uses sixel pixels only where the terminal reports them
 time_zone = "local"          # local | UTC
 
 [home]
