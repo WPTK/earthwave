@@ -176,7 +176,7 @@ def run_capped(argv: list[str], cap: int = CAP_BYTES, guard=None) -> int:
     if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
         raise OSError(ctypes.get_last_error(), "SetInformationJobObject")
     proc = subprocess.Popen(argv)
-    k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle)))  # noqa: SLF001
+    k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle)))
     try:
         return _wait_guarded(proc, guard)
     finally:

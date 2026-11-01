@@ -15,8 +15,6 @@ import stat
 import time
 from pathlib import Path
 
-import pytest
-
 from uat import rules
 from uat.known import known
 from uat.replays import Rec, all_quiet, warning_with_expiry
@@ -89,6 +87,22 @@ def test_j5_navigate_open_detail_and_back() -> None:
         quit_cleanly(t)
 
 
+def test_j5b_clicking_a_row_selects_that_row_and_the_wheel_scrolls() -> None:
+    with launch("--replay", str(USGS), *BASE) as t:
+        ready(t)
+        rows = list_rows(t.screen().lines)
+        for target in (3, 5, 1):
+            row_y, text = rows[target]
+            t.click(10, row_y)
+            picked = selected_row(t.screen().lines)
+            assert picked and ident(picked[1]) == ident(text), f"clicked {text!r}, cursor is on {picked!r}"
+        t.wheel("down", 3, at=(10, rows[2][0]))
+        t.wheel("up", 3, at=(10, rows[2][0]))
+        clean(t, "after-wheel", "j5b")
+        assert t.alive()
+        quit_cleanly(t)
+
+
 def test_j6_filters_apply_and_cancel() -> None:
     with launch("--replay", str(USGS), *BASE) as t:
         ready(t)
@@ -98,7 +112,9 @@ def test_j6_filters_apply_and_cancel() -> None:
         clean(t, "filters", "j6")
         t.send_keys("escape")
         t.wait_for(lambda s: "Minimum magnitude" not in s.text, 10, "filter dialog closed")
-        assert status_line(t.screen_text()).split("│")[:2] == before.split("│")[:2], "cancel changed the list or the filters"
+        assert status_line(t.screen_text()).split("│")[:2] == before.split("│")[:2], (
+            "cancel changed the list or the filters"
+        )
         t.send_keys("f")
         t.wait_for_text("Minimum magnitude", 10)
         t.send_keys("backspace", "backspace", "backspace", "backspace", "6", "enter")

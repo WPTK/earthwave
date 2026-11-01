@@ -25,7 +25,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
 from uat_kit import Terminal, unavailable_reason
 
 EXE = os.environ.get("EARTHWAVE_EXE") or None
@@ -43,14 +42,22 @@ DEFAULT_SIZE = tuple(int(v) for v in os.environ.get("UAT_SIZE", "130x32").split(
 BASE = ["--hours", "720", "--min-mag", "2.5"]  # what the usgs_short recording needs to show its quakes
 
 KIT = unavailable_reason()
-needs_kit = pytest.mark.skipif(KIT is not None, reason=str(KIT))
+REAL = os.environ.get("UAT_REAL") == "1"
+# The real-input journeys, gestures and walks take minutes; PR CI (plain `pytest -n auto`) skips them. The UAT workflow
+# (.github/workflows/uat.yml) and a person running them set UAT_REAL=1.
+needs_kit = pytest.mark.skipif(
+    KIT is not None or not REAL,
+    reason=str(KIT) if KIT is not None else "real-input UAT: set UAT_REAL=1 (see docs/uat.md)",
+)
 needs_state = pytest.mark.skipif(
     IS_WINDOWS and not DISPOSABLE,
     reason="config and history live in the real profile on Windows (platformdirs ignores the environment, #230); "
     "set UAT_DISPOSABLE=1 on a runner or in Sandbox",
 )
 needs_network = pytest.mark.skipif(not NETWORK, reason="needs the real feeds: UAT_NETWORK=1")
-needs_origin = pytest.mark.skipif(not ORIGIN_DIR, reason="needs the S8b fake origin on a disposable runner: UAT_ORIGIN_DIR")
+needs_origin = pytest.mark.skipif(
+    not ORIGIN_DIR, reason="needs the S8b fake origin on a disposable runner: UAT_ORIGIN_DIR"
+)
 needs_posix = pytest.mark.skipif(IS_WINDOWS, reason="POSIX-only behaviour")
 needs_windows = pytest.mark.skipif(not IS_WINDOWS, reason="Windows-only behaviour")
 
@@ -110,7 +117,9 @@ def log_text(term: Terminal) -> str:
 
 def ready(term: Terminal, timeout: float = 45.0) -> None:
     """Wait until the dashboard shows at least one quake row and the footer."""
-    term.wait_for(lambda s: bool(re.search(r"[1-9]\d* shown of", s.text)) and " Quit" in s.text, timeout, "dashboard with quakes")
+    term.wait_for(
+        lambda s: bool(re.search(r"[1-9]\d* shown of", s.text)) and " Quit" in s.text, timeout, "dashboard with quakes"
+    )
     term.wait_for(lambda s: len(list_rows(s.lines)) >= 1, 10, "list rows drawn")
     term.settle(0.5)
 

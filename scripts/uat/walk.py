@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -41,9 +42,17 @@ REPLAYS = {
     "dart": (target.REPLAY / "dart_event_mode.jsonl", ["--speed", "20", "--hours", "720", "--min-mag", "2.5"]),
 }
 SIZES = [(100, 30), (120, 30), (130, 32), (160, 40), (200, 50), (90, 25), (80, 24), (280, 70)]
-ADVERTISED = list("jkfs/mMztoharqy?b") + ["enter", "escape", "tab"]
-UNADVERTISED = [*"0123456789", "shift+tab", "pageup", "pagedown", "home", "end", "space", "backspace", "delete", "insert"] + \
-    [f"f{i}" for i in range(1, 13)] + ["ctrl+p", "ctrl+s", "ctrl+l", "up", "down", "left", "right", *"xwcvnu", "J", "K", "Q", "R", "A"]
+# "b" opens the machine's real browser from the detail screen: only on a runner with no desktop (UAT_ALLOW_BROWSER=1)
+ADVERTISED = (
+    list("jkfs/mMztoharqy?")
+    + (["b"] if os.environ.get("UAT_ALLOW_BROWSER") == "1" else [])
+    + ["enter", "escape", "tab"]
+)
+UNADVERTISED = (
+    [*"0123456789", "shift+tab", "pageup", "pagedown", "home", "end", "space", "backspace", "delete", "insert"]
+    + [f"f{i}" for i in range(1, 13)]
+    + ["ctrl+p", "ctrl+s", "ctrl+l", "up", "down", "left", "right", *"xwcvnu", "J", "K", "Q", "R", "A"]
+)
 QUIT_KEYS = {"q", "ctrl+q", "ctrl+c"}
 PASTES = ["Japan", "héllo ✓", "line one\nline two", "\x1b[31mred\x1b[0m", "x" * 3000, "  ", "7.5", "-33.87,151.21"]
 
@@ -87,11 +96,19 @@ def choose(rng: random.Random, term: Terminal, counts: dict, explore: bool) -> d
             mods = rng.choice([{}, {}, {}, {"shift": True}, {"ctrl": True}, {"alt": True}])
             return {"kind": "click", "col": col, "row": row, "button": button, "clicks": clicks, **mods}
         if roll < 0.70:
-            return {"kind": "wheel", "dir": rng.choice(["up", "down"]), "n": rng.randint(1, 4),
-                    "col": rng.randrange(0, cols), "row": rng.randrange(1, rows - 1)}
+            return {
+                "kind": "wheel",
+                "dir": rng.choice(["up", "down"]),
+                "n": rng.randint(1, 4),
+                "col": rng.randrange(0, cols),
+                "row": rng.randrange(1, rows - 1),
+            }
         if roll < 0.74:
-            return {"kind": "drag", "a": [rng.randrange(0, cols), rng.randrange(0, rows)],
-                    "b": [rng.randrange(-3, cols + 3), rng.randrange(-2, rows + 2)]}
+            return {
+                "kind": "drag",
+                "a": [rng.randrange(0, cols), rng.randrange(0, rows)],
+                "b": [rng.randrange(-3, cols + 3), rng.randrange(-2, rows + 2)],
+            }
         if roll < 0.77:
             return {"kind": "hover", "col": rng.randrange(0, cols), "row": rng.randrange(0, rows)}
         if roll < 0.82:
@@ -102,10 +119,21 @@ def choose(rng: random.Random, term: Terminal, counts: dict, explore: bool) -> d
         if roll < 0.88:
             return {"kind": "paste", "text": rng.choice(PASTES), "bracketed": rng.random() < 0.6}
         if roll < 0.90:
-            return {"kind": "legacy", "col": rng.randrange(0, min(cols, 200)), "row": rng.randrange(0, min(rows, 200)),
-                    "encoding": rng.choice(["x10", "urxvt"]), "button": rng.choice([0, 1, 2, 64, 65])}
+            enc = rng.choice(["x10", "urxvt"])
+            limit = 94 if enc == "x10" else 200  # see Terminal.legacy_mouse
+            return {
+                "kind": "legacy",
+                "col": rng.randrange(0, min(cols, limit)),
+                "row": rng.randrange(0, min(rows, limit)),
+                "encoding": enc,
+                "button": rng.choice([0, 1, 2, 64, 65]),
+            }
         if roll < 0.94:
-            return {"kind": "arrow", "name": rng.choice(["up", "down", "left", "right"]), "application": rng.random() < 0.7}
+            return {
+                "kind": "arrow",
+                "name": rng.choice(["up", "down", "left", "right"]),
+                "application": rng.random() < 0.7,
+            }
         return {"kind": "wait", "seconds": round(rng.uniform(0.2, 1.5), 2)}
 
     if not explore:
@@ -168,7 +196,9 @@ def unstick(term: Terminal, base: tuple[int, int]) -> None:
         term.send_keys("escape")
         term.settle(0.3)
     if rules.classify(term.screen_text()) != "dashboard":
-        raise Failure("dead-end", f"three Escapes did not return to the dashboard (screen: {rules.classify(term.screen_text())})")
+        raise Failure(
+            "dead-end", f"three Escapes did not return to the dashboard (screen: {rules.classify(term.screen_text())})"
+        )
 
 
 def save_failure(out: Path, seed: int, steps: list[dict], failure: Failure, term: Terminal | None, args) -> Path:
@@ -180,9 +210,21 @@ def save_failure(out: Path, seed: int, steps: list[dict], failure: Failure, term
     screen = term.screen_text() if term else ""
     log = target.log_text(term) if term else ""
     raw = term.end() if term else ""
-    (folder / "failure.json").write_text(json.dumps({
-        "seed": seed, "kind": failure.kind, "detail": failure.detail, "target": target.TARGET, "replay": args.data,
-        "size": list(args.size), "steps": steps}, indent=1), encoding="utf-8")
+    (folder / "failure.json").write_text(
+        json.dumps(
+            {
+                "seed": seed,
+                "kind": failure.kind,
+                "detail": failure.detail,
+                "target": target.TARGET,
+                "replay": args.data,
+                "size": list(args.size),
+                "steps": steps,
+            },
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
     (folder / "screen.txt").write_text(screen, encoding="utf-8")
     (folder / "app.log").write_text(log, encoding="utf-8")
     (folder / "raw.txt").write_text(raw[-400_000:], encoding="utf-8", errors="replace")
@@ -220,18 +262,19 @@ def walk(args, steps_in: list[dict] | None = None) -> int:
                         break
                     step = todo.pop(0) if steps_in is not None else choose(rng, term, counts, args.explore)
                     sig = rules.classify(term.screen_text())
-                    counts[(sig, step["kind"], step.get("key", step.get("button", "")))] = \
-                        counts.get((sig, step["kind"], step.get("key", step.get("button", "")))), 0) + 1 if False else \
-                        counts.get((sig, step["kind"], step.get("key", step.get("button", ""))), 0) + 1
+                    slot = (sig, step["kind"], step.get("key", step.get("button", "")))
+                    counts[slot] = counts.get(slot, 0) + 1
                     steps.append(step)
                     apply(term, step)
+                    if is_quit(step):
+                        term.wait_exit(1.5)  # the exit is not instant; the next step must not be blamed for it
                     if args.human:
                         time.sleep(min(rng.lognormvariate(-0.4, 0.5), 3.0))
                     term.settle(0.15, timeout=3.0)
                     n += 1
                     if not term.alive():
                         code = term.exit_code()
-                        if code not in (0, None) or not is_quit(step) and step["kind"] != "key":
+                        if code not in (0, None) or (not is_quit(step) and step["kind"] != "key"):
                             raise Failure("process-died", f"exit code {code} after {step}")
                         leftover = [m for m in term.modes_left_on() if m != "focus_events"]
                         if leftover:

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Self
 
@@ -27,14 +27,18 @@ JMA = "jma.go.jp/bosai/tsunami/data/list.json"
 def empty_usgs(ts: str) -> str:
     """An empty but valid USGS feed made at the record's own time (one made in the replay's future is not believed)."""
     ms = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
-    return json.dumps({"type": "FeatureCollection", "metadata": {"generated": ms, "status": 200, "count": 0}, "features": []})
+    return json.dumps(
+        {"type": "FeatureCollection", "metadata": {"generated": ms, "status": 200, "count": 0}, "features": []}
+    )
 
 
 EMPTY_ATOM = (
     '<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">'
     "<id>urn:uuid:empty</id><title>none</title><updated>2025-07-29T23:00:00Z</updated></feed>"
 )
-EMPTY_NWS = json.dumps({"type": "FeatureCollection", "features": [], "title": "current watches, warnings, and advisories"})
+EMPTY_NWS = json.dumps(
+    {"type": "FeatureCollection", "features": [], "title": "current watches, warnings, and advisories"}
+)
 
 
 class Rec:
@@ -44,7 +48,9 @@ class Rec:
     @classmethod
     def load(cls, path: Path) -> Self:
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        for r in rows:  # the shipped recordings predate the app asking NWS for status=actual; without it every replay 404s
+        for (
+            r
+        ) in rows:  # the shipped recordings predate the app asking NWS for status=actual; without it every replay 404s
             if NWS in r["url"] and "status=actual" not in r["url"]:
                 r["url"] += "&status=actual"
         return cls(rows)
@@ -124,11 +130,15 @@ def warning_with_expiry(expires: str) -> Rec:
     rec = Rec.kamchatka()
     warning = "kam001/2/WEAK51"
     atom = next(r for r in rec.matching("PAAQAtom.xml") if warning in r["body"] and "kam001/3/" not in r["body"])
-    entry = re.search(r"<entry>(?:(?!</entry>).)*?" + re.escape(warning) + r"(?:(?!</entry>).)*?</entry>", atom["body"], re.S)
+    entry = re.search(
+        r"<entry>(?:(?!</entry>).)*?" + re.escape(warning) + r"(?:(?!</entry>).)*?</entry>", atom["body"], re.S
+    )
     assert entry, "the Warning entry is not in the Atom record"
     atom["body"] = atom["body"].split("<entry>")[0] + entry.group(0) + "</feed>"
     atom["ts"] = "2025-07-29T23:52:00Z"
-    keep = [r for r in rec.rows if "earthquake.usgs.gov" in r["url"] or "jma.go.jp" in r["url"] or "PHEBAtom" in r["url"]]
+    keep = [
+        r for r in rec.rows if "earthquake.usgs.gov" in r["url"] or "jma.go.jp" in r["url"] or "PHEBAtom" in r["url"]
+    ]
     keep += [atom] + [r for r in rec.rows if warning in r["url"]]
     nws = rec.matching(NWS)[0]
     nws["body"] = EMPTY_NWS
@@ -137,5 +147,7 @@ def warning_with_expiry(expires: str) -> Rec:
         if warning in r["url"]:
             r["ts"] = "2025-07-29T23:52:00Z"
     rec.rows = keep
-    rec.body("kam001/2/WEAK51/PAAQCAP.xml", lambda b: re.sub(r"<expires>[^<]*</expires>", f"<expires>{expires}</expires>", b))
+    rec.body(
+        "kam001/2/WEAK51/PAAQCAP.xml", lambda b: re.sub(r"<expires>[^<]*</expires>", f"<expires>{expires}</expires>", b)
+    )
     return rec

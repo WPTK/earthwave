@@ -113,9 +113,11 @@ def test_legacy_encodings_are_the_old_bytes(tmp_path: Path) -> None:
         sent_urxvt = term.legacy_mouse(10, 5, encoding="urxvt")
         term.legacy_mouse(9, 4, button=64)
         text = read_log(log)
-        with pytest.raises(ValueError, match="222"):
+        with pytest.raises(ValueError, match="limited"):
             term.legacy_mouse(250, 3)
-    assert sent_x10 == "\x1b[M" + chr(32) + chr(32 + 11) + chr(32 + 6) + "\x1b[M" + chr(32 + 3) + chr(32 + 11) + chr(32 + 6)
+    assert sent_x10 == "\x1b[M" + chr(32) + chr(32 + 11) + chr(32 + 6) + "\x1b[M" + chr(32 + 3) + chr(32 + 11) + chr(
+        32 + 6
+    )
     assert sent_urxvt == "\x1b[32;11;6M\x1b[35;11;6M"
     assert "<ESC>[M" in text and "<ESC>[32;11;6M" in text
 

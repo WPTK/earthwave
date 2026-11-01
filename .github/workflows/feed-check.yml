@@ -4,7 +4,7 @@ name: Feed check
 # (scripts/check_feeds.py). Never part of PR CI: it talks to real servers.
 on:
   schedule:
-    - cron: "17 11 * * *"
+    - cron: "47 12 * * *"
   workflow_dispatch:
 
 permissions: {}

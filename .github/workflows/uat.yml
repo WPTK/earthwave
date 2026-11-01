@@ -1,0 +1,55 @@
+name: UAT
+
+# Real-input UAT on the source tree (journeys, gestures, a short seeded walk) on Windows and Linux. Manual, or on the
+# commit being tagged. The push trigger on uat/phase3 exists to validate this workflow and is removed after the merge.
+# Slots, not built: macOS cell (no runner), the planted-mutant run (scripts/uat/mutants.py --run all) and the
+# re-injection of closed bugs, both of which run only on the commit being tagged.
+on:
+  workflow_dispatch:
+  push:
+    branches: [uat/phase3]
+    paths: [".github/workflows/uat.yml", "tests/uat/**", "tests/uat_kit/**", "scripts/uat/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  realinput:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        # macos: slot only, not built
+    env:
+      UAT_REAL: "1"
+      UAT_DISPOSABLE: "1"
+      UAT_ALLOW_BROWSER: "1"
+      UAT_OUT: uat-out
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Journeys and gesture self-tests
+        run: python -m pytest tests/uat/test_journeys.py tests/uat_kit -p no:xdist -q --tb=short -rxX
+      - name: Gestures on the dashboard and detail screens
+        run: python -m pytest tests/uat/test_gestures.py -k "dashboard or detail or legacy or application or unbound" -p no:xdist -q --tb=short
+      - name: Seeded walk, 5 minutes
+        run: python scripts/uat/walk.py --seed 11 --minutes 5 --out uat-out/walk
+      - name: Xfail markers name open issues
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/uat/check_xfails.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uat-${{ matrix.os }}
+          path: uat-out
+          if-no-files-found: ignore
+          retention-days: 14

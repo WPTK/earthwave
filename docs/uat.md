@@ -86,3 +86,24 @@ sixel drawing (#238), upgrade from 0.1.0 (#239).
 The suite was built on one Windows 11 machine. Not run: macOS, real Linux terminals (WSL and the Linux release tarball
 were not exercised by this suite), tmux, SSH, legacy conhost, and the pixel output of sixel in a real Windows
 Terminal. The real-input run goes through ConPTY, which answers no sixel query, so it covers the braille path only.
+
+## Phase 3: journeys, gestures, walker, live job
+
+Run with `UAT_REAL=1` (plain `pytest` skips them); the target is the source tree, or the release exe when
+`EARTHWAVE_EXE` is set. Windows config and history are only touched where `UAT_DISPOSABLE=1`.
+
+| Item | Where |
+| --- | --- |
+| J1 first run and clean exit, J5/J5b navigate, click, wheel, detail, J6 filters, J7 search, J8 sort, J9 map, J10 help, J12 resize, J13 tsunami UI, J16 quiet day, J17 erroring feeds, J20 expiry before issue time (#245), J4 browser key with a console browser (#246, POSIX), J21 log clean | `tests/uat/test_journeys.py` |
+| J2/J3 README install lines, #224, #225 | `tests/uat/test_install.py` (`UAT_INSTALL=1`, `UAT_PY312`) |
+| Gesture table: buttons, modifiers, wheel, hover, drag, X10/urxvt mouse, application-cursor arrows, paste, unbound keys, across six screens | `tests/uat/test_gestures.py`, helpers in `tests/uat_kit/terminal.py` |
+| Screen rules (traceback, U+FFFD, markup leak, status count vs rows, "feeds ok" beside a problem, ...) | `tests/uat/rules.py` |
+| Seeded random walker, `--replay` of a failure | `scripts/uat/walk.py` |
+| Known defects as strict xfails; open-issue check | `tests/uat/known.py`, `scripts/uat/check_xfails.py` |
+| Daily live run, Windows 08:00 UTC and Linux 11:00 UTC | `.github/workflows/uat-live-daily.yml`, `tests/uat/test_live.py` |
+| Real-input run in CI | `.github/workflows/uat.yml` |
+| Seeded mutants (21 defined, bindings first) | `scripts/uat/mutants.py`; runs only on the commit being tagged |
+
+Slots, not built: macOS cells; the 40 planted mutants beyond the 21 here; re-injection of closed bugs; property tests;
+fuzz; the frame viewer; S7 sixel selection on Windows (ConPTY answers DA1 itself).
+`scripts/uat/locks.py` gained an idle guard for the desktop lock (300 s by GetLastInputInfo, rechecked every 60 s).

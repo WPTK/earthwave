@@ -11,7 +11,9 @@ import re
 
 SCREENS = ("too_small", "help", "filters", "detail", "tsunami", "history", "observations", "dashboard", "unknown")
 
-_LEAK = re.compile(r"\[/?(?:b|i|u|dim|bold|italic|reverse|red|green|yellow|orange|cyan|white|grey\d*|\$[\w-]+)\]|\[@click|link=")
+_LEAK = re.compile(
+    r"\[/?(?:b|i|u|dim|bold|italic|reverse|red|green|yellow|orange|cyan|white|grey\d*|\$[\w-]+)\]|\[@click|link="
+)
 _PLACEHOLDER = re.compile(r"\b(?:None|nan|NaN|inf)\b|\{[a-z_]+[^}]*\}|<(?:object|bound method) ")
 _ROW = re.compile(r"^[▌> ]\s*\d+[smhd]\s+\d\.\d")
 

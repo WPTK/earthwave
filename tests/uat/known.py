@@ -13,5 +13,11 @@ from __future__ import annotations
 import pytest
 
 
+def unfiled(why: str):
+    """A defect observed by this suite that has no issue yet (UAT is report-only; the report lists it with its repro).
+    ``check_xfails.py`` prints these so they are not forgotten; once an issue exists the marker becomes ``known``."""
+    return pytest.mark.xfail(strict=True, reason=f"UNFILED: {why}")
+
+
 def known(issue: int, why: str, *, strict: bool = True):
     return pytest.mark.xfail(strict=strict, reason=f"#{issue}: {why}")

@@ -216,7 +216,11 @@ class Terminal:
         self._raw = ""
         # a trace holds an asciicast (session.cast) of everything the program wrote, from the first byte; tui-test
         # writes it when the session closes, so the raw stream is readable after close(), not while the program runs
-        self._cm = TuiTest.ephemeral(trace=TraceOptions(mode="on", directory=str(self._trace_dir))) if trace else TuiTest.ephemeral()
+        self._cm = (
+            TuiTest.ephemeral(trace=TraceOptions(mode="on", directory=str(self._trace_dir)))
+            if trace
+            else TuiTest.ephemeral()
+        )
         self._t: Any = self._run(self._cm.__aenter__())
         try:
             self._run(self._t.run(argv[0], *argv[1:], cols=cols, rows=rows, cwd=str(cwd or self._dir), env=child_env))
@@ -316,7 +320,9 @@ class Terminal:
         for key in keys:
             self.send_raw(KEYS.get(key.lower(), key))
             time.sleep(0.1)  # a person is never faster; lets the app handle one key before the next
-        time.sleep(0.3)  # and the last key is drawn before the caller looks (Textual repaints a few frames later; a lone
+        time.sleep(
+            0.3
+        )  # and the last key is drawn before the caller looks (Textual repaints a few frames later; a lone
         # Escape is held back by the parser until it is sure no sequence follows, so a following key must not race it)
 
     def _approach(self, col: int, row: int) -> None:
@@ -388,7 +394,9 @@ class Terminal:
             # 32 + button, so that report is written directly.
             self.send_raw(f"\x1b[<{32 + {'left': 0, 'middle': 1, 'right': 2}[button]};{x + 1};{y + 1}M")
             time.sleep(0.04)
-        self._run(self._t.mouse.up(*end, button=button))
+        self._run(
+            self._t.mouse.up(max(end[0], 0), max(end[1], 0), button=button)
+        )  # cells are never negative on the wire
         time.sleep(0.12)
 
     def mouse_down(self, col: int, row: int, *, button: str = "left") -> None:
@@ -409,8 +417,10 @@ class Terminal:
 
         def one(code: int) -> str:
             if encoding in ("x10", "normal", "1000"):
-                if x > 222 or y > 222:
-                    raise ValueError("X10 mouse encoding cannot address past 222")
+                if x > 95 or y > 95:
+                    # X10 can address 223 cells, but past 95 the coordinate byte is above 0x7F, which cannot be written
+                    # through tui-test (text is UTF-8 encoded: 0x85 would go out as C2 85). Not a real report then.
+                    raise ValueError("X10 mouse encoding is limited to the first 95 columns/rows by this kit")
                 return f"{ESC}[M{chr(32 + code)}{chr(32 + x)}{chr(32 + y)}"
             if encoding in ("urxvt", "1015"):
                 return f"{ESC}[{32 + code};{x};{y}M"
@@ -419,8 +429,7 @@ class Terminal:
         sent = one(button)
         if release and button < 64:
             sent += one(3)  # X10 has no per-button release: button code 3 means 'released'
-        self._approach(col, row)
-        self.send_raw(sent)
+        self.send_raw(sent)  # no SGR motion first: a terminal that speaks only the old encoding sends only the old one
         time.sleep(0.15)
         return sent
 
