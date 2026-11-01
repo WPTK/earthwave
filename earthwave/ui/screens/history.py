@@ -39,7 +39,7 @@ def stats_text(quakes: list[Earthquake], alert_levels: dict[str, int]) -> str:
         by_severity = sorted(alert_levels.items(), key=lambda kv: -levels.RANK.get(kv[0], -1))
         text += "; tsunami alerts: " + ", ".join(f"{n} {lvl.title()}" for lvl, n in by_severity)
     else:
-        text += "; no tsunami alerts"
+        text += "; no tsunami alerts recorded"
     return text
 
 
