@@ -788,12 +788,17 @@ class MapPanel(Widget, can_focus=True):
         self._scene = scene
         if scene is None or scene in self._images:
             return True
-        if scene != self._building:
-            self._building = scene
-            self.run_worker(
-                partial(self._build, scene), thread=True, group="sixel", exclusive=True, exit_on_error=False
-            )
+        self._start_build()
         return False
+
+    def _start_build(self) -> None:
+        """Encode the wanted picture, one at a time: while a build runs, newer wishes only replace `_scene` and the
+        latest one is built when it finishes, so holding a key that moves the cursor never piles up threads."""
+        scene = self._scene
+        if self._building is not None or scene is None or scene in self._images:
+            return
+        self._building = scene
+        self.run_worker(partial(self._build, scene), thread=True, group="sixel", exit_on_error=False)
 
     def _build(self, scene: Scene) -> None:
         """Worker thread: rasterise and encode `scene`, then hand it back to the event loop."""
@@ -807,23 +812,24 @@ class MapPanel(Widget, can_focus=True):
         self._images[scene] = data
         while len(self._images) > IMAGE_CACHE:
             self._images.popitem(last=False)
-        if self._building == scene:
-            self._building = None
+        self._building = None
+        self._start_build()  # the cursor moved on while this one was being drawn: build what is wanted now
         if scene == self._scene:
             if self._overwrite():
                 return
             super().refresh()  # repaint the cells, the image follows in the same update
 
     def _overwrite(self) -> bool:
-        """Put the new picture over the old one in place, in a synchronized update of its own. The cells under the old
-        picture are still blank and untouched, so nothing needs repainting and the map never shows an empty frame
-        between the two pictures (a pan or zoom). False when the picture is not on the terminal to start with."""
+        """Put the wanted picture over the one on the terminal in place, in a synchronized update of its own. The cells
+        under the old picture are still blank and untouched, so nothing needs repainting and the map never shows an
+        empty frame between the two pictures (a pan, a zoom, a marker pulse). False, and nothing written, when there is
+        no untouched picture on the terminal to go over."""
         driver = getattr(self.app, "_driver", None)
-        if driver is None:
+        if driver is None or self._on_terminal is None or self._stale:
             return False
-        driver.write("\x1b[?2026h")
+        driver.write("[?2026h")
         self.emit_image(driver.write)
-        driver.write("\x1b[?2026l")
+        driver.write("[?2026l")
         return self._on_terminal == self._scene and not self._stale
 
     def invalidate_image(self) -> None:
@@ -867,10 +873,10 @@ class MapPanel(Widget, can_focus=True):
         holes = self._toast_holes(region)
         if holes != self._holes:
             # a toast came or went over the image: the picture is wanted with (or without) a hole there. Writing the
-            # old one now would paint over the toast, so wait for the repaint that follows
+            # old one would paint over the toast. If the one wanted now is already encoded it goes out in this same
+            # update (no gap where the cells are blank); otherwise it is being built and follows when it is ready
             self._holes = holes
-            self.call_later(self.refresh)
-            return
+            self._sync_image()
         scene = self._scene
         data = self._images.get(scene) if scene is not None else None
         if data is None or (not self._stale and self._on_terminal == scene):
@@ -933,9 +939,10 @@ class MapPanel(Widget, can_focus=True):
     def refresh(self, *regions, **kwargs):
         self._frame = None
         self._spare = None
-        if self._sixel and not regions and not kwargs and not self._sync_image():
-            # the picture is unchanged (or still being drawn): leave the one on the terminal alone, and repaint only
-            # the text rows that changed (the legend and list under a world map, and the rows they leave or take)
+        if self._sixel and not regions and not kwargs and (not self._sync_image() or self._overwrite()):
+            # the picture is unchanged, still being drawn, or has just gone over the old one in place: leave the cells
+            # under it alone, and repaint only the text rows that changed (the legend and list under a world map, and
+            # the rows they leave or take)
             self._repaint_text_rows()
             return self
         return super().refresh(*regions, **kwargs)

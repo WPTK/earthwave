@@ -241,7 +241,7 @@ async def test_image_not_written_under_another_screen():
         assert writes == []
         assert panel._on_terminal is None
         await pilot.press("escape")
-        await pilot.pause()
+        await pilot.pause(0.2)  # a lone Escape is held a moment in case it begins a terminal reply
         await wait_for(lambda: panel._scene is not None and panel._images.get(panel._scene) is not None)
         panel.emit_image(writes.append)  # back on top: on the terminal again (the real overlay may have drawn it first)
         assert panel._on_terminal == panel._scene
@@ -275,8 +275,13 @@ async def test_toast_over_the_image_gets_a_hole_in_the_picture():
         assert writes and panel._on_terminal == panel._scene
         for toast in list(app.screen.query("Toast")):
             await toast.remove()
+        writes.clear()
+        panel._stale = True  # the repaint that took the toast away blanked the cells under the picture too
         panel.emit_image(writes.append)
-        await wait_for(lambda: panel._holes == () and panel._scene.holes == ())
+        # the picture without the hole was encoded before the toast came: it goes out in this very update, so the
+        # cells are never left blank waiting for a later repaint
+        assert panel._holes == () and panel._scene.holes == () and writes
+        assert panel._on_terminal == panel._scene
 
 
 async def test_write_failure_falls_back_to_braille():
@@ -308,155 +313,135 @@ async def test_sixel_overlay_registered_with_the_app():
 # --- cell size re-probe after a resize ------------------------------------------------------------------------------
 
 
-def feed_all(reply, text):
-    return [reply.feed(c) for c in text]
+def tokens(text):
+    """The key presses Textual makes of terminal output it cannot name: Escape, then one key per character."""
+    names = {"?": "question_mark", ";": "semicolon", "[": "left_square_bracket", "^": "circumflex_accent"}
+    return [("escape", "") if c == "" else (names.get(c, c), c) for c in text]
 
 
-def test_world_map_keeps_equal_scale_and_leaves_the_rest_for_text():
-    from earthwave.ui.widgets.map_panel import MapModel, world_rows
-
-    model = MapModel()
-    model.resize(70, 31)
-    assert model.map_rows == world_rows(70) < 31
-    view = model.view()
-    assert view.lat1 - view.lat0 >= 180  # the whole globe, top-aligned at equal scale
-    model.resize(70, world_rows(70) + 1)  # one spare row is too few: the map takes everything, as before
-    assert model.map_rows == model.rows
+def run(filter_, text):
+    released, cell = [], None
+    for token in tokens(text):
+        out, got = filter_.push(token)
+        released += out
+        cell = got or cell
+    return released, cell
 
 
-@pytest.mark.parametrize("sixel", [False, True])
-async def test_spare_rows_show_legend_then_strongest_quakes(sixel):
-    app = week_app(graphics=SIXEL) if sixel else week_app()
-    async with app.run_test(size=(200, 60)) as pilot:
+@pytest.mark.parametrize("prefix", ["", "^", ""])
+def test_reply_filter_reads_the_cell_answer_with_or_without_the_escape(prefix):
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    released, cell = run(reply, f"{prefix}[6;24;12t")
+    assert released == [] and cell == (12, 24) and reply.held == []
+
+
+@pytest.mark.parametrize("text", ["[?61;4;21c", "[?64;1;2;6;9;15;18;21;22c", "[4;800;1600t", "[6;1;1t"])
+def test_reply_filter_swallows_every_answer_we_ask_for(text):
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    released, cell = run(ReplyFilter(), text)
+    assert released == [] and cell is None
+
+
+@pytest.mark.parametrize("typed", ["[", "^", "[5", "[5;", "^[", "[5x", "[?", "5", "t", "?", "^5t", "[99999999999t"])
+def test_reply_filter_gives_plain_keys_back_in_order(typed):
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    released, cell = run(reply, typed)
+    released += reply.flush()  # the user stopped typing: whatever is still held is theirs
+    assert [char for _, char in released] == list(typed) and cell is None
+
+
+def test_reply_filter_hands_a_lone_escape_back():
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    assert reply.push(("escape", "")) == ([], None)
+    assert reply.flush() == [("escape", "")]
+
+
+async def late_reply(pilot, app, text, wait=0.2):
+    from textual import events
+
+    for key, char in tokens(text):
+        app.post_message(events.Key(key, char))
+    await pilot.pause(wait)
+
+
+async def test_late_probe_reply_fires_no_binding():
+    """The startup probe timed out (a slow link) and chose braille; its answer then comes in as key presses. It must
+    not open Tsunami (t) or Help (?), whatever its terminator and however late."""
+    app = week_app(graphics=GraphicsChoice("braille", None, "no reply to the terminal probe", probed=True))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        depth = len(app.screen_stack)
+        await late_reply(pilot, app, "[?61;4;21c")
+        await late_reply(pilot, app, "[6;24;12t")
+        await late_reply(pilot, app, "[4;800;1600t")
+        assert len(app.screen_stack) == depth
+        assert app.graphics.renderer == "braille"  # a late startup reply is dropped, the choice stands
+
+
+async def test_late_cell_reply_updates_the_cell_size_of_a_sixel_map():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
         panel = app.screen.query_one(MapPanel)
         await pilot.pause()
-        strips = panel._spare_strips()
-        assert strips and "7+" in strips[0].text
-        for label in ("<3", "3-4.4", "4.5-5.4", "5.5-6.4", "6.5-6.9", "7+"):  # the real bands of mag_color, no gaps
-            assert label in strips[0].text
-        background = {seg.style.bgcolor for strip in strips for seg in strip if seg.style}
-        assert len(background) == 1 and None not in background  # text and padding share the panel's colour
-        assert all(strip.cell_length == panel.size.width for strip in strips)
-        mags = [float(s.text.split()[0][1:]) for s in strips[1:]]
-        assert mags and mags == sorted(mags, reverse=True)
-        assert panel.render_line(panel.model.map_rows).text == strips[0].text
+        depth = len(app.screen_stack)
+        await late_reply(pilot, app, "[6;24;12t", wait=0.3)  # nobody asked just now: a reply that took long
+        assert len(app.screen_stack) == depth
+        assert app.graphics.cell == (12, 24) and panel._cell == (12, 24)
 
 
-async def test_zoom_repaints_the_title_and_the_rows_the_legend_left(monkeypatch):
-    from textual.geometry import Region
-    from textual.widget import Widget
+async def test_reply_split_across_the_old_window_still_never_types():
+    from textual import events
 
     app = week_app(graphics=SIXEL)
-    async with app.run_test(size=(200, 60)) as pilot:
-        panel = app.screen.query_one(MapPanel)
-        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+    async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        old_top, rows, gutter = panel.model.map_rows, panel.model.rows, panel.gutter
-        assert old_top < rows and "7+" in panel._spare_strips()[0].text
-        calls: list[Region] = []
-        real = Widget.refresh
-
-        def spy(self, *regions, **kwargs):
-            if self is panel:
-                calls.extend(regions)
-            return real(self, *regions, **kwargs)
-
-        monkeypatch.setattr(Widget, "refresh", spy)
-        panel.action_cycle_zoom()
-        await pilot.pause()
-        assert panel.model.map_rows == panel.model.rows  # a zoomed view takes the whole panel
-        assert panel.border_title.endswith(panel.model.shown) and "world" not in panel.border_title
-        # the cells are not repainted as a whole (the picture stays), so the title row and the rows that held the
-        # legend must be repainted on their own
-        # (regions are content-relative, so the border row above the content is at minus the gutter)
-        assert any(r.y == -gutter.top and r.height == 1 and r.width == panel.outer_size.width for r in calls)
-        assert any(r.y <= old_top and r.bottom >= rows for r in calls)
-        assert not any("7+" in panel.render_line(y).text for y in range(panel.size.height))
+        depth = len(app.screen_stack)
+        for key, char in tokens("[?6"):
+            app.post_message(events.Key(key, char))
+        await pilot.pause(0.02)  # a gap shorter than the hold: the rest follows
+        for key, char in tokens("1;4c"):
+            app.post_message(events.Key(key, char))
+        await pilot.pause(0.2)
+        assert len(app.screen_stack) == depth
 
 
-async def test_filter_change_repaints_the_list_under_the_map(monkeypatch):
-    from textual.widget import Widget
-
+async def test_typed_brackets_and_digits_get_through_the_filter():
     app = week_app(graphics=SIXEL)
-    async with app.run_test(size=(200, 60)) as pilot:
-        panel = app.screen.query_one(MapPanel)
-        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+    async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        before = panel._spare_strips()[1].text
-        calls = []
-        real = Widget.refresh
-
-        def spy(self, *regions, **kwargs):
-            if self is panel:
-                calls.extend(regions)
-            return real(self, *regions, **kwargs)
-
-        monkeypatch.setattr(Widget, "refresh", spy)
-        panel.set_quakes(sorted(panel.model.quakes, key=lambda q: q.mag)[:5], None)  # only the weakest five remain
-        await pilot.pause()
-        assert panel._spare_strips()[1].text != before
-        assert any(r.y >= panel.model.map_rows for r in calls)  # the text rows, not the picture
-        assert panel.border_title.endswith(panel.model.shown)
-
-
-def test_cell_reply_reads_the_answer_with_or_without_the_escape():
-    from earthwave.ui.graphics.probe import CellReply
-
-    for prefix in ("\x1b", "^", ""):
-        reply = CellReply()
-        results = feed_all(reply, f"{prefix}[6;24;12t")
-        assert all(consumed for consumed, _ in results)
-        assert results[-1][1] == (12, 24)
-        assert reply.replies == 1
-
-
-def test_cell_reply_lets_other_keys_through():
-    from earthwave.ui.graphics.probe import CellReply
-
-    reply = CellReply()
-    assert reply.feed("z") == (False, None)
-    assert reply.feed("t") == (False, None)
-    reply.feed("[")
-    reply.feed("5")
-    assert reply.feed("x") == (False, None)  # not a reply: the state is dropped and the key is typed
-    assert reply.feed("z") == (False, None)
-
-
-def test_cell_reply_rejects_absurd_sizes_but_counts_the_reply():
-    from earthwave.ui.graphics.probe import CellReply
-
-    reply = CellReply()
-    results = feed_all(reply, "[6;1;1t")
-    assert results[-1] == (True, None)
-    assert reply.replies == 1
+        depth = len(app.screen_stack)
+        await pilot.press(
+            "[", "5", "x", "^", "question_mark"
+        )  # not a reply: the keys are typed, and `?` still opens Help
+        await pilot.pause(0.2)
+        assert len(app.screen_stack) > depth
 
 
 async def test_resize_probe_updates_the_cell_size_and_eats_the_reply():
-    from textual import events
-
     app = week_app(graphics=SIXEL)
     async with app.run_test(size=(160, 40)) as pilot:
         panel = app.screen.query_one(MapPanel)
         await pilot.pause()
         if panel._reprobe is not None:  # the start-up resize arms its own re-probe; on a slow runner it fires mid-test
             panel._reprobe.stop()
-        app._cell_reply, app._cell_pending = None, 0
         app.request_cell_probe()
-        assert app._cell_pending == 1
-        for char in "[6;24;12t":
-            await app.on_event(events.Key("x", char))
-        await pilot.pause()
+        await late_reply(pilot, app, "[6;24;12t")
         assert app.graphics.cell == (12, 24)
         assert panel._cell == (12, 24)
-        assert app._cell_reply is None and app._cell_pending == 0
 
 
 async def test_no_probe_for_braille():
     app = week_app()
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.request_cell_probe()
-        assert app._cell_reply is None
+        app.request_cell_probe()  # nothing is written, nothing waits
 
 
 def test_margin_beyond_the_poles():
@@ -467,3 +452,142 @@ def test_margin_beyond_the_poles():
     assert pixels[:100] == bytes([MARGIN]) * 100 and pixels[-100:] == bytes([MARGIN]) * 100
     assert pixels[37 * 100 + 50] != MARGIN  # the middle is the globe
     assert MARGIN not in render_base(Viewport(-180.0, -90.0, 180.0, 90.0), 100, 50)
+
+
+async def settle(app, panel):
+    """Wait for the wanted picture to be encoded and, as the app's overlay does after every screen update (not driven
+    in a headless run), write it if it is not on the terminal yet."""
+    await wait_for(lambda: panel._scene in panel._images)
+    panel.emit_image(app._driver.write)
+    await wait_for(lambda: panel._on_terminal == panel._scene)
+
+
+async def test_zoom_cursor_move_and_back_leaves_no_zoom_image_rows_under_the_legend(monkeypatch):
+    """A taller zoom picture, then the shorter world picture over it: the rows below the world picture must have been
+    repainted (as legend and list), so no row of the zoom picture survives there."""
+    import re
+
+    from textual.widget import Widget
+
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(200, 60)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
+        cell_h = panel._cell[1]
+        image_rows: set[int] = set()  # the terminal's rows that still hold some of a picture
+        real_refresh = Widget.refresh
+
+        def spy(self, *regions, **kwargs):
+            if self is panel:
+                if regions:
+                    for r in regions:
+                        image_rows.difference_update(range(r.y, r.bottom))
+                else:
+                    image_rows.clear()
+            return real_refresh(self, *regions, **kwargs)
+
+        monkeypatch.setattr(Widget, "refresh", spy)
+        real_write = app._driver.write
+
+        def write(text):
+            if m := re.search(r'"1;1;\d+;(\d+)', text):
+                image_rows.update(range(-(-int(m.group(1)) // cell_h)))
+            return real_write(text)
+
+        app._driver.write = write
+
+        async def settled():
+            await settle(app, panel)
+
+        for _ in range(2):  # world -> wide -> region
+            panel.action_cycle_zoom()
+            await settled()
+        quake = next(q for q in panel.model.quakes if q != panel.model.selected)
+        panel.select(quake)  # the cursor moves while zoomed
+        await settled()
+        panel.action_cycle_zoom()  # close
+        await settled()
+        panel.action_cycle_zoom()  # back to world, a picture nobody has built for this cursor
+        await settled()
+        await pilot.pause()
+        assert panel.model.map_rows < panel.model.rows
+        assert max(image_rows) < panel.model.map_rows, sorted(image_rows)
+
+
+async def test_held_cursor_key_builds_one_picture_at_a_time_and_ends_on_the_latest(monkeypatch):
+    """Every cursor move wants a new picture; the encoder runs on one thread at a time, the pictures nobody waits for
+    any more are never built, and the last one wanted is the one that ends up on the terminal."""
+    import threading
+    import time
+
+    from earthwave.ui.widgets import map_panel
+
+    running = peak = 0
+    built: list[int] = []
+    lock = threading.Lock()
+    real = map_panel.render_smooth
+
+    def slow(scene):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.05)
+        try:
+            return real(scene)
+        finally:
+            with lock:
+                running -= 1
+                built.append(1)
+
+    monkeypatch.setattr(map_panel, "render_smooth", slow)
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
+        built.clear()
+        quakes = list(panel.model.quakes)
+        for quake in quakes[:12]:
+            panel.select(quake)
+            await pilot.pause(0.01)
+        await settle(app, panel)
+        assert panel.model.selected == quakes[11]
+        assert peak == 1
+        assert len(built) < 12  # the pictures in between were dropped
+
+
+async def test_switching_between_cached_pictures_does_not_repaint_the_cells_under_them(monkeypatch):
+    """A marker pulse or a cursor move that lands on a picture already encoded goes over the old one in place; a
+    repaint of the cells under the picture would blank the map for a moment (the idle flicker seen in Windows
+    Terminal)."""
+    from textual.widget import Widget
+
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
+        first, second = list(panel.model.quakes)[:2]
+        for quake in (first, second, first):  # both pictures encoded and cached
+            panel.select(quake)
+            await settle(app, panel)
+        await pilot.pause()
+        panel.emit_image(app._driver.write)  # the overlay's write after that last repaint
+        assert not panel._stale
+        wanted = panel._scene
+        calls, writes = [], []
+        real = Widget.refresh
+        monkeypatch.setattr(
+            Widget,
+            "refresh",
+            lambda self, *a, **k: (calls.append(a) if self is panel else None, real(self, *a, **k))[1],
+        )
+        real_write = app._driver.write
+        app._driver.write = lambda text: (writes.append(text), real_write(text))[1]
+        panel.select(second)  # cached
+        await pilot.pause()
+        assert panel._scene != wanted and panel._on_terminal == panel._scene
+        assert any("\x1bP" in w for w in writes)  # the new picture went out
+        assert not any(a == () for a in calls)  # and no repaint of the whole panel came with it

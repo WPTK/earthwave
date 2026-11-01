@@ -44,6 +44,7 @@ class GraphicsChoice:
     renderer: str  # "braille" | "sixel"
     cell: tuple[int, int] | None  # pixels per cell, set for sixel
     reason: str
+    probed: bool = False  # the terminal was sent queries, so late answers may still arrive on the input stream
 
 
 BRAILLE = GraphicsChoice("braille", None, "default")
@@ -68,46 +69,49 @@ def parse_reply(text: str, cols: int = 0, rows: int = 0) -> ProbeReply | None:
     return ProbeReply(sixel, cell)
 
 
-class CellReply:
-    """Reads a `CSI 6 ; height ; width t` reply (the answer to `CSI 16 t`) one character at a time.
+class ReplyFilter:
+    """Takes the terminal's answers to our queries out of the key events, however late they come.
 
-    After startup the terminal's answers come in on Textual's own input stream, as key events (Windows Terminal
-    delivers the escape as a literal `^`), so a font-size change can be re-probed without a second reader on stdin.
-    `feed` returns (consumed, cell): `consumed` is True for characters that belong to the reply, `cell` is set when
-    the reply is complete. Anything that does not look like the reply is passed on as typed.
+    After startup the answers arrive on Textual's own input stream: Textual cannot name them, so it re-issues them as
+    key presses (`^` or Escape, `[`, `?`, digits, `c`), which would fire bindings (`t` Tsunami, `?` Help). The filter
+    holds a run of keys that could be the start of a reply (`ESC [ ? 61 ; 4 c`, `ESC [ 6 ; h ; w t`) and
+    decides on each key: a complete reply is consumed; anything that stops looking like one is handed back to be typed,
+    in order, so a plain `[`, `^` or digit the user types is never lost. A run of keys that never finishes is handed
+    back by `flush` (a lone Escape is a real Escape).
+
+    Tokens are `(key, character)` pairs. `push` returns (released tokens, cell size when the reply gave one).
     """
 
-    __slots__ = ("buffer", "replies", "state")
+    __slots__ = ("held",)
+
+    _PARTIAL = re.compile(r"(?:\x1b|\^)?(?:\[\??[\d;]{0,48})?")
+    _DONE = re.compile(r"(?:\x1b|\^)?\[\??((?:\d{1,5})(?:;\d{1,5}){0,15}|)([tc])")
 
     def __init__(self) -> None:
-        self.replies = 0  # complete replies read so far
-        self.state = 0  # 0 waiting for the escape, 1 got it, 2 reading the parameters
-        self.buffer = ""
+        self.held: list[tuple[str, str]] = []
 
-    def feed(self, char: str) -> tuple[bool, tuple[int, int] | None]:
-        if self.state == 0:
-            if char in ("^", "\x1b"):
-                self.state = 1
-                return True, None
-            if char == "[":  # the console input does not always deliver the escape itself
-                self.state, self.buffer = 2, ""
-                return True, None
-            return False, None
-        if self.state == 1:
-            if char == "[":
-                self.state = 2
-                return True, None
-            self.state = 0
-            return False, None
-        if char.isdigit() or char == ";":
-            self.buffer += char
-            return True, None
-        done = char == "t" and (m := re.fullmatch(r"6;(\d+);(\d+)", self.buffer))
-        cell = _sane(int(m.group(2)), int(m.group(1))) if done else None
-        self.state, self.buffer = 0, ""
-        if done:
-            self.replies += 1
-        return bool(done), cell
+    @staticmethod
+    def _char(token: tuple[str, str]) -> str:
+        key, char = token
+        return "\x1b" if key == "escape" else char
+
+    def push(self, token: tuple[str, str]) -> tuple[list[tuple[str, str]], tuple[int, int] | None]:
+        self.held.append(token)
+        text = "".join(self._char(t) for t in self.held)
+        if done := self._DONE.fullmatch(text):
+            self.held = []
+            params, final = done.group(1), done.group(2)
+            if final == "t" and (m := re.fullmatch(r"6;(\d+);(\d+)", params)):
+                return [], _sane(int(m.group(2)), int(m.group(1)))
+            return [], None
+        if self._PARTIAL.fullmatch(text):
+            return [], None
+        released, self.held = self.held, []
+        return released, None
+
+    def flush(self) -> list[tuple[str, str]]:
+        released, self.held = self.held, []
+        return released
 
 
 def _multiplexer(environ: Mapping[str, str]) -> bool:
@@ -140,14 +144,14 @@ def decide(
         cell = reply.cell if reply else None
         if cell is None:
             log.warning("map_renderer = sixel: no cell size reported by the terminal, assuming %dx%d", *FALLBACK_CELL)
-        return GraphicsChoice("sixel", cell or FALLBACK_CELL, "map_renderer is sixel")
+        return GraphicsChoice("sixel", cell or FALLBACK_CELL, "map_renderer is sixel", probed=True)
     if reply is None:
-        return GraphicsChoice("braille", None, "no reply to the terminal probe")
+        return GraphicsChoice("braille", None, "no reply to the terminal probe", probed=True)
     if not reply.sixel:
-        return GraphicsChoice("braille", None, "terminal does not report sixel")
+        return GraphicsChoice("braille", None, "terminal does not report sixel", probed=True)
     if reply.cell is None:
-        return GraphicsChoice("braille", None, "terminal did not report its cell size")
-    return GraphicsChoice("sixel", reply.cell, "terminal reports sixel")
+        return GraphicsChoice("braille", None, "terminal did not report its cell size", probed=True)
+    return GraphicsChoice("sixel", reply.cell, "terminal reports sixel", probed=True)
 
 
 def _query_windows(timeout: float) -> str:
