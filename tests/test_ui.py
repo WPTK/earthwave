@@ -353,7 +353,7 @@ def test_label_helpers():
         == 'M2.5+ 24h "chile"'
     )
     assert fmt_time(T0, "UTC") == "2026-10-31 12:00:00 UTC"
-    assert fmt_distance(make_quake(lat=1.0, lon=0.0), 0.0, 0.0) == "111km N"
+    assert fmt_distance(make_quake(lat=1.0, lon=0.0), 0.0, 0.0) == "111 km N"
     assert mag_color(2.9) == "grey62" and mag_color(4.5) == "green" and mag_color(7.0) == "bold red"
 
 
@@ -694,3 +694,19 @@ def test_status_bar_groups_feeds_by_state():
     lines += (SourceLine("jma", Freshness.STALE, 600), SourceLine("dart", Freshness.ERROR, None))
     plain = build_status(StatusInfo(lines, 1, 1, None, "x", 0), UNICODE).plain
     assert "stale: nws, jma" in plain and "dart failed" in plain and "usgs" not in plain
+
+
+def test_from_home_distance_keeps_a_space_before_the_unit_and_fits_its_column():
+    from earthwave.ui.widgets.quake_list import DIST_W
+
+    far = fmt_distance(make_quake(lat=-60.0, lon=179.0), 60.0, -1.0)  # nearly antipodal: the longest text there is
+    assert far.split()[1] == "km" and len(far) <= DIST_W
+    assert fmt_distance(make_quake(lat=0.0, lon=121.0), 0.0, 0.0).startswith("1345") and " km " in fmt_distance(
+        make_quake(lat=0.0, lon=121.0), 0.0, 0.0
+    )
+
+
+def test_help_explains_the_fl_flags_and_the_map_dots():
+    from earthwave.ui.screens.help import HELP_TEXT
+
+    assert "FL column" in HELP_TEXT and "PAGER" in HELP_TEXT and "map:" in HELP_TEXT

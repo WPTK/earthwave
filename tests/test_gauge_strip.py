@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from conftest import FIXTURES
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.widgets import Sparkline
 
 from earthwave.sources import coops, ndbc
@@ -241,3 +242,30 @@ async def test_strip_says_loading_while_the_tide_gauge_list_is_empty():
         await pilot.pause()
         text = " ".join(str(w.render()) for w in app.query("Static"))
         assert "list not loaded yet" in text and "No tide gauge within" not in text
+
+
+async def test_a_wide_strip_gives_the_station_name_the_free_width():
+    long_name = "KAMCHATKA PENINSULA - 240 NM SE of Petropavlovsk"
+    rows = [_row(name=long_name, newest=None, residuals=())]
+    app = StripApp(rows)
+    async with app.run_test(size=(140, 8)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        labels = [str(w.render()) for w in app.query(".gauge-label")]
+        assert any(long_name in text for text in labels), labels
+    app = StripApp(rows)
+    async with app.run_test(size=(100, 8)) as pilot:  # not enough room: the name is cut, the other columns survive
+        await pilot.pause()
+        await pilot.pause()
+        row = next(str(w.render()) for w in app.query(GaugeRow).first().query(".gauge-label"))
+        assert "…" in row and "no data" in row
+
+
+async def test_the_sparkline_reference_mark_is_not_drawn_in_the_warning_colour():
+    app = StripApp([_row(residuals=(0.0, 0.0, 0.0))])
+    async with app.run_test(size=(110, 8)) as pilot:
+        await pilot.pause()
+        spark = app.query_one(Sparkline)
+        top = spark.get_component_styles("sparkline--max-color").color
+        warning = app.theme_variables["warning"]
+        assert top != Color.parse(warning) and top != Color.parse(app.theme_variables["error"])

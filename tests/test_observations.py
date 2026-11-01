@@ -696,3 +696,17 @@ def test_a_batch_in_flight_when_a_station_leaves_the_selection_is_ignored(dclock
     late = pulse_rows(dart_rows()[-1], range(1, 40), 0.15)
     assert merge_dart(store, dclock, late) == []
     assert store.gauge_readings("46402") == [] and "46402" not in store._evaluated  # no stale mark to replay from
+
+
+async def test_header_names_a_quake_with_no_place_plainly(clock):
+    app = gauge_app(clock)
+    quake = app.store.resolve("us1")
+    app.store.merge(
+        Batch("usgs", clock.now(), quakes=(replace(quake, place="", updated=quake.updated + timedelta(minutes=1)),)),
+        clock,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        assert "M7.5 unknown location" in str(app.screen.query_one("#observations_header").render())

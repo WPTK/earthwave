@@ -18,7 +18,7 @@ from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_distance
 from earthwave.ui.theme import PAGER_COLORS, mag_color
 
-AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 11, 2
+AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 12, 2  # DIST_W fits "20015 km NNE", the longest distance on Earth
 CURSOR_BG = "#1e3a5f"
 
 

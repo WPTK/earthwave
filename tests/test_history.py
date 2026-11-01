@@ -506,3 +506,17 @@ async def test_history_shows_the_too_small_message_below_the_minimum(tmp_path):
         await pilot.resize_terminal(120, 40)
         await pilot.pause()
         assert not app.screen.has_class("too-small")
+
+
+async def test_the_history_heading_is_the_date_only(tmp_path):
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    app = _app(tmp_path / "h.sqlite", clock, offline=True)
+    app.history.start()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.pause()
+        screen = app.screen
+        await settled(pilot, app, lambda: "History" in str(screen.query_one("#history_head").render()), reload=screen)
+        head = str(screen.query_one("#history_head").render())
+        assert head == f"History {screen.day:%A %Y-%m-%d}" and ":" not in head

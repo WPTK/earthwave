@@ -22,7 +22,8 @@ HELP_TEXT = """\
   mag: grey <3, cyan <4.5, green <5.5, yellow <6.5, orange <7, red 7+
   new rows flash cyan, updated rows amber, major quakes pulse red
   tsunami: Warning red, Advisory orange, Watch yellow, others blue
-  alert bars and panel border take the same colour as the level
+  FL column: T = USGS tsunami flag; G/Y/O/R = PAGER impact, green to red
+  map: bigger dot, bigger quake (· • ● ◉, or + o O @ in ASCII)
 
 [b]Data[/b]
   Quakes: USGS (earthquake.usgs.gov), public domain.
