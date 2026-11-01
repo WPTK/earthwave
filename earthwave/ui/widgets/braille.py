@@ -3,8 +3,8 @@
 Pure Python with no Textual dependency. A `BrailleCanvas(cols, rows)` is a grid of 2x4 dots per terminal
 cell. `coastline_canvas` rasterises the bundled Natural Earth 1:10m coastline for a viewport and caches
 the result; `render_ascii` is the 1x1 cell fallback for terminals without braille glyphs.
-The data file holds three levels of detail and `level_for` picks one from the dot size of the view. `land_cells`
-fills the matching land polygons (same three levels) and reports how many dots of each cell are land.
+The data file holds three levels of detail and `level_for` picks one from the dot size of the view. `dot_raster`
+fills the matching land polygons (same three levels) on the same dot grid as the coastline, so fill and outline agree.
 """
 
 from __future__ import annotations
@@ -221,6 +221,42 @@ def _unwrap(points: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
     return out
 
 
+FILL_DOT_ROW = 1  # the dot row (0-3) of each cell that carries the land hatch
+SIMPLIFY_DOTS = 0.8  # Douglas-Peucker tolerance in dots: smooth enough that rounding to the grid leaves no jitter
+
+
+def _simplify_dots(pts: list[tuple[float, float]], eps: float = SIMPLIFY_DOTS) -> list[tuple[float, float]]:
+    """Douglas-Peucker on projected dot coordinates (iterative, keeps both ends)."""
+    n = len(pts)
+    if n < 3:
+        return pts
+    keep = [False] * n
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    eps2 = eps * eps
+    while stack:
+        a, b = stack.pop()
+        ax, ay = pts[a]
+        dx, dy = pts[b][0] - ax, pts[b][1] - ay
+        length2 = dx * dx + dy * dy
+        far, far_d = -1, eps2
+        for i in range(a + 1, b):
+            px, py = pts[i][0] - ax, pts[i][1] - ay
+            if length2 == 0:
+                d = px * px + py * py
+            else:
+                t = max(0.0, min(1.0, (px * dx + py * dy) / length2))
+                ex, ey = px - t * dx, py - t * dy
+                d = ex * ex + ey * ey
+            if d > far_d:
+                far, far_d = i, d
+        if far >= 0:
+            keep[far] = True
+            stack.append((a, far))
+            stack.append((far, b))
+    return [p for p, k in zip(pts, keep, strict=True) if k]
+
+
 def _draw_unwrapped(
     canvas: BrailleCanvas, pts: Sequence[tuple[float, float]], bounds: tuple[float, float, float, float], view: Viewport
 ) -> None:
@@ -238,9 +274,12 @@ def _draw_unwrapped(
         shift = 360.0 * k
         if hi + shift < view.lon0 or lo + shift > view.lon1:
             continue
+        dots = _simplify_dots(
+            [((lon + shift - view.lon0) / lon_span * wm, (view.lat1 - lat) / lat_span * hm) for lon, lat in pts]
+        )
         prev: tuple[int, int] | None = None
-        for lon, lat in pts:
-            cur = (round((lon + shift - view.lon0) / lon_span * wm), round((view.lat1 - lat) / lat_span * hm))
+        for fx, fy in dots:
+            cur = (round(fx), round(fy))
             if cur != prev:
                 if prev is None:
                     canvas.set(cur[0], cur[1])  # a polyline collapsing to one dot still leaves that dot
@@ -287,6 +326,7 @@ def warm_coastline(level: int | None = None) -> None:
     """Load and prepare the coastline data (call off the UI thread to avoid a first-draw stall)."""
     for index in range(len(load_levels())) if level is None else (level,):
         _prepared_coastline(index)
+        _prepared_land(index)
 
 
 @lru_cache(maxsize=16)
@@ -314,9 +354,12 @@ def _prepared_land(level: int) -> tuple[tuple[tuple[tuple[float, float], ...], t
     return tuple((ring, _bounds(ring)) for ring in load_land()[level])
 
 
-def land_spans(width: int, height: int, view: Viewport, level: int) -> Iterator[tuple[int, int, int]]:
+def land_spans(
+    width: int, height: int, view: Viewport, level: int, step: int = 1, offset: int = 0
+) -> Iterator[tuple[int, int, int]]:
     """Land as (row, first dot, last dot) spans of a `width` x `height` dot grid, by even-odd scanline fill of the
-    land rings of one level. Shared by the braille cell counts and the pixel renderer."""
+    land rings of one level, for the dot rows y with y % step == offset. Shared by the braille hatch and the pixel
+    renderer."""
     lon_scale = (width - 1) / (view.lon1 - view.lon0)
     lat_scale = (height - 1) / (view.lat1 - view.lat0)
     crossings: list[list[float]] = [[] for _ in range(height)]
@@ -338,7 +381,7 @@ def land_spans(width: int, height: int, view: Viewport, level: int) -> Iterator[
                 if first > last:
                     continue
                 x0, slope = xs[i], (xs[i + 1] - xs[i]) / (y1 - y0)
-                for y in range(first, last + 1):
+                for y in range(first + (offset - first) % step, last + 1, step):
                     crossings[y].append(x0 + (y - y0) * slope)
     for y, row in enumerate(crossings):
         if len(row) < 2:
@@ -352,15 +395,38 @@ def land_spans(width: int, height: int, view: Viewport, level: int) -> Iterator[
 
 @lru_cache(maxsize=16)
 def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
-    """Land dots per cell (0-8), row by row, from the land spans at each dot row."""
-    counts = [0] * (cols * rows)
-    for y, i0, i1 in land_spans(cols * 2, rows * 4, view, level_for(view, cols, rows)):
-        base = (y >> 2) * cols
+    """Land dots per cell as braille bits, row by row, from the land spans of dot row `FILL_DOT_ROW` of each cell: land
+    reads as a quiet horizontal hatch under the coast instead of a mesh of dots."""
+    bits = [0] * (cols * rows)
+    for y, i0, i1 in land_spans(cols * 2, rows * 4, view, level_for(view, cols, rows), 4, FILL_DOT_ROW):
+        base, dy = (y >> 2) * cols, y & 3
+        left, right = _BITS[0][dy], _BITS[1][dy]
         for col in range(i0 >> 1, (i1 >> 1) + 1):
-            counts[base + col] += min(i1, col * 2 + 1) - max(i0, col * 2) + 1
-    return bytes(min(c, 8) for c in counts)
+            bits[base + col] |= (left if i0 <= col * 2 else 0) | (right if i1 >= col * 2 + 1 else 0)
+    return bytes(bits)
 
 
-def land_cells(cols: int, rows: int, view: Viewport = WORLD) -> bytes:
-    """Land dots (0-8) per terminal cell, row-major, cached per (cols, rows, viewport)."""
-    return _land_cached(cols, rows, Viewport(*view))
+@lru_cache(maxsize=16)
+def _dot_raster_cached(cols: int, rows: int, view: Viewport) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
+    coast = _coastline_cached(cols, rows, view)
+    land = _land_cached(cols, rows, view)
+    glyphs, flags = [], []
+    for r in range(rows):
+        line, flag = [], bytearray(cols)
+        for c in range(cols):
+            bits = coast.cell_bits(c, r)
+            if not bits and (bits := land[r * cols + c]):
+                flag[c] = 1
+            line.append(chr(_BLANK + bits))
+        glyphs.append("".join(line))
+        flags.append(bytes(flag))
+    return tuple(glyphs), tuple(flags)
+
+
+def dot_raster(cols: int, rows: int, view: Viewport = WORLD) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
+    """Braille rows of land and coast on one dot grid, plus per row which cells hold land dots only.
+
+    A cell with any coast dot shows only its coast dots, so the outline is never swamped by fill; a cell without
+    shows its land dots (flag 1) or nothing. Cached per (cols, rows, viewport).
+    """
+    return _dot_raster_cached(cols, rows, Viewport(*view))

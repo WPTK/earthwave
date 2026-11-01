@@ -6,12 +6,15 @@ from pathlib import Path
 import pytest
 
 from earthwave.ui.widgets.braille import (
+    _BITS,
+    FILL_DOT_ROW,
     WORLD,
     BrailleCanvas,
     Viewport,
+    _land_cached,
     coastline_canvas,
+    dot_raster,
     draw_polyline,
-    land_cells,
     level_for,
     load_land,
     load_levels,
@@ -310,13 +313,14 @@ def test_coast_polylines_are_connected_dot_paths(place, span, size):
         for shift in (-360.0, 0.0, 360.0):
             if hi + shift < view.lon0 or lo + shift > view.lon1:
                 continue
-            dots = [
+            projected = [
                 (
-                    round((lon + shift - view.lon0) / (view.lon1 - view.lon0) * (w - 1)),
-                    round((view.lat1 - lat) / (view.lat1 - view.lat0) * (h - 1)),
+                    (lon + shift - view.lon0) / (view.lon1 - view.lon0) * (w - 1),
+                    (view.lat1 - lat) / (view.lat1 - view.lat0) * (h - 1),
                 )
                 for lon, lat in pts
             ]
+            dots = [(round(x), round(y)) for x, y in braille._simplify_dots(projected)]
             for a, b in itertools.pairwise(dots):
                 if a != b and all(0 <= x < w and 0 <= y < h for x, y in (a, b)):
                     checked += 1
@@ -329,23 +333,81 @@ def test_land_levels_match_coastline_levels():
     assert all(ring[0] == ring[-1] for level in load_land() for ring in level)
 
 
-def test_land_cells_fill_land_and_leave_sea_and_holes():
+def _land_dot(land: bytes, cols: int, x: int, y: int) -> bool:
+    return bool(land[(y >> 2) * cols + (x >> 1)] & _BITS[x & 1][y & 3])
+
+
+def _land_in_cell(land: bytes, cols: int, x: int, y: int) -> bool:
+    return bool(land[(y >> 2) * cols + (x >> 1)])
+
+
+def test_land_dots_fill_land_and_leave_sea_and_holes():
     from earthwave.ui.widgets.map_panel import zoom_view
 
     cols, rows = 198, 45
     view = zoom_view(138, 37, 40, cols, rows)
-    land = land_cells(cols, rows, view)
+    land = _land_cached(cols, rows, view)
 
     def at(lon, lat):
         x, y = project(lon, lat, view, cols * 2, rows * 4)
-        return land[(round(y) // 4) * cols + round(x) // 2]
+        return _land_in_cell(land, cols, round(x), round(y))
 
-    assert at(138.0, 36.5) == 8  # central Honshu
-    assert at(143.0, 33.0) == 0  # Pacific
-    assert at(131.0, 40.0) == 0  # Sea of Japan
+    assert at(138.0, 36.5)  # central Honshu
+    assert not at(143.0, 33.0)  # Pacific
+    assert not at(131.0, 40.0)  # Sea of Japan
     wide = zoom_view(60, 40, 90, cols, rows)
     x, y = project(51.0, 41.5, wide, cols * 2, rows * 4)  # Caspian Sea: a hole in the Eurasia ring
-    assert land_cells(cols, rows, wide)[(round(y) // 4) * cols + round(x) // 2] == 0
+    assert not _land_in_cell(_land_cached(cols, rows, wide), cols, round(x), round(y))
+
+
+def test_land_hatch_lights_one_dot_row_per_cell():
+    cols, rows = 198, 45
+    land = _land_cached(cols, rows, Viewport(100.0, 10.0, 180.0, 50.0))
+    assert any(land) and {v & ~(_BITS[0][FILL_DOT_ROW] | _BITS[1][FILL_DOT_ROW]) for v in land} == {0}
+
+
+@pytest.mark.parametrize(("lon", "lat", "span"), [(138, 37, 40), (-79, 21, 20), (-79, 21, 40)])  # Japan, Cuba
+def test_fill_edge_and_coast_share_one_dot_grid(lon, lat, span):
+    """The end of every hatch run has a coast dot within two dots (the coast is simplified to 0.8 dot): no cell-sized gap between fill and outline."""
+    from earthwave.ui.widgets.map_panel import zoom_view
+
+    cols, rows = 198, 45
+    view = zoom_view(lon, lat, span, cols, rows)
+    land, coast = _land_cached(cols, rows, view), coastline_canvas(cols, rows, view)
+    width, height = cols * 2, rows * 4
+
+    def is_land(x, y):
+        return 0 <= x < width and 0 <= y < height and _land_dot(land, cols, x, y)
+
+    y_row = range(FILL_DOT_ROW, height, 4)
+    ends = [
+        (x, y) for y in y_row for x in range(1, width - 1) if is_land(x, y) and not (is_land(x - 1, y) and is_land(x + 1, y))
+    ]
+    assert len(ends) > 100
+    assert all(any(coast.get(x + dx, y + dy) for dx in range(-2, 3) for dy in range(-2, 3)) for x, y in ends)
+
+
+def test_dot_raster_shows_coast_dots_only_in_coast_cells_and_land_dots_elsewhere():
+    from earthwave.ui.widgets.map_panel import zoom_view
+
+    cols, rows = 198, 45
+    view = zoom_view(138, 37, 40, cols, rows)
+    glyphs, flags = dot_raster(cols, rows, view)
+    coast, land = coastline_canvas(cols, rows, view), _land_cached(cols, rows, view)
+    assert dot_raster(cols, rows, view) is dot_raster(cols, rows, view)  # cached
+    interior = coast_cells = 0
+    for r in range(rows):
+        for c in range(cols):
+            bits = ord(glyphs[r][c]) - 0x2800
+            if coast.cell_bits(c, r):
+                coast_cells += 1
+                assert bits == coast.cell_bits(c, r) and not flags[r][c]
+            elif land[r * cols + c]:
+                interior += 1
+                assert bits == land[r * cols + c] and flags[r][c]
+            else:
+                assert bits == 0 and not flags[r][c]
+    assert interior > 100 and coast_cells > 100
 
 
 def test_land_fill_spans_the_antimeridian():
@@ -353,5 +415,8 @@ def test_land_fill_spans_the_antimeridian():
 
     cols, rows = 120, 36
     view = zoom_view(179, -17, 40, cols, rows)  # Fiji straddles 180
-    land = land_cells(cols, rows, view)
+    land = _land_cached(cols, rows, view)
     assert sum(1 for c in land if c) > 20
+    width, height = cols * 2, rows * 4
+    for y in range(height):  # no streak: no dot row is lit across (nearly) the whole width
+        assert sum(_land_dot(land, cols, x, y) for x in range(width)) < width // 2
