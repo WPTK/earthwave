@@ -335,7 +335,7 @@ async def test_banner_on_screen_ends_with_the_key_hint():
         await wait_until(pilot, lambda: "a acknowledge" in screen_text(app), what="the key hint")
 
 
-async def test_tsunami_screen_shows_status_at_100_columns_and_keeps_scroll_across_a_poll():
+async def test_tsunami_screen_shows_status_at_100_columns_with_no_sideways_scroll():
     app = kam_app()
     wide = replace(kam(1), id="wide", dedupe_key="wide", areas=("Alaska Aleutian Islands " * 3,))
     app.store.merge(Batch("nws", NOW, alerts=(wide,)), app.clock)
@@ -347,15 +347,8 @@ async def test_tsunami_screen_shows_status_at_100_columns_and_keeps_scroll_acros
         alert = app.screen.selected()
         status = app.store.alert_status(alert, app.clock)
         row = next(line for line in text.splitlines() if line.lstrip().startswith(alert.level))
-        assert "STATUS" in text and status in row
-        table = app.screen.query_one("DataTable")
-        table.scroll_to(x=8, animate=False, immediate=True)
-        await pilot.pause()
-        before = table.scroll_x
-        assert before > 0
-        app.screen.refresh_alerts()
-        await pilot.pause()
-        assert table.scroll_x == before
+        assert "STATUS" in text and status in row and "EXPIRES" in text
+        assert app.screen.query_one("DataTable").max_scroll_x == 0  # long areas no longer widen the table
 
 
 async def test_a_on_the_tsunami_screen_says_what_it_did():

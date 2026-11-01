@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from conftest import FIXTURES, make_quake
-from rich.text import Text
 from test_ui import wait_for
 
 from earthwave.app import EarthwaveApp
@@ -957,6 +956,8 @@ async def test_tick_leaves_the_tsunami_screen_table_alone():
 
 
 async def test_feed_text_that_looks_like_markup_cannot_crash_the_tsunami_screen():
+    from uat.harness import screen_text  # the harness imports this module
+
     app = kam_app()
     hostile = replace(nws_alert(), id="hostile", dedupe_key="hostile", areas=("[/x] Coast [Foo]",), quake_ref=None)
     app.store.merge(Batch("nws", NOW, alerts=(hostile,)), app.clock)
@@ -964,9 +965,10 @@ async def test_feed_text_that_looks_like_markup_cannot_crash_the_tsunami_screen(
         await pilot.press("t")
         await pilot.pause()
         assert isinstance(app.screen, TsunamiScreen)
-        row = app.screen.query_one("DataTable").get_row("hostile")
-        areas = next(c for c in row if "[/x]" in str(c))
-        assert isinstance(areas, Text) and areas.plain == "[/x] Coast [Foo]"
+        table = app.screen.query_one("DataTable")
+        table.move_cursor(row=table.get_row_index("hostile"))
+        await pilot.pause()
+        assert "[/x] Coast [Foo]" in screen_text(app)  # the areas line of the bulletin, shown as typed
 
 
 async def test_feed_text_that_looks_like_markup_cannot_crash_a_toast():
