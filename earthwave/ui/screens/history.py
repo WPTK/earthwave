@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, date, timedelta
 from typing import TYPE_CHECKING
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -16,6 +17,7 @@ from earthwave.sources import levels
 from earthwave.state.history import day_bounds
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
+from earthwave.ui.widgets.too_small import TooSmall, is_too_small
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -78,6 +80,15 @@ class HistoryScreen(Screen):
         yield Static("", id="history_header")
         yield HistoryList(app.clock, app.tracker, app.glyphs, app.config.home, id="history_list")
         yield Footer(compact=True, show_command_palette=False)
+        yield TooSmall(id="too_small")
+
+    def on_resize(self, event: events.Resize) -> None:
+        small = is_too_small(event.size.width, event.size.height)
+        self.set_class(small, "too-small")
+        if small:
+            self.query_one(TooSmall).show(event.size.width, event.size.height)
+        else:  # hiding the list dropped its focus
+            self.call_after_refresh(self.query_one(QuakeList).focus)
 
     def on_mount(self) -> None:
         self.day = self.today()

@@ -323,7 +323,7 @@ async def test_live_replay_session_runs_through_the_app():
         unhealthy = [n for n in app.scheduler.statuses if app.scheduler.freshness(n) is not Freshness.FRESH]
         assert unhealthy  # the recording has no tsunami traffic, so those feeds fail
         for name in unhealthy:
-            assert f"{name} {FRESHNESS_WORDS[app.scheduler.freshness(name)]}" in status
+            assert name in status and FRESHNESS_WORDS[app.scheduler.freshness(name)] in status
         assert "Replay Test Region" in str(app.dashboard.query_one("Ticker").render())
 
 
@@ -613,3 +613,21 @@ async def test_the_ticker_waits_for_data_and_keeps_the_gauge_value_on_a_long_lin
         text = str(ticker.render())
         assert text.endswith("180 NM West of Iquique, Chile -0.03 m") and "12h ago" in text and "…" in text
         assert len(text) <= ticker.size.width
+
+
+def test_status_bar_names_every_feed_while_all_are_loading():
+    names = ("usgs", "tsunamigov", "nws", "jma", "dart", "coops")
+    lines = tuple(SourceLine(n, Freshness.LOADING, None) for n in names)
+    for state, width in (("none", 100), ("alarm", 120)):  # the sizes the UAT screenshots showed it cut off at
+        info = StatusInfo(lines, 151, 151, None, "M4.5+ 7d", 0, alert_state=state)
+        for glyphs in (UNICODE, ASCII):
+            plain = build_status(info, glyphs).plain
+            assert len(plain) <= width and all(n in plain for n in names), plain
+            assert plain.count("loading") == 1
+
+
+def test_status_bar_groups_feeds_by_state():
+    lines = (SourceLine("usgs", Freshness.FRESH, 5), SourceLine("nws", Freshness.STALE, 900))
+    lines += (SourceLine("jma", Freshness.STALE, 600), SourceLine("dart", Freshness.ERROR, None))
+    plain = build_status(StatusInfo(lines, 1, 1, None, "x", 0), UNICODE).plain
+    assert "stale: nws, jma" in plain and "dart failed" in plain and "usgs" not in plain

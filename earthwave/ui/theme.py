@@ -32,7 +32,7 @@ LEVEL_COLORS = {
     "WARNING": "bold red",
     "ADVISORY": "dark_orange",
     "WATCH": "yellow",
-    "THREAT": "dodger_blue2",
-    "INFORMATION": "dodger_blue2",
+    "THREAT": "sky_blue1",
+    "INFORMATION": "sky_blue1",
     "CANCELLATION": "grey62",
 }
