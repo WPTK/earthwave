@@ -68,7 +68,7 @@ def test_quake_then_503_then_reset_then_recovery():
         # 3. a connection reset from the usgs host
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "ok"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 100, "recovery from the 503")
+        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 220, "recovery from the 503 (backoff is 120 s +-10%)")
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "reset"})
         term.send_keys("r")
         term.wait_for(lambda s: "usgs" in failed_line(s.text), 100, "usgs named in the failed list after a reset")
@@ -78,7 +78,7 @@ def test_quake_then_503_then_reset_then_recovery():
         # 4. recovery
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "ok"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 100, "recovery after the reset")
+        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 220, "recovery after the reset (backoff is 120 s +-10%)")
         recovered = snap(term, "4-recovered")
         assert "Vanuatu" in recovered
         (OUT / "failed-lines.txt").write_text("\n".join(map(failed_line, (ok, after503, afterreset, recovered))))
