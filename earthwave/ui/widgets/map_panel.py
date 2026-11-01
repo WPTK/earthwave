@@ -27,7 +27,8 @@ from earthwave.sources import levels
 from earthwave.sources.geo import haversine_km
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.graphics.probe import FALLBACK_CELL, GraphicsChoice
-from earthwave.ui.graphics.raster import Palette, Scene, Shape, compose
+from earthwave.ui.graphics.raster import Palette, Scene, Shape
+from earthwave.ui.graphics.smooth import render_smooth
 from earthwave.ui.graphics.sixel import RGB, encode
 from earthwave.ui.theme import LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
@@ -731,7 +732,8 @@ class MapPanel(Widget, can_focus=True):
 
     def _build(self, scene: Scene) -> None:
         """Worker thread: rasterise and encode `scene`, then hand it back to the event loop."""
-        data = encode(compose(scene), scene.width, scene.height, scene.palette)
+        pixels, palette = render_smooth(scene)
+        data = encode(pixels, scene.width, scene.height, palette)
         self.app.call_from_thread(self._built, scene, data)
 
     def _built(self, scene: Scene, data: str) -> None:

@@ -84,6 +84,7 @@ class Shape:
     ring: int | None = None  # extra ring drawn around the disc
     ring_width: int = 2
     outline: bool = True
+    outline_width: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +143,10 @@ def _draw_shape(pixels: bytearray, width: int, height: int, view: Viewport, shap
     fx, fy = project(lon, shape.lat, view, width, height)
     cx, cy = round(fx), round(fy)
     if shape.ring is not None:
-        draw_ring(pixels, width, height, cx, cy, shape.radius + shape.ring_width + 1, shape.ring_width, shape.ring)
+        draw_ring(pixels, width, height, cx, cy, shape.radius + shape.ring_width + shape.outline_width, shape.ring_width, shape.ring)
     if shape.fill is not None:
         if shape.outline:
-            draw_disc(pixels, width, height, cx, cy, shape.radius + 1, OUTLINE)
+            draw_disc(pixels, width, height, cx, cy, shape.radius + shape.outline_width, OUTLINE)
         draw_disc(pixels, width, height, cx, cy, shape.radius, shape.fill)
 
 

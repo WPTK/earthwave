@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import struct
 import sys
+import time
 import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,7 +31,7 @@ from earthwave.config import Config, with_overrides  # noqa: E402
 from earthwave.models import Earthquake  # noqa: E402
 from earthwave.state.store import Store  # noqa: E402
 from earthwave.ui.graphics.probe import GraphicsChoice  # noqa: E402
-from earthwave.ui.graphics.raster import compose  # noqa: E402
+from earthwave.ui.graphics.smooth import render_smooth  # noqa: E402
 from earthwave.ui.graphics.sixel import encode  # noqa: E402
 from earthwave.ui.widgets.braille import coastline_canvas  # noqa: E402
 from earthwave.ui.widgets.map_panel import MapModel, pixel_scene  # noqa: E402
@@ -161,7 +162,11 @@ def main() -> None:
                 if zoom != "world":
                     model.cycle_zoom()
                 scene = pixel_scene(model, cell, colors, rgb_of)
-                data = encode(compose(scene), scene.width, scene.height, scene.palette)
+                started = time.perf_counter()
+                pixels, palette = render_smooth(scene)
+                raster_ms = (time.perf_counter() - started) * 1000
+                data = encode(pixels, scene.width, scene.height, palette)
+                total_ms = (time.perf_counter() - started) * 1000
                 pixels, width, height = decode(data)
                 sixel = [[px or (255, 0, 255) for px in row] for row in pixels]
                 top = braille_rows(model, colors, cell, rgb_of)
@@ -169,7 +174,8 @@ def main() -> None:
                 sixel += [[colors.sea] * width for _ in range(len(top) - height)]
                 name = f"{place}_{zoom}_{size_text}"
                 png(args.outdir / f"{name}_braille_over_sixel.png", top + gap + sixel)
-                print(f"  {name}: sixel {len(data) // 1024} KiB, {len(scene.palette)} colours")
+                print(f"  {name}: sixel {len(data) // 1024} KiB, {len(palette)} colours, "
+                      f"raster {raster_ms:.0f} ms, +encode {total_ms - raster_ms:.0f} ms")
 
 
 if __name__ == "__main__":
