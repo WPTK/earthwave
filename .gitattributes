@@ -2,3 +2,5 @@
 tests/fixtures/** -text
 *.ps1 text eol=crlf
 tests/golden/** -text
+*.sh text eol=lf
+*.golden -text
