@@ -19,7 +19,6 @@ from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import Freshness, PollResult, Scheduler
-from earthwave.sources import levels
 from earthwave.sources.anomaly import threshold_m
 from earthwave.sources.base import Source
 from earthwave.sources.coops import CoopsSource
@@ -36,8 +35,6 @@ from earthwave.state.events import (
     QuakeRenamed,
     SourceDegraded,
     SourceRecovered,
-    TsunamiChanged,
-    TsunamiIssued,
 )
 from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
@@ -254,7 +251,7 @@ class EarthwaveApp(App):
     def on_poll_done(self, message: PollDone) -> None:
         result = message.result
         self.tracker.observe(list(result.events))
-        self._notify_desktop(list(result.events))
+        notes = self._notify_desktop(list(result.events))
         self._record_history(result)
         for event in result.events:
             if isinstance(event, QuakeMajor):
@@ -265,19 +262,6 @@ class EarthwaveApp(App):
                     timeout=10,
                     markup=False,
                 )
-            elif (
-                isinstance(event, TsunamiIssued | TsunamiChanged)
-                and self.config.alerts.tsunami
-                and event.alert.level in levels.ACTIONABLE
-            ):
-                # The banner, panel and status bar live on the dashboard only; a toast reaches every screen.
-                self.notify(
-                    event.alert.headline,
-                    title=f"Tsunami {event.alert.level.title()}",
-                    severity="error",
-                    timeout=30,
-                    markup=False,
-                )
             elif isinstance(event, GaugeAnomaly):
                 self._last_anomaly = event
                 body = f"{event.name}: {event.residual_m:+.3f} m from the tide"
@@ -286,6 +270,12 @@ class EarthwaveApp(App):
                 self.notify(body, title="Gauge anomaly", severity="warning", timeout=10, markup=False)
             elif isinstance(event, SourceDegraded | SourceRecovered):
                 log.info("%s", event)
+        if self.screen_stack and self.screen is not self.dashboard:
+            # The banner and panel live on the dashboard only: elsewhere the tsunami notes also toast in the app.
+            for note in notes:
+                if note.key.startswith("tsunami:"):
+                    severity = "error" if note.urgency == "critical" else "warning"
+                    self.notify(note.body, title=note.title, severity=severity, timeout=30, markup=False)
         steady = result.source == "usgs" and result.batch is not None and not result.batch.backfill
         if (
             steady
@@ -331,8 +321,8 @@ class EarthwaveApp(App):
         self.history.record(current, unseen, merged.values(), batch.fetched_at, replaced=gone)
 
     def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
-        """(tsunami feeds late or failing, whether no tsunami feed is fresh). A feed not polled yet is not an outage,
-        but until one feed has answered, an empty alert list says nothing."""
+        """(tsunami feeds late, failing or partial, whether no tsunami feed is fresh). A feed not polled yet is not an
+        outage; `tsunami_feeds_loading` says an empty alert list still means nothing."""
         if not self.scheduler_running:
             return [], False
         names = [n for n in TSUNAMI_FEEDS if n in self.scheduler.statuses]
@@ -440,13 +430,15 @@ class EarthwaveApp(App):
             return ""
         return f"{last.name} {last.residual_m:+.2f} m"
 
-    def _notify_desktop(self, events: list) -> None:
+    def _notify_desktop(self, events: list) -> list[Notification]:
         """Evaluate the alert rules and hand each notification to the desktop notifier and the terminal bell."""
-        for note in self.rules.evaluate(events, self.clock.now()):
+        notes = self.rules.evaluate(events, self.clock.now())
+        for note in notes:
             if self.bell_enabled and note.bell:
                 self.bell()
             if self.notifier is not None:
                 self._outbox.put_nowait(note)
+        return notes
 
     # --- view changes -------------------------------------------------------------------------------------------
 

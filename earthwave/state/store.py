@@ -171,7 +171,7 @@ class Store:
         """
         steady_at = self._steady_at
         if self._is_steady(batch):
-            self._steady_at = batch.fetched_at
+            self._steady_at = batch.generated or batch.fetched_at  # server time, as `updated` is
         if batch.not_modified:
             if batch.coverage and batch.generated:
                 self._claim(batch)  # the feed is unchanged since it was made: its claims are current up to then
@@ -221,7 +221,9 @@ class Store:
 
     @staticmethod
     def _published_since(quake: Earthquake, since: datetime | None) -> bool:
-        return since is not None and (quake.updated or quake.time) > since
+        """True for a quake that happened (within the feed's lag) and was published after `since`; a long-past quake
+        merely revised since is not new."""
+        return since is not None and (quake.updated or quake.time) > since and quake.time > since - FEED_LAG
 
     def _known(self, quake: Earthquake) -> list[Earthquake]:
         """Every stored version of this event under any id USGS has given it, the one under its own id first."""

@@ -1,5 +1,6 @@
 """Main screen: ticker, quake list, map panel, status bar, search box and the too-small overlay."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from rich.text import Text
@@ -45,6 +46,7 @@ class DashboardScreen(Screen):
     def __init__(self):
         super().__init__()
         self.show_map = True
+        self._countable: set[str] = set()  # ids the magnitude and hours filter can show: what the unseen badge counts
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -102,8 +104,10 @@ class DashboardScreen(Screen):
         rows = app.store.visible(app.view, app.clock, app.sort)
         quake_list.set_rows(rows)
         self.query_one(MapPanel).set_quakes(rows, quake_list.selected)
-        # A search or filter only hides rows and is reversible, so attention lasts as long as the store holds the quake.
+        # A search or filter only hides rows and is reversible, so attention lasts as long as the store holds the quake;
+        # only the unseen count follows the magnitude/hours filter (a search does not change it).
         app.tracker.retain({q.id for q in app.store.all()})
+        self._countable = {q.id for q in app.store.visible(replace(app.view, query=""), app.clock)}
         width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
@@ -172,7 +176,7 @@ class DashboardScreen(Screen):
                 total=len(app.store),
                 next_poll=next_poll,
                 filter_text=filter_summary(app.view),
-                unseen=app.tracker.unseen(),
+                unseen=app.tracker.unseen(self._countable),
                 sort=app.sort.value,
                 alert_state=self.tsunami_state()[3],
             )
