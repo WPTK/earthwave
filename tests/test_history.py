@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 
+import pytest
 from conftest import T0, footer_keys, make_quake
 
 from earthwave.app import EarthwaveApp, PollDone
@@ -14,7 +15,7 @@ from earthwave.config import Config, with_overrides
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.poll import PollResult
 from earthwave.sources import levels
-from earthwave.state.events import QuakeNew
+from earthwave.state.events import QuakeNew, QuakeRemoved
 from earthwave.state.history import History, day_bounds, decode_quake, encode_quake
 from earthwave.state.store import Store
 from earthwave.ui.screens.detail import DetailScreen
@@ -448,3 +449,40 @@ def test_offline_cannot_combine_with_record_or_replay(monkeypatch, tmp_path):
     for flag in ("--record", "--replay"):
         code, seen = _run_cli(monkeypatch, tmp_path, ["--offline", flag, str(tmp_path / "x.jsonl")])
         assert code == 2 and not seen
+
+
+async def test_a_quake_the_feed_removed_does_not_come_back_on_relaunch(tmp_path):
+    path = tmp_path / "h.sqlite"
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    app = _app(path, clock)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.store.warm = True
+        _poll(app, [make_quake("false", 6.5, minutes_ago=20)], events=[QuakeNew(make_quake("false", 6.5))])
+        await pilot.pause()
+        _poll(app, [], events=[QuakeRemoved("false")])  # USGS deleted it; the feed batch has no quakes to save
+        await pilot.pause()
+    saved, _ = History(path, 90, clock).load_since(T0 - timedelta(days=1))
+    assert saved == []
+
+
+@pytest.mark.parametrize("order", [("ak1", "us1"), ("us1", "ak1")])
+async def test_relaunch_joins_ids_saved_before_a_preferred_id_change(tmp_path, order):
+    path = tmp_path / "h.sqlite"
+    clock = ReplayClock(T0, real=lambda: 0.0)
+    rows = {
+        "ak1": make_quake("ak1", 6.2, minutes_ago=20),
+        "us1": make_quake("us1", 6.2, minutes_ago=20, also_ids=("ak1",)),
+    }
+    seed = History(path, 90, clock)
+    seed.open()
+    seed.start()
+    seed.record([rows[i] for i in order], {"ak1"}, [], T0)  # the old id was announced and never seen
+    await seed.close()
+    app = _app(path, clock, offline=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert [q.id for q in app.store.all()] == ["us1"]
+        assert app.tracker.is_unseen("us1") and not app.tracker.is_unseen("ak1")
+    saved, _ = History(path, 90, clock).load_since(T0 - timedelta(days=1))
+    assert [q.id for q in saved] == ["us1"]

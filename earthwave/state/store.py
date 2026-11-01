@@ -18,6 +18,7 @@ from earthwave.state.events import (
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
+    QuakeRemoved,
     QuakeRenamed,
     QuakeUpdated,
     TsunamiCancelled,
@@ -95,6 +96,7 @@ class Store:
         self._alerts = alerts or AlertsConfig()
         self._home = home or HomeConfig()
         self._quakes: dict[str, Earthquake] = {}
+        self._by_alias: dict[str, str] = {}  # an id USGS has replaced -> the stored quake that names it
         # (hours, min_magnitude) -> when the claim was last confirmed: the store holds every such quake up to then
         self._coverage: dict[tuple[float, float], datetime] = {}
         self.coverage_lapsed = False  # a claim was dropped because the steady feed missed more than its window
@@ -147,12 +149,14 @@ class Store:
             return km
         return None
 
-    def _threshold_events(self, old: Earthquake | None, new: Earthquake) -> list[Event]:
+    def _threshold_events(self, olds: list[Earthquake], new: Earthquake) -> list[Event]:
+        """Threshold crossings against everything the store held for this event: one that was major (or near home)
+        under any of its ids is not announced again."""
         events: list[Event] = []
-        if self._is_major(new) and (old is None or not self._is_major(old)):
+        if self._is_major(new) and not any(self._is_major(o) for o in olds):
             events.append(QuakeMajor(new))
         km = self._is_near_home(new)
-        if km is not None and (old is None or self._is_near_home(old) is None):
+        if km is not None and all(self._is_near_home(o) is None for o in olds):
             events.append(QuakeNearHome(new, km))
         return events
 
@@ -170,27 +174,30 @@ class Store:
         events: list[Event] = []
         for quake in batch.quakes:
             known = self._known(quake)
+            if not known and (kept := self._by_alias.get(quake.id)):  # a stale copy under an id USGS has replaced
+                events.append(QuakeRenamed(quake.id, self._quakes[kept]))
+                continue
             old = known[0] if known else None
             if old is not None and quake.updated and old.updated and quake.updated < old.updated:
                 continue
             for other in known:
                 if other.id != quake.id:  # USGS moved the event to another preferred id
-                    del self._quakes[other.id]
+                    self._drop(other.id)
                     self._relink(other.id, quake.id)
                     events.append(QuakeRenamed(other.id, quake))
-            self._quakes[quake.id] = quake
+            self._put(quake)
             if silent:
                 continue
             if old is None:
                 events.append(QuakeNew(quake))
-                events.extend(self._threshold_events(None, quake))
+                events.extend(self._threshold_events([], quake))
             else:
                 changed = changed_fields(old, quake)
                 if changed:
                     events.append(QuakeUpdated(quake, changed))
-                events.extend(self._threshold_events(old, quake))
+                events.extend(self._threshold_events(known, quake))
         if batch.coverage:
-            self._reconcile(batch)
+            events.extend(self._reconcile(batch))
             self._claim(batch)
         if batch.backfill:
             self.coverage_lapsed = False  # the backfill that closes a lapsed claim has landed (even if it was partial)
@@ -204,7 +211,20 @@ class Store:
 
     def _known(self, quake: Earthquake) -> list[Earthquake]:
         """Every stored version of this event under any id USGS has given it, the one under its own id first."""
-        return [old for quake_id in (quake.id, *quake.also_ids) if (old := self._quakes.get(quake_id)) is not None]
+        ids = dict.fromkeys((quake.id, *quake.also_ids))
+        return [old for quake_id in ids if (old := self._quakes.get(quake_id)) is not None]
+
+    def _put(self, quake: Earthquake) -> None:
+        self._drop(quake.id)
+        self._quakes[quake.id] = quake
+        for alias in quake.also_ids:
+            self._by_alias[alias] = quake.id
+
+    def _drop(self, quake_id: str) -> None:
+        if (old := self._quakes.pop(quake_id, None)) is not None:
+            for alias in old.also_ids:
+                if self._by_alias.get(alias) == quake_id:
+                    del self._by_alias[alias]
 
     def _relink(self, old_id: str, new_id: str | None) -> None:
         """Alerts naming a quake that is gone follow it to its new id, or lose the link so `_link` can find it again."""
@@ -212,21 +232,26 @@ class Store:
             if alert.quake_ref == old_id:
                 self._tsunamis[alert_id] = replace(alert, quake_ref=new_id)
 
-    def _reconcile(self, batch: Batch) -> None:
+    def _reconcile(self, batch: Batch) -> list[Event]:
         """A summary feed names every quake of its window and magnitude floor, so a stored quake it leaves out was
         deleted or revised out of the feed. A quake revised below the floor is dropped by design: the feed no longer
         vouches for it. The window is measured from when the feed was made, and its edges are spared (a feed lags and
         its window slides). An empty listing proves nothing and removes nothing."""
         assert batch.coverage is not None
         if not batch.listed or batch.generated is None:
-            return
+            return []
         hours, floor = batch.coverage
         oldest = batch.generated - timedelta(hours=hours) + FEED_LAG
         newest = batch.generated - FEED_LAG
-        for quake in [q for q in self._quakes.values() if oldest <= q.time <= newest and q.mag >= floor]:
-            if batch.listed.isdisjoint((quake.id, *quake.also_ids)):
-                del self._quakes[quake.id]
-                self._relink(quake.id, None)
+        gone = [
+            q
+            for q in self._quakes.values()
+            if oldest <= q.time <= newest and q.mag >= floor and batch.listed.isdisjoint((q.id, *q.also_ids))
+        ]
+        for quake in gone:
+            self._drop(quake.id)
+            self._relink(quake.id, None)
+        return [QuakeRemoved(q.id) for q in gone]
 
     def _claim(self, batch: Batch) -> None:
         """Record what the batch covers. A steady feed keeps every claim at or above its floor current, but only if it
@@ -616,7 +641,7 @@ class Store:
     def _prune(self, clock: Clock) -> None:
         cutoff = clock.now() - RETAIN
         for quake_id in [q.id for q in self._quakes.values() if q.time < cutoff]:
-            del self._quakes[quake_id]
+            self._drop(quake_id)
         alert_cutoff = clock.now() - ALERT_RETAIN
         stale = [
             a

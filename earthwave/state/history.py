@@ -165,7 +165,7 @@ class History:
         """Queue a merged batch. Quakes in `unseen_ids` (announced live, or just made major) are saved unseen,
         even if already stored; the rest start seen. Encoding happens in the writer job, off the event loop."""
         quakes, alerts, replaced = tuple(quakes), tuple(alerts), tuple(replaced)
-        if not quakes and not alerts:
+        if not quakes and not alerts and not replaced:
             return
         stamp = _iso(self._clock.now())
 

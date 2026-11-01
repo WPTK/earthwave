@@ -29,6 +29,17 @@ class QuakeRenamed:
 
 
 @dataclass(frozen=True, slots=True)
+class QuakeRemoved:
+    """The USGS feed no longer lists this quake (deleted, or revised below the feed's floor): the store dropped it."""
+
+    quake_id: str
+    kind: ClassVar[str] = "quake_removed"
+
+    def __str__(self) -> str:
+        return f"removed {self.quake_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class QuakeUpdated:
     quake: Earthquake
     changed: tuple[str, ...]
@@ -122,6 +133,7 @@ Event = (
     QuakeNew
     | QuakeUpdated
     | QuakeRenamed
+    | QuakeRemoved
     | QuakeMajor
     | QuakeNearHome
     | TsunamiIssued

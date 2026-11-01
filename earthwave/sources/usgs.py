@@ -73,6 +73,15 @@ def listing(data: dict) -> frozenset[str] | None:
     return frozenset(ids)
 
 
+def generated(data: dict, modified: str | None) -> datetime | None:
+    """When a feed was made: its own metadata, else its Last-Modified header; a malformed stamp is no stamp."""
+    try:
+        made = _ms((data.get("metadata") or {}).get("generated"))
+    except (TypeError, ValueError, OverflowError, OSError):
+        made = None
+    return made or last_modified(modified)
+
+
 def last_modified(value: str | None) -> datetime | None:
     try:
         return parsedate_to_datetime(value).astimezone(UTC) if value else None
@@ -264,7 +273,7 @@ class UsgsSource:
             backfill=backfill,
             cursor=f"{feed}|{modified or ''}",
             coverage=feed_coverage(feed),
-            generated=_ms((data.get("metadata") or {}).get("generated")) or last_modified(modified),
+            generated=generated(data, modified),
             listed=listing(data),
             meta={"feed": feed, "silent": silent},
         )

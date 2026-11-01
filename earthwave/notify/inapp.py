@@ -110,7 +110,9 @@ class AttentionTracker:
                     self._start(event.quake.id, AttentionKind.UPDATED)
             elif isinstance(event, QuakeRenamed):
                 if (item := self._items.pop(event.old_id, None)) is not None:
-                    self._items.setdefault(event.quake.id, item)
+                    kept = self._items.get(event.quake.id)  # the strongest attention of the joined ids survives
+                    if kept is None or _RANK[item.kind] > _RANK[kept.kind]:
+                        self._items[event.quake.id] = item
             elif isinstance(event, QuakeMajor):
                 self._start(event.quake.id, AttentionKind.MAJOR)
             elif isinstance(event, TsunamiIssued | TsunamiChanged):

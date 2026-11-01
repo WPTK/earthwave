@@ -18,6 +18,7 @@ from earthwave.notify.inapp import (
     FLASH_NEW,
     FLASH_UPDATED,
     PULSE_MAJOR,
+    AttentionKind,
     AttentionTracker,
 )
 from earthwave.poll import Freshness, Scheduler, backoff_delay, freshness_of
@@ -28,6 +29,7 @@ from earthwave.sources.usgs import (
     FEED_BASE,
     UsgsSource,
     feed_coverage,
+    generated,
     listing,
     parse_collection,
     parse_detail,
@@ -38,6 +40,7 @@ from earthwave.state.events import (
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
+    QuakeRemoved,
     QuakeRenamed,
     QuakeUpdated,
     SourceDegraded,
@@ -473,6 +476,58 @@ def test_the_removal_window_counts_from_when_the_feed_was_made(clock):
     assert store.get("a") is not None
 
 
+def test_a_join_never_repeats_a_threshold_an_absorbed_id_already_crossed(clock):
+    store = Store(AlertsConfig(major_magnitude=6.0))
+    store.merge(batch(make_quake("at1", 6.1), make_quake("us1", 5.8)), clock)
+    events = store.merge(batch(make_quake("us1", 6.1, also_ids=("at1",))), clock)
+    assert QuakeMajor not in {type(e) for e in events}  # at1 was already major
+    assert QuakeRenamed in {type(e) for e in events}
+
+
+def test_the_strongest_attention_of_joined_ids_survives(clock):
+    tracker = AttentionTracker(clock)
+    tracker.observe([QuakeMajor(make_quake("at1", 6.1)), QuakeNew(make_quake("us1", 5.8))])
+    tracker.observe([QuakeRenamed("at1", make_quake("us1", 6.1))])
+    assert tracker.kind_of("us1") is AttentionKind.MAJOR and tracker.kind_of("at1") is None
+
+
+def test_a_repeated_alias_cannot_lose_the_quake(clock):
+    store = Store()
+    store.merge(batch(make_quake("ak1")), clock)
+    store.merge(batch(make_quake("us1", also_ids=("ak1", "ak1"))), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+
+
+def test_a_stale_copy_under_a_replaced_id_is_not_stored_again(clock):
+    store = Store()
+    store.merge(batch(make_quake("us1", also_ids=("ak1",)), backfill=True), clock)
+    events = store.merge(batch(make_quake("ak1"), backfill=True), clock)
+    assert [q.id for q in store.all()] == ["us1"]
+    assert [(type(e), e.old_id) for e in events] == [(QuakeRenamed, "ak1")]
+
+
+def test_a_summary_feed_reports_the_quakes_it_removed(clock):
+    store = Store()
+    store.merge(
+        batch(make_quake("gone", 6.5, minutes_ago=120), make_quake("keep", 5.0, minutes_ago=120), backfill=True), clock
+    )
+    events = store.merge(feed(make_quake("keep", 5.0, minutes_ago=120)), clock)
+    assert [(type(e), e.quake_id) for e in events] == [(QuakeRemoved, "gone")]
+
+
+def test_a_partial_backfill_still_closes_a_lapse(clock):
+    store = Store()
+    store.merge(batch(backfill=True, coverage=(168.0, 4.5)), clock)
+    store.merge(Batch("usgs", T0 + timedelta(hours=70), coverage=(24.0, 4.5)), clock)
+    assert store.coverage_lapsed
+    store.merge(batch(backfill=True), clock)  # an fdsnws reply that hit its limit claims nothing but did land
+    assert not store.coverage_lapsed
+
+
+def test_a_malformed_generation_stamp_is_no_stamp():
+    assert generated({"metadata": {"generated": "soon"}}, "Sat, 31 Oct 2026 12:00:00 GMT") == T0
+
+
 # --- attention --------------------------------------------------------------------------------------------------
 
 
@@ -677,7 +732,8 @@ async def test_replayed_session_drives_scheduler_end_to_end():
             await sched.poll_source("usgs", client)
             assert not results[-1].error, results[-1].error
     assert [bool(r.batch.not_modified) for r in results] == [False, False, False, False, True, False]
-    assert all(not r.events for r in results[:4])  # backfill and the first steady batch are silent
+    # backfill and the first steady batch are silent; the canned day feed does not list the canned week feed's quakes
+    assert all(isinstance(e, QuakeRemoved) for r in results[:4] for e in r.events)
     assert store.warm and store.get("replay_new1") is not None
     last = results[-1].events
     assert {type(e) for e in last} == {QuakeNew, QuakeMajor, QuakeUpdated}

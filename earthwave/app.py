@@ -27,7 +27,15 @@ from earthwave.sources.ndbc import DartSource
 from earthwave.sources.nws import NwsSource
 from earthwave.sources.tsunamigov import TsunamiGovSource
 from earthwave.sources.usgs import UsgsSource, feed_coverage
-from earthwave.state.events import GaugeAnomaly, QuakeMajor, QuakeNew, QuakeRenamed, SourceDegraded, SourceRecovered
+from earthwave.state.events import (
+    GaugeAnomaly,
+    QuakeMajor,
+    QuakeNew,
+    QuakeRemoved,
+    QuakeRenamed,
+    SourceDegraded,
+    SourceRecovered,
+)
 from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification
@@ -174,9 +182,12 @@ class EarthwaveApp(App):
             self.history, self.history_error = None, f"{type(exc).__name__}: {exc}"
             return
         self.history.start()
-        self.store.merge(Batch("history", self.clock.now(), quakes=tuple(quakes), backfill=True), self.clock)
+        events = self.store.merge(Batch("history", self.clock.now(), quakes=tuple(quakes), backfill=True), self.clock)
         major = {q.id for q in quakes if q.id in unseen and q.mag >= self.config.alerts.major_magnitude}
         self.tracker.restore(unseen - major, major)
+        renamed = [e for e in events if isinstance(e, QuakeRenamed)]  # saved before a preferred id changed
+        self.tracker.observe(renamed)
+        self.history.record((), set(), (), self.clock.now(), replaced={e.old_id for e in renamed})
 
     @work(exclusive=True, exit_on_error=False)
     async def _run_scheduler(self) -> None:
@@ -286,14 +297,19 @@ class EarthwaveApp(App):
         if self.history is None:
             return
         batch = result.batch
-        if batch is None or batch.not_modified or not (batch.quakes or batch.alerts):
+        if batch is None or batch.not_modified:
+            return
+        gone = {e.old_id for e in result.events if isinstance(e, QuakeRenamed)}
+        gone |= {e.quake_id for e in result.events if isinstance(e, QuakeRemoved)}  # a removed quake must not return
+        if not (batch.quakes or batch.alerts or gone):
             return
         unseen = {e.quake.id for e in result.events if isinstance(e, QuakeNew | QuakeMajor)}
-        renamed = [e for e in result.events if isinstance(e, QuakeRenamed)]
-        unseen |= {e.quake.id for e in renamed if self.tracker.is_unseen(e.quake.id)}
+        unseen |= {
+            e.quake.id for e in result.events if isinstance(e, QuakeRenamed) and self.tracker.is_unseen(e.quake.id)
+        }
         current = (q for b in batch.quakes if (q := self.store.get(b.id)) is not None)
         merged = {a.id: a for b in batch.alerts if (a := self.store.get_alert(b.id)) is not None}  # one per product
-        self.history.record(current, unseen, merged.values(), batch.fetched_at, replaced={e.old_id for e in renamed})
+        self.history.record(current, unseen, merged.values(), batch.fetched_at, replaced=gone)
 
     def tsunami_feeds_down(self) -> tuple[list[tuple[str, Freshness]], bool]:
         """(tsunami feeds late or failing, whether no tsunami feed is fresh). A feed not polled yet is not an outage,
