@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -15,6 +16,7 @@ from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import LEVEL_COLORS
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
+from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 from earthwave.ui.widgets.tsunami_panel import fmt_until
 
 if TYPE_CHECKING:
@@ -73,6 +75,7 @@ class TsunamiScreen(Screen):
         super().__init__()
         self._rows: list[TsunamiAlert] = []
         self._ready = False  # the table and its columns exist only once the screen has composed and mounted
+        self._shown_id: str | None = None  # the alert whose text is in the bulletin pane
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -86,6 +89,16 @@ class TsunamiScreen(Screen):
             with VerticalScroll(id="gauges"):
                 yield GaugeStrip(id="gauge_strip")
         yield Footer(compact=True, show_command_palette=False)
+        yield TooSmall(id="too_small")
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Under the too-small overlay the keys that act on the hidden screen are off."""
+        del parameters
+        return not (self.has_class("too-small") and action in ("cursor_down", "cursor_up", "ack"))
+
+    def on_resize(self, event: events.Resize) -> None:
+        if not sync_too_small(self, event) and self._ready:  # hiding the table dropped its focus
+            self.call_after_refresh(self.query_one(DataTable).focus)
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
@@ -140,8 +153,12 @@ class TsunamiScreen(Screen):
         alert = self.selected()
         body = self.query_one("#alert_text", Static)
         if alert is None:
+            self._shown_id = None
             body.update(Text("No tsunami products received yet.", style="grey50"))
             return
+        if alert.id != self._shown_id:  # another alert starts at its level and status; a poll keeps the reader's place
+            self._shown_id = alert.id
+            self.query_one("#alert_text_scroll").scroll_home(animate=False)
         quake = app.store.quake_for(alert)
         quake_line = f"M{quake.mag:.1f} {quake.place} ({quake.id})" if quake else ""
         body.update(

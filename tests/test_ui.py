@@ -489,7 +489,8 @@ async def test_empty_hint_waits_for_the_first_poll():
     async with app.run_test(size=(160, 40)) as pilot:
         app.set_query("zzzz-no-such-place")
         await pilot.pause()
-        assert not app.dashboard.query_one("#empty").display
+        empty = app.dashboard.query_one("#empty")
+        assert "Waiting for USGS" in str(empty.render()) and "No quakes match" not in str(empty.render())
 
 
 def test_zone_label_spells_long_windows_names_as_an_offset():

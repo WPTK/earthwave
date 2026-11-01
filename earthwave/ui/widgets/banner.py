@@ -6,16 +6,17 @@ from textual import events
 from textual.widgets import Static
 
 from earthwave.models import TsunamiAlert
+from earthwave.ui.theme import mark_level
 
 
 def build_banner(alerts: list[TsunamiAlert], width: int = 0) -> Text:
     """The banner line; a headline too long for `width` is shortened so '+N more' and the key hint stay readable."""
     top = alerts[0]
-    head = Text(f" TSUNAMI {top.level} ", "bold white on #7f1d1d")
-    tail = Text("   t details, a acknowledge", "white")
+    head = Text(f" TSUNAMI {top.level} ", "bold reverse")  # the level word is the cue without colour
+    tail = Text("   t details, a acknowledge")
     if len(alerts) > 1:
-        tail = Text(f"  (+{len(alerts) - 1} more)", "white") + tail
-    headline = Text(f" {top.headline}", "bold white", no_wrap=True)
+        tail = Text(f"  (+{len(alerts) - 1} more)") + tail
+    headline = Text(f" {top.headline}", "bold", no_wrap=True)
     if width:
         headline.truncate(max(width - cell_len(head.plain) - cell_len(tail.plain), 0), overflow="ellipsis")
     return Text.assemble(head, headline, tail, no_wrap=True, overflow="ellipsis")
@@ -30,6 +31,7 @@ class Banner(Static):
         visible = bool(alerts) and unacked > 0
         self.display = visible
         self._alerts = alerts if visible else []
+        mark_level(self, alerts[0].level if visible else None)
         if visible:
             self.update(build_banner(alerts, self.size.width))
 

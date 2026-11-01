@@ -33,8 +33,7 @@ async def test_state_none_shows_no_banner_and_a_quiet_panel(size):
         text = screen_text(app)
         assert "TSUNAMI" not in text and not app.dashboard.query_one("#banner").display
         assert app.dashboard.tsunami_state()[3] == "none"
-        if size[0] >= 120:
-            assert "No tsunami alerts in force" in text
+        assert "No tsunami alerts in force" in text
 
 
 async def test_state_watch_raises_the_banner_and_the_status_alarm(size):
@@ -45,8 +44,7 @@ async def test_state_watch_raises_the_banner_and_the_status_alarm(size):
         text = screen_text(app)
         assert "TSUNAMI WATCH" in text and "t details, a acknowledge" in text
         assert app.dashboard.query_one("#status").has_class("alert-alarm")
-        if size[0] >= 120:
-            assert "WATCH " in text.split("t details, a acknowledge")[-1]  # panel row, level column
+        assert "WATCH " in text.split("t details, a acknowledge")[-1]  # panel row, level column, at every size
 
 
 async def test_state_warning_banner_then_acknowledge_clears_it(size):
@@ -68,8 +66,7 @@ async def test_state_warning_banner_then_acknowledge_clears_it(size):
         text = screen_text(app)
         assert "t details, a acknowledge" not in text and not banner.display
         assert app.dashboard.query_one("#status").has_class("alert-active")
-        if size[0] >= 120:
-            assert "WARNING" in text  # the panel keeps listing it while it is in force
+        assert "WARNING" in text  # the panel keeps listing it while it is in force, at every size
 
 
 async def test_state_information_is_quiet(size):
@@ -86,8 +83,7 @@ async def test_state_information_is_quiet(size):
         assert app.dashboard.tsunami_state()[3] == "info"
         assert "TSUNAMI WARNING" not in text and "acknowledge" not in text
         assert app.dashboard.query_one("#status").has_class("alert-info")
-        if size[0] >= 120:
-            assert "INFORMATION" in text.upper()
+        assert "INFORMATION" in text.upper()
 
 
 async def test_state_cancellation_clears_the_banner_and_is_listed(size):
