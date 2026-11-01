@@ -10,18 +10,18 @@ from earthwave.ui.widgets.quake_list import QuakeList
 from uat.harness import kam_alert_app, screen_text, week_app
 
 
-async def test_map_zoom_cycles_world_region_home_world(size):
+async def test_map_zoom_cycles_world_wide_region_close_world(size):
     if size[0] < 120:
         pytest.skip("the map column is hidden below 120 columns; covered by test_full_screen_map_below_120")
     app = week_app()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
         seen = []
-        for _ in range(4):
-            seen.append(next(t for t in ("world", "region", "home") if f"Map · {t}" in screen_text(app)))
+        for _ in range(5):
+            seen.append(next(t for t in ("world", "wide", "region", "close") if f"Map · {t}" in screen_text(app)))
             await pilot.press("z")
             await pilot.pause()
-        assert seen == ["world", "region", "home", "world"]
+        assert seen == ["world", "wide", "region", "close", "world"]
 
 
 async def test_region_zoom_follows_the_cursor(size):
@@ -30,7 +30,7 @@ async def test_region_zoom_follows_the_cursor(size):
     app = week_app()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        await pilot.press("z")
+        await pilot.press("z", "z")
         await pilot.pause()
         first = screen_text(app)
         await pilot.press("j", "j", "j", "j", "j", "j", "j", "j", "j", "j")

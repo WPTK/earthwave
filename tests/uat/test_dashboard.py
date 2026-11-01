@@ -122,7 +122,7 @@ async def test_live_resize_relays_out_and_keeps_working():
         assert not app.dashboard.has_class("too-small")
 
         await pilot.press("z")  # screen-level keys still work after the round trip
-        assert "Map · region" in screen_text(app)
+        assert "Map · wide 90°" in screen_text(app)
 
 
 async def test_list_keeps_focus_after_a_too_small_round_trip():

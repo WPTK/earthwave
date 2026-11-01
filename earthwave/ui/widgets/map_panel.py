@@ -18,7 +18,7 @@ from textual.events import Resize
 from textual.strip import Strip
 from textual.widget import Widget
 
-from earthwave.config import HomeConfig
+from earthwave.config import AlertsConfig, HomeConfig
 from earthwave.models import Earthquake, TsunamiAlert
 from earthwave.notify.inapp import TSUNAMI_PREFIX, AttentionTracker
 from earthwave.sources import levels
@@ -37,8 +37,8 @@ from earthwave.ui.widgets.braille import (
 
 COAST_STYLE = Style(color="#5c7a99")
 HOME_STYLE = Style(color="bright_white", bold=True)
-REGION_LAT_SPAN = 40  # degrees of latitude shown around the selected quake
-HOME_LAT_SPAN = 16  # degrees of latitude shown around home
+WORLD_TOP = 84.0  # north edge of a world view too short to show all 180 degrees of latitude (Greenland ends at 83.6)
+MAJOR_MAG = AlertsConfig().major_magnitude  # with nothing selected, panned to or home, zoom goes to the latest of these
 WORLD_PAN_STEP = 30  # degrees of longitude per arrow press at world zoom
 PAN_GRID = 5  # panned view centres snap to this many degrees so rasters are reused from the cache
 TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
@@ -51,8 +51,13 @@ UNICODE_HOME, ASCII_HOME = "⌂", "H"
 
 class ZoomMode(StrEnum):
     WORLD = "world"
+    WIDE = "wide"
     REGION = "region"
-    HOME = "home"
+    CLOSE = "close"
+
+
+ZOOM_ORDER = tuple(ZoomMode)
+ZOOM_SPAN = {ZoomMode.WIDE: 90, ZoomMode.REGION: 40, ZoomMode.CLOSE: 16}  # degrees of latitude shown
 
 
 def marker_band(mag: float) -> int:
@@ -80,12 +85,21 @@ def zoom_view(center_lon: float, center_lat: float, lat_span: int, cols: int, ro
     return Viewport(float(lon0), float(lat0), float(lon0 + lon_span), float(lat0 + lat_span))
 
 
-def world_view(pan_lon: int = 0) -> Viewport:
-    """Whole-world viewport, optionally scrolled sideways (the map wraps at the antimeridian)."""
-    if not pan_lon % 360:
-        return WORLD
-    lon0 = pan_lon % 360 - 180  # the left edge is WORLD's -180 shifted east by pan_lon
-    return Viewport(float(lon0), WORLD.lat0, float(lon0 + 360), WORLD.lat1)
+def world_view(pan_lon: int = 0, cols: int = 0, rows: int = 0) -> Viewport:
+    """All 360 degrees of longitude (scrolled sideways by `pan_lon`; the map wraps at the antimeridian).
+
+    With a size the view has equal degrees per dot in both axes: a wide panel shows more than the 180 degrees of
+    latitude (blank bands above and below), a short one the latitudes from `WORLD_TOP` down. Without one, the
+    plain whole-world window.
+    """
+    lon0 = float(pan_lon % 360 - 180)  # the left edge is WORLD's -180 shifted east by pan_lon
+    if cols < 1 or rows < 1:
+        return Viewport(lon0, WORLD.lat0, lon0 + 360, WORLD.lat1)
+    span = 360 / (cols * 2 - 1) * (rows * 4 - 1)
+    if span >= 180:
+        return Viewport(lon0, -span / 2, lon0 + 360, span / 2)
+    lat0 = max(WORLD_TOP - span, -90.0)
+    return Viewport(lon0, lat0, lon0 + 360, lat0 + span)
 
 
 @lru_cache(maxsize=32)
@@ -209,7 +223,7 @@ def warm_world(cols: int, rows: int, ascii_mode: bool) -> None:
     """Load the coastline and rasterise the world view for this size, so the first draw is a cache hit."""
     warm_coastline()
     if cols > 0 and rows > 0:
-        base_lines(cols, rows, WORLD, ascii_mode)
+        base_lines(cols, rows, world_view(0, cols, rows), ascii_mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +334,7 @@ class MapModel:
         self.mode = ZoomMode.WORLD
         self.pan_lon = 0
         self.pan_lat = 0
+        self.focus: tuple[float, float] | None = None  # zoom centre when nothing is selected
         self.quakes: Sequence[Earthquake] = ()
         self.selected: Earthquake | None = None
         self.tsunami: Sequence[TsunamiMark] = ()
@@ -342,31 +357,53 @@ class MapModel:
         self.selected = quake
 
     def cycle_zoom(self) -> ZoomMode:
-        """World -> region around the selected quake -> home -> world, skipping modes that have no anchor."""
-        order = [ZoomMode.WORLD, ZoomMode.REGION, ZoomMode.HOME]
-        for step in range(1, 4):
-            mode = order[(order.index(self.mode) + step) % 3]
-            if mode is ZoomMode.REGION and self.selected is None:
-                continue
-            if mode is ZoomMode.HOME and self.home is None:
-                continue
-            self.mode = mode
-            break
+        """World -> wide -> region -> close -> world. Each step recentres on the selected quake; with none, on the
+        point the map is panned to, else home, else the latest major quake (no quake at all: it stays on the world)."""
+        nxt = ZOOM_ORDER[(ZOOM_ORDER.index(self.mode) + 1) % len(ZOOM_ORDER)]
+        if nxt is ZoomMode.WORLD:
+            self.focus = None
+        elif self.selected is None:
+            self.focus = self._pan_point() or self.focus or self._default_focus()
+        self.mode = nxt
         self.pan_lon = self.pan_lat = 0
         return self.mode
 
+    def _pan_point(self) -> tuple[float, float] | None:
+        """Where the user has panned to (the world view's centre line or the zoomed view's centre), None if unpanned."""
+        if not (self.pan_lon or self.pan_lat):
+            return None
+        if self.mode is ZoomMode.WORLD:
+            return float(self.pan_lon), 0.0
+        view = self.view()
+        return _wrap180((view.lon0 + view.lon1) / 2), (view.lat0 + view.lat1) / 2
+
+    def _default_focus(self) -> tuple[float, float] | None:
+        if self.home is not None:
+            return self.home.lon, self.home.lat
+        latest = max((q for q in self.quakes if q.mag >= MAJOR_MAG), key=lambda q: q.time, default=None)
+        latest = latest or max(self.quakes, key=lambda q: q.time, default=None)
+        return (latest.lon, latest.lat) if latest is not None else None
+
+    def _centre(self) -> tuple[float, float] | None:
+        """Centre (lon, lat) of a zoomed view before panning: the selected quake, else the remembered focus."""
+        if self.selected is not None:
+            return self.selected.lon, self.selected.lat
+        return self.focus
+
     def _anchor(self) -> tuple[float, float, int] | None:
         """Centre (lon, lat) and latitude span of the zoomed view, or None for the world view."""
-        if self.mode is ZoomMode.REGION and self.selected is not None:
-            return self.selected.lon, self.selected.lat, REGION_LAT_SPAN
-        if self.mode is ZoomMode.HOME and self.home is not None:
-            return self.home.lon, self.home.lat, HOME_LAT_SPAN
-        return None
+        centre = self._centre()
+        if self.mode is ZoomMode.WORLD or centre is None:
+            return None
+        return centre[0], centre[1], ZOOM_SPAN[self.mode]
 
     @property
     def shown(self) -> str:
-        """The name of the view actually drawn: a zoom without its anchor falls back to the world."""
-        return self.mode.value if self._anchor() is not None else ZoomMode.WORLD.value
+        """The zoom actually drawn, with its span: a zoom with nothing to centre on falls back to the world."""
+        span = ZOOM_SPAN.get(self.mode)
+        if span is None or self._anchor() is None:
+            return ZoomMode.WORLD.value
+        return f"{self.mode.value} {span}{'°' if not self.ascii_mode else ' deg'}"
 
     def pan(self, dx: int, dy: int) -> None:
         """Move the view by `dx`/`dy` quarter-steps (east and north positive).
@@ -398,7 +435,7 @@ class MapModel:
         cols, rows = max(self.cols, 1), max(self.rows, 1)
         anchor = self._anchor()
         if anchor is None:
-            return world_view(self.pan_lon)
+            return world_view(self.pan_lon, cols, rows)
         lon, lat, span = anchor
         if self.pan_lon or self.pan_lat:
             lon = round((lon + self.pan_lon) / PAN_GRID) * PAN_GRID
