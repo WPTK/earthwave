@@ -203,7 +203,9 @@ FiltersScreen, HelpScreen {
 
 #error {
     color: $error;
-    height: 1;
+    width: 100%;
+    height: auto;
+    min-height: 1;
 }
 
 #buttons {

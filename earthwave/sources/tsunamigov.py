@@ -4,6 +4,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -164,18 +165,27 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert |
 def dedupe_key(header: str, sent: datetime) -> str:
     """The WMO header plus the month the product was issued in (the header's DDHHMM repeats every month).
 
-    The month comes from the header's day against `sent`, not from `sent` alone: two feeds stamp the same product a
-    few seconds apart, and across a month boundary that would otherwise give two keys.
+    The month is the one (last, this or next, relative to `sent`) in which the header's day and time land closest
+    to `sent`: two feeds stamp the same product a few seconds apart, and a stamp just either side of any midnight
+    must not give two keys.
     """
-    match = re.search(r"(\d{2})\d{4}$", header)
-    anchor = sent.replace(day=1)
-    if match:
-        day = int(match[1])
-        if day > sent.day:  # issued late last month, stamped just after midnight
-            anchor = anchor - timedelta(days=1)
-        elif sent.day - day > 20:  # stamped just before midnight, issued early next month
-            anchor = anchor + timedelta(days=31)
-    return f"{header}|{anchor:%Y-%m}"
+    match = re.search(r"(\d{2})(\d{2})(\d{2})$", header)
+    this_month = sent.replace(day=1)
+    if not match:
+        return f"{header}|{this_month:%Y-%m}"
+    day, hour, minute = (int(g) for g in match.groups())
+    best: tuple[float, datetime] | None = None
+    last_month = (this_month - timedelta(days=1)).replace(day=1)
+    next_month = (this_month + timedelta(days=31)).replace(day=1)
+    for month in (last_month, this_month, next_month):
+        try:
+            issued = month.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:  # that month has no such day or time
+            continue
+        gap = abs((issued - sent).total_seconds())
+        if best is None or gap < best[0]:
+            best = (gap, month)
+    return f"{header}|{(best[1] if best else this_month):%Y-%m}"
 
 
 def fallback_alert(entry: dict) -> TsunamiAlert:
@@ -198,6 +208,22 @@ def fallback_alert(entry: dict) -> TsunamiAlert:
         updated=when,
         text=f"Details unavailable: the product could not be read. {entry['bulletin_url']}".strip(),
     )
+
+
+def trusted_url(url: str) -> str | None:
+    """Feed-supplied links are fetched with our User-Agent, so only tsunami.gov is followed, and only over https:
+    an http link (the CAP products carry some) is upgraded. Anything else, or another port, gives None."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or port not in (None, 443):
+        return None
+    if host != "tsunami.gov" and not host.endswith(".tsunami.gov"):
+        return None
+    return parts._replace(scheme="https", netloc=host).geturl()
 
 
 def permanent(exc: Exception) -> bool:
@@ -223,11 +249,14 @@ class TsunamiGovSource:
     async def _get_text(self, client: httpx.AsyncClient, url: str) -> str:
         response = await client.get(url)
         response.raise_for_status()
+        if trusted_url(str(response.url)) is None:  # redirected off tsunami.gov: the answer is not ours to use
+            raise ValueError(f"redirected to {response.url.host}")
         return response.text
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         alerts: list[TsunamiAlert] = []
         failures: list[Exception] = []
+        done: list[str] = []  # entries finished this poll; committed to _seen only once the batch is returned
         skipped = False  # something the feeds list could not be fetched: this poll is not a full answer
         for feed in FEEDS:
             try:
@@ -239,18 +268,24 @@ class TsunamiGovSource:
                 continue
             # Oldest first, so an update is merged after the product it supersedes.
             for entry in reversed(entries):
-                if entry["id"] in self._seen or not entry["cap_url"]:
+                if entry["id"] in self._seen or entry["id"] in done or not entry["cap_url"]:
                     continue
+                cap_url = trusted_url(entry["cap_url"])
+                bulletin_url = trusted_url(entry["bulletin_url"]) if entry["bulletin_url"] else None
                 try:
-                    cap = await self._get_text(client, entry["cap_url"])
-                    bulletin = ""
-                    if entry["bulletin_url"]:
-                        try:
-                            bulletin = await self._get_text(client, entry["bulletin_url"])
-                        except httpx.HTTPError as exc:
-                            log.warning("tsunamigov: bulletin %s unavailable: %r", entry["bulletin_url"], exc)
-                    if (alert := parse_cap(cap, bulletin, entry["cap_url"])) is not None:
-                        alerts.append(alert)
+                    if cap_url is None:
+                        log.warning("tsunamigov: not fetching %s (not tsunami.gov)", entry["cap_url"])
+                        alerts.append(fallback_alert(entry))
+                    else:
+                        cap = await self._get_text(client, cap_url)
+                        bulletin = ""
+                        if bulletin_url:
+                            try:
+                                bulletin = await self._get_text(client, bulletin_url)
+                            except (httpx.HTTPError, ValueError) as exc:
+                                log.warning("tsunamigov: bulletin %s unavailable: %r", bulletin_url, exc)
+                        if (alert := parse_cap(cap, bulletin, cap_url)) is not None:
+                            alerts.append(alert)
                 except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
                     if not permanent(exc):
                         # Outages (connect errors, timeouts, 5xx) never count: a live product must not be dropped.
@@ -265,12 +300,14 @@ class TsunamiGovSource:
                         continue
                     log.warning("tsunamigov: giving up on %s after %d attempts: %r", entry["cap_url"], count, exc)
                     alerts.append(fallback_alert(entry))
-                self._failures.pop(entry["id"], None)
-                self._seen[entry["id"]] = None
-                while len(self._seen) > SEEN_LIMIT:
-                    del self._seen[next(iter(self._seen))]
+                done.append(entry["id"])
         if len(failures) == len(FEEDS):
             raise failures[0]
+        for entry_id in done:  # nothing above awaits from here on, so a cancelled poll never leaves _seen ahead
+            self._failures.pop(entry_id, None)
+            self._seen[entry_id] = None
+        while len(self._seen) > SEEN_LIMIT:
+            del self._seen[next(iter(self._seen))]
         log.debug("tsunamigov: %d new products", len(alerts))
         alerts.sort(key=lambda a: a.issued or datetime.min.replace(tzinfo=UTC))
         return Batch(self.name, self._clock.now(), alerts=tuple(alerts), meta={"incomplete": skipped})

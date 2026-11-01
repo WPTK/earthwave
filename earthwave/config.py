@@ -186,6 +186,8 @@ def _coerce(section: str, key: str, value: Any, default: Any) -> Any:
         raise ConfigError(f"{where} must be text, got {value!r}")
     if not value.isprintable():
         raise ConfigError(f"{where} must not contain control characters, got {value!r}")
+    if (section, key) == ("notify", "contact") and not value.isascii():
+        raise ConfigError(f"{where} must be plain ASCII (it goes into an HTTP header), got {value!r}")
     choices = CHOICES.get((section, key))
     if choices and value not in choices:
         raise ConfigError(f"{where} must be one of {', '.join(choices)}, got {value!r}")
