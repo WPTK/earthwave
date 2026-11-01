@@ -88,7 +88,7 @@ class TsunamiScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("LEVEL", "SOURCE", "AREAS", "ISSUED", "EXPIRES", "STATUS")
+        table.add_columns("LEVEL", "STATUS", "SOURCE", "ISSUED", "EXPIRES", "AREAS")  # the long column goes last
         table.focus()
         self.refresh_alerts()
         self.refresh_gauges()
@@ -106,22 +106,24 @@ class TsunamiScreen(Screen):
         self._rows = table_rows(alerts, statuses)
         now = app.clock.now()
         tz = app.config.view.time_zone
+        offset = table.scroll_offset  # a rebuild would send a table scrolled sideways back to the left
         table.clear()
         for alert in self._rows:
             status = statuses[alert.id]
             table.add_row(
                 Text(alert.level, LEVEL_COLORS[alert.level]),
+                Text(status, STATUS_STYLE.get(status, "grey62")),
                 SOURCE_NAMES.get(alert.source, alert.source),
-                Text("; ".join(alert.areas)[:40]),
                 fmt_time(alert.issued, tz) if alert.issued else "",
                 "overdue"
                 if status == "overdue"
                 else fmt_until(app.store.expiry(alert), now)
                 if status == "active"
                 else "",
-                Text(status, STATUS_STYLE.get(status, "grey62")),
+                Text("; ".join(alert.areas)[:40]),
                 key=alert.id,
             )
+        table.scroll_to(offset.x, offset.y, animate=False, immediate=True)
         if keep is not None:
             for index, alert in enumerate(self._rows):
                 if alert.id == keep.id:
@@ -155,8 +157,16 @@ class TsunamiScreen(Screen):
         self.query_one(DataTable).action_cursor_up()
 
     def action_ack(self) -> None:
-        self.earthwave.tracker.ack_tsunami()
+        tracker = self.earthwave.tracker
+        count = tracker.tsunami_unacked()
+        tracker.ack_tsunami()
         self.earthwave.refresh_tsunami()
+        self.notify(
+            f"Acknowledged {count} tsunami alert{'s' if count != 1 else ''}"
+            if count
+            else "No unacknowledged tsunami alerts",
+            timeout=2,
+        )
 
     def action_back(self) -> None:
         self.app.pop_screen()

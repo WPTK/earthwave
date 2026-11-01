@@ -107,4 +107,5 @@ async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
         await pilot.pause()
         assert app.screen is app.dashboard
         assert "Gauge anomaly" in screen_text(app)  # the ticker line
-        assert app.dart.interval(SourceHealth()) in (60.0, 900)
+        assert app.dart.event_mode()
+        assert app.dart.interval(SourceHealth()) == config.poll.alert_gauge_seconds  # event mode polls fast

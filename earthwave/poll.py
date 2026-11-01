@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 BACKOFF_CAP = 600.0
 BACKOFF_FLOOR = 30.0  # base delay for sources whose own interval is 0 (startup chain)
+FETCH_DEADLINE = 120.0  # one poll's fetch and merge, end to end: a server that trickles bytes cannot stall a source
 JITTER = 0.1
 STALE_FACTOR = 2.5
 TICK = 0.5  # longest the loop sleeps, so refresh requests and countdowns stay responsive
@@ -153,7 +154,8 @@ class Scheduler:
         batch = None
         error = None
         try:
-            batch = await source.fetch(client, self._cursors.get(name))
+            async with asyncio.timeout(FETCH_DEADLINE):
+                batch = await source.fetch(client, self._cursors.get(name))
             events.extend(self._store.merge(batch, self._clock))
         except asyncio.CancelledError:
             raise
@@ -196,7 +198,8 @@ class Scheduler:
 
         async def run() -> None:
             try:
-                batch = await job(client)
+                async with asyncio.timeout(FETCH_DEADLINE):
+                    batch = await job(client)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

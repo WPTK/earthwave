@@ -126,6 +126,14 @@ class JmaSource:
         while len(self._seen) > SEEN_LIMIT:
             del self._seen[next(iter(self._seen))]
 
+    def _link(self, event: str, alert_id: str) -> tuple[str, ...]:
+        """The earlier reports of this event, which `alert_id` supersedes; the newest SEEN_LIMIT events are kept."""
+        earlier = self._ids_by_event.pop(event, [])  # re-inserted below, so an active event stays newest
+        self._ids_by_event[event] = [*earlier, alert_id]
+        while len(self._ids_by_event) > SEEN_LIMIT:
+            del self._ids_by_event[next(iter(self._ids_by_event))]
+        return tuple(earlier)
+
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         response = await client.get(f"{BASE}list.json")
         response.raise_for_status()
@@ -158,9 +166,7 @@ class JmaSource:
                     continue
                 log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
                 alert = fallback_alert(entry)
-            earlier = self._ids_by_event.setdefault(str(entry.get("eid") or name), [])
-            alert = replace(alert, references=tuple(earlier))
-            earlier.append(alert.id)
+            alert = replace(alert, references=self._link(str(entry.get("eid") or name), alert.id))
             self._failures.pop(name, None)
             self._remember(name)
             alerts.append(alert)

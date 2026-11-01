@@ -4,6 +4,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -164,18 +165,27 @@ def parse_cap(xml: str, bulletin: str = "", cap_url: str = "") -> TsunamiAlert |
 def dedupe_key(header: str, sent: datetime) -> str:
     """The WMO header plus the month the product was issued in (the header's DDHHMM repeats every month).
 
-    The month comes from the header's day against `sent`, not from `sent` alone: two feeds stamp the same product a
-    few seconds apart, and across a month boundary that would otherwise give two keys.
+    The month is the one (last, this or next, relative to `sent`) in which the header's day and time land closest
+    to `sent`: two feeds stamp the same product a few seconds apart, and a stamp just either side of any midnight
+    must not give two keys.
     """
-    match = re.search(r"(\d{2})\d{4}$", header)
-    anchor = sent.replace(day=1)
-    if match:
-        day = int(match[1])
-        if day > sent.day:  # issued late last month, stamped just after midnight
-            anchor = anchor - timedelta(days=1)
-        elif sent.day - day > 20:  # stamped just before midnight, issued early next month
-            anchor = anchor + timedelta(days=31)
-    return f"{header}|{anchor:%Y-%m}"
+    match = re.search(r"(\d{2})(\d{2})(\d{2})$", header)
+    this_month = sent.replace(day=1)
+    if not match:
+        return f"{header}|{this_month:%Y-%m}"
+    day, hour, minute = (int(g) for g in match.groups())
+    best: tuple[float, datetime] | None = None
+    last_month = (this_month - timedelta(days=1)).replace(day=1)
+    next_month = (this_month + timedelta(days=31)).replace(day=1)
+    for month in (last_month, this_month, next_month):
+        try:
+            issued = month.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:  # that month has no such day or time
+            continue
+        gap = abs((issued - sent).total_seconds())
+        if best is None or gap < best[0]:
+            best = (gap, month)
+    return f"{header}|{(best[1] if best else this_month):%Y-%m}"
 
 
 def fallback_alert(entry: dict) -> TsunamiAlert:
@@ -198,6 +208,13 @@ def fallback_alert(entry: dict) -> TsunamiAlert:
         updated=when,
         text=f"Details unavailable: the product could not be read. {entry['bulletin_url']}".strip(),
     )
+
+
+def trusted_url(url: str) -> bool:
+    """Feed-supplied links are fetched with our User-Agent, so only https on tsunami.gov is followed."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    return parts.scheme == "https" and (host == "tsunami.gov" or host.endswith(".tsunami.gov"))
 
 
 def permanent(exc: Exception) -> bool:
@@ -241,10 +258,15 @@ class TsunamiGovSource:
             for entry in reversed(entries):
                 if entry["id"] in self._seen or not entry["cap_url"]:
                     continue
+                if not trusted_url(entry["cap_url"]):
+                    log.warning("tsunamigov: not fetching %s (not https on tsunami.gov)", entry["cap_url"])
+                    alerts.append(fallback_alert(entry))
+                    self._seen[entry["id"]] = None
+                    continue
                 try:
                     cap = await self._get_text(client, entry["cap_url"])
                     bulletin = ""
-                    if entry["bulletin_url"]:
+                    if entry["bulletin_url"] and trusted_url(entry["bulletin_url"]):
                         try:
                             bulletin = await self._get_text(client, entry["bulletin_url"])
                         except httpx.HTTPError as exc:

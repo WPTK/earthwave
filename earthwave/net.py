@@ -56,8 +56,14 @@ class RecordingTransport(httpx.AsyncBaseTransport):
             record["body"] = body.decode("utf-8")
         except UnicodeDecodeError:
             record["body_b64"] = base64.b64encode(body).decode("ascii")
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        if self._path.exists() and self._path.stat().st_size:
+            with self._path.open("rb") as fh:
+                fh.seek(-1, 2)
+                if fh.read(1) != b"\n":  # an earlier run was cut off mid-line: end it so this record stands alone
+                    line = "\n" + line
         with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.write(line)
         await response.aclose()
         return httpx.Response(response.status_code, headers=headers, content=body, request=request)
 
@@ -66,11 +72,16 @@ class RecordingTransport(httpx.AsyncBaseTransport):
 
 
 def load_recording(path: Path) -> list[dict]:
+    """The recorded exchanges; a line that is not valid JSON (a run cut off mid-write) is skipped with a warning."""
     records = []
     with Path(path).open(encoding="utf-8") as fh:
-        for line in fh:
-            if line.strip():
+        for number, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
                 records.append(json.loads(line))
+            except json.JSONDecodeError:
+                log.warning("%s: line %d is not valid JSON, skipped", path, number)
     return records
 
 

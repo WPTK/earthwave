@@ -178,6 +178,7 @@ class AttentionTracker:
         keep = (TSUNAMI_PREFIX, GAUGE_PREFIX)
         for quake_id in [k for k in self._items if k not in quake_ids and not k.startswith(keep)]:
             del self._items[quake_id]
+        self._seen &= quake_ids  # with no history database nothing takes these, so they must not outlive the quake
 
     def restore(self, new_ids: set[str], major_ids: set[str]) -> None:
         """Quakes announced in an earlier run and never seen: back to the dim highlight, with no flash or pulse."""
