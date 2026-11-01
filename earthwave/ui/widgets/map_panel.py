@@ -7,9 +7,11 @@ the same projection the raster uses and composes frames. `MapPanel` is the widge
 from __future__ import annotations
 
 import logging
+import math
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache, partial
 
@@ -17,6 +19,7 @@ from rich.segment import Segment
 from rich.style import Style
 from textual.binding import Binding
 from textual.events import Resize
+from textual.geometry import Region
 from textual.strip import Strip
 from textual.timer import Timer
 from textual.widget import Widget
@@ -31,6 +34,7 @@ from earthwave.ui.graphics.probe import FALLBACK_CELL, GraphicsChoice
 from earthwave.ui.graphics.raster import Palette, Scene, Shape
 from earthwave.ui.graphics.sixel import RGB, encode
 from earthwave.ui.graphics.smooth import render_smooth
+from earthwave.ui.labels import fmt_age
 from earthwave.ui.theme import LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
     WORLD,
@@ -56,6 +60,8 @@ WORLD_PAN_STEP = 30  # degrees of longitude per arrow press at world zoom
 PAN_GRID = 5  # panned view centres snap to this many degrees so rasters are reused from the cache
 IMAGE_CACHE = 4  # encoded sixel images kept (a few hundred KB each): the views the user is flipping between
 WRITE_CHUNK = 8192  # Textual writes Windows output in chunks this size, and so does the image
+SPARE_MIN = 2  # rows left under a world map for the legend and the strongest quakes; fewer and nothing is drawn there
+LEGEND = ((2.5, "<3"), (3.5, "3-4"), (4.5, "4.5-5"), (5.5, "5.5-6"), (6.5, "6.5-7"), (7.0, "7+"))  # (magnitude, label)
 TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
 
 # Magnitude band -> marker. Bands: <4.5, 4.5-5.4, 5.5-6.4, 6.5+.
@@ -115,6 +121,11 @@ def world_view(pan_lon: int = 0, cols: int = 0, rows: int = 0) -> Viewport:
         return Viewport(lon0, -span / 2, lon0 + 360, span / 2)
     lat0 = max(WORLD_TOP - span, -90.0)
     return Viewport(lon0, lat0, lon0 + 360, lat0 + span)
+
+
+def world_rows(cols: int) -> int:
+    """Rows of a `cols`-wide world view that show exactly the 180 degrees from pole to pole at equal scale."""
+    return max(1, math.ceil(((cols * 2 - 1) / 2 + 1) / 4))
 
 
 @lru_cache(maxsize=32)
@@ -380,6 +391,16 @@ class MapModel:
     def resize(self, cols: int, rows: int) -> None:
         self.cols, self.rows = cols, rows
 
+    @property
+    def map_rows(self) -> int:
+        """Rows the map itself takes, from the top. A world view in a panel taller than the globe keeps equal scale and
+        leaves the rows below for text (`MapPanel`); with fewer than `SPARE_MIN` to spare, or zoomed, it takes all."""
+        if self._anchor() is None:
+            needed = world_rows(self.cols)
+            if self.rows - needed >= SPARE_MIN:
+                return needed
+        return self.rows
+
     def set_quakes(self, quakes: Sequence[Earthquake], selected: Earthquake | None) -> None:
         self.quakes = quakes
         self.selected = selected
@@ -468,7 +489,7 @@ class MapModel:
         )
 
     def view(self) -> Viewport:
-        cols, rows = max(self.cols, 1), max(self.rows, 1)
+        cols, rows = max(self.cols, 1), max(self.map_rows, 1)
         anchor = self._anchor()
         if anchor is None:
             return world_view(self.pan_lon, cols, rows)
@@ -480,19 +501,20 @@ class MapModel:
 
     def frame(self) -> Frame:
         view = self.view()
-        if self.cols < 1 or self.rows < 1:
-            return Frame(self.cols, self.rows, view, (), {}, {})
-        base = base_lines(self.cols, self.rows, view, self.ascii_mode)
-        land = land_rows(self.cols, self.rows, view)
+        rows = self.map_rows
+        if self.cols < 1 or rows < 1:
+            return Frame(self.cols, rows, view, (), {}, {})
+        base = base_lines(self.cols, rows, view, self.ascii_mode)
+        land = land_rows(self.cols, rows, view)
         selected_id = self.selected.id if self.selected else None
         markers = place_markers(
-            self.quakes, selected_id, self.home, view, self.cols, self.rows, self.ascii_mode, self.tracker
+            self.quakes, selected_id, self.home, view, self.cols, rows, self.ascii_mode, self.tracker
         )
-        tint, rings = place_tsunami(self.tsunami, view, self.cols, self.rows, self.ascii_mode, self.tracker)
+        tint, rings = place_tsunami(self.tsunami, view, self.cols, rows, self.ascii_mode, self.tracker)
         for key, ring in rings.items():
             if key not in markers:  # rings never cover a quake or the home marker
                 markers[key] = ring
-        return Frame(self.cols, self.rows, view, base, markers, tint, land)
+        return Frame(self.cols, rows, view, base, markers, tint, land)
 
     def plain_rows(self) -> list[str]:
         """Text-only frame (raster plus marker glyphs), used by tests and goldens."""
@@ -541,7 +563,7 @@ def pixel_scene(
     `rgb_of` turns a style colour name (`mag_color`, `LEVEL_COLORS`) into RGB. Attention is a steady white ring
     rather than a blink: the image is only re-sent when the picture changes.
     """
-    width, height = pixel_size(model.cols, model.rows, cell)
+    width, height = pixel_size(model.cols, model.map_rows, cell)
     if width < 1 or height < PIXEL_BAND:
         return None
     cw = cell[0]
@@ -552,7 +574,7 @@ def pixel_scene(
     for mark in sorted(model.tsunami, key=lambda m: levels.RANK.get(m.level, 0)):
         index = palette.index(rgb_of(LEVEL_COLORS.get(mark.level, "dodger_blue2")))
         if mark.geometry:
-            for place in geometry_cells(mark.geometry, view, model.cols, model.rows, False):
+            for place in geometry_cells(mark.geometry, view, model.cols, model.map_rows, False):
                 tints[place] = index
         if mark.source is not None:
             shapes.append(Shape(mark.source[1], mark.source[0], cw * 1.3, None, ring=index, ring_width=2))
@@ -626,6 +648,8 @@ class MapPanel(Widget, can_focus=True):
         self._stale = True  # Textual has repainted the cells since the image was written
         self._attention_seen = False
         self._reprobe: Timer | None = None
+        self._spare: list[Strip] | None = None
+        self._spare_key: tuple[str, ...] = ()
         self._rgb_cache: dict[tuple[str, int], RGB] = {}
 
     @property
@@ -808,19 +832,62 @@ class MapPanel(Widget, can_focus=True):
 
     # --- rendering ------------------------------------------------------------------------------------------------
 
+    def _spare_strips(self) -> list[Strip]:
+        """The rows under a world map that leaves some to spare: a magnitude legend, then the strongest quakes in the
+        current list, highest first, as many as fit. Plain text, not interactive."""
+        spare = self.model.rows - self.model.map_rows
+        width = self.size.width
+        if spare < SPARE_MIN or width < 1:
+            return []
+        if self._spare is None:
+            clock = getattr(self.app, "clock", None)
+            now = clock.now() if clock is not None else datetime.now(UTC)
+            marks = UNICODE_MARKERS if self._glyphs.unicode else ASCII_MARKERS
+            base = self.rich_style
+            legend: list[Segment] = []
+            for mag, label in LEGEND:
+                legend.append(Segment(marks[marker_band(mag)] + " ", base + Style.parse(mag_color(mag))))
+                legend.append(Segment(label + "  ", base))
+            lines = [legend]
+            for quake in sorted(self.model.quakes, key=lambda q: -q.mag)[: spare - 1]:
+                age = fmt_age((now - quake.time).total_seconds())
+                lines.append(
+                    [
+                        Segment(f"M{quake.mag:.1f}", base + Style.parse(mag_color(quake.mag))),
+                        Segment(f" {age} {quake.place}", base),
+                    ]
+                )
+            self._spare = [Strip(line).adjust_cell_length(width, self.rich_style) for line in lines]
+            self._spare_key = tuple(strip.text for strip in self._spare)
+        return self._spare
+
+    def _spare_row(self, index: int) -> Strip:
+        strips = self._spare_strips()
+        return strips[index] if index < len(strips) else Strip.blank(self.size.width, self.rich_style)
+
     def refresh(self, *regions, **kwargs):
         self._frame = None
+        self._spare = None
         if self._sixel and not regions and not kwargs and not self._sync_image():
-            return self  # the picture is unchanged (or still being drawn): leave the one on the terminal alone
+            # the picture is unchanged (or still being drawn): leave the one on the terminal alone, and repaint only
+            # the rows under it when their text changed
+            before = self._spare_key
+            self._spare_strips()
+            if self._spare_key != before:
+                top = self.model.map_rows
+                super().refresh(Region(0, top, self.size.width, self.model.rows - top))
+            return self
         return super().refresh(*regions, **kwargs)
 
     def render_lines(self, crop):
-        if self._sixel:
+        if self._sixel and crop.y < self.model.map_rows:
             self._stale = True  # the compositor is about to write these cells (even from its cache), erasing the image
         return super().render_lines(crop)
 
     def render_line(self, y: int) -> Strip:
         if self._sixel:
+            if y >= self.model.map_rows:
+                return self._spare_row(y - self.model.map_rows)
             self._stale = True  # these cells are about to be written, which erases the image under them
             return Strip.blank(self.size.width, self.rich_style)
         if self._frame is None:
@@ -832,7 +899,9 @@ class MapPanel(Widget, can_focus=True):
             for marker in self._frame.markers.values():
                 self._by_row.setdefault(marker.row, []).append(marker)
         frame = self._frame
-        if y >= frame.rows or y >= len(frame.base):
+        if y >= frame.rows:
+            return self._spare_row(y - frame.rows)
+        if y >= len(frame.base):
             return Strip.blank(self.size.width, Style())
         coast = Style(color=self.get_component_rich_style("map--coast").color)  # the panel supplies the sea
         land_bg = Style(bgcolor=self.get_component_rich_style("map--land").bgcolor)

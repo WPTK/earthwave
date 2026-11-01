@@ -202,7 +202,7 @@ async def test_sixel_image_matches_the_panel_size():
         await pilot.pause()
         data = next(iter(panel._images.values()))
         _, w, h = decode(data)
-        full = panel.content_region.height * 20
+        full = panel.model.map_rows * 20  # a world map in a tall panel leaves the rows under it for text
         assert w == panel.content_region.width * 10
         assert h % 6 == 0 and full - 6 < h <= full  # whole sixel bands, so no half band sticks out
 
@@ -260,6 +260,31 @@ def feed_all(reply, text):
     return [reply.feed(c) for c in text]
 
 
+def test_world_map_keeps_equal_scale_and_leaves_the_rest_for_text():
+    from earthwave.ui.widgets.map_panel import MapModel, world_rows
+
+    model = MapModel()
+    model.resize(70, 31)
+    assert model.map_rows == world_rows(70) < 31
+    view = model.view()
+    assert view.lat1 - view.lat0 >= 180  # the whole globe, top-aligned at equal scale
+    model.resize(70, world_rows(70) + 1)  # one spare row is too few: the map takes everything, as before
+    assert model.map_rows == model.rows
+
+
+@pytest.mark.parametrize("sixel", [False, True])
+async def test_spare_rows_show_legend_then_strongest_quakes(sixel):
+    app = week_app(graphics=SIXEL) if sixel else week_app()
+    async with app.run_test(size=(200, 60)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await pilot.pause()
+        strips = panel._spare_strips()
+        assert strips and "7+" in strips[0].text
+        mags = [float(s.text.split()[0][1:]) for s in strips[1:]]
+        assert mags and mags == sorted(mags, reverse=True)
+        assert panel.render_line(panel.model.map_rows).text == strips[0].text
+
+
 def test_cell_reply_reads_the_answer_with_or_without_the_escape():
     from earthwave.ui.graphics.probe import CellReply
 
@@ -299,6 +324,8 @@ async def test_resize_probe_updates_the_cell_size_and_eats_the_reply():
     async with app.run_test(size=(160, 40)) as pilot:
         panel = app.screen.query_one(MapPanel)
         await pilot.pause()
+        if panel._reprobe is not None:  # the start-up resize arms its own re-probe; on a slow runner it fires mid-test
+            panel._reprobe.stop()
         app._cell_reply, app._cell_pending = None, 0
         app.request_cell_probe()
         assert app._cell_pending == 1
