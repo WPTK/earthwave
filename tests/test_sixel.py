@@ -222,8 +222,9 @@ async def test_image_not_written_under_another_screen():
         assert panel._on_terminal is None
         await pilot.press("escape")
         await pilot.pause()
-        panel.emit_image(writes.append)  # back on top: drawn again
-        assert writes
+        await wait_for(lambda: panel._scene is not None and panel._images.get(panel._scene) is not None)
+        panel.emit_image(writes.append)  # back on top: on the terminal again (the real overlay may have drawn it first)
+        assert panel._on_terminal == panel._scene
 
 
 async def test_write_failure_falls_back_to_braille():
@@ -250,3 +251,78 @@ async def test_sixel_overlay_registered_with_the_app():
         panel = app.screen.query_one(MapPanel)
         assert panel.emit_image in app._overlays
     assert panel.emit_image not in app._overlays
+
+
+# --- cell size re-probe after a resize ------------------------------------------------------------------------------
+
+
+def feed_all(reply, text):
+    return [reply.feed(c) for c in text]
+
+
+def test_cell_reply_reads_the_answer_with_or_without_the_escape():
+    from earthwave.ui.graphics.probe import CellReply
+
+    for prefix in ("\x1b", "^", ""):
+        reply = CellReply()
+        results = feed_all(reply, f"{prefix}[6;24;12t")
+        assert all(consumed for consumed, _ in results)
+        assert results[-1][1] == (12, 24)
+        assert reply.replies == 1
+
+
+def test_cell_reply_lets_other_keys_through():
+    from earthwave.ui.graphics.probe import CellReply
+
+    reply = CellReply()
+    assert reply.feed("z") == (False, None)
+    assert reply.feed("t") == (False, None)
+    reply.feed("[")
+    reply.feed("5")
+    assert reply.feed("x") == (False, None)  # not a reply: the state is dropped and the key is typed
+    assert reply.feed("z") == (False, None)
+
+
+def test_cell_reply_rejects_absurd_sizes_but_counts_the_reply():
+    from earthwave.ui.graphics.probe import CellReply
+
+    reply = CellReply()
+    results = feed_all(reply, "[6;1;1t")
+    assert results[-1] == (True, None)
+    assert reply.replies == 1
+
+
+async def test_resize_probe_updates_the_cell_size_and_eats_the_reply():
+    from textual import events
+
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await pilot.pause()
+        app._cell_reply, app._cell_pending = None, 0
+        app.request_cell_probe()
+        assert app._cell_pending == 1
+        for char in "[6;24;12t":
+            await app.on_event(events.Key("x", char))
+        await pilot.pause()
+        assert app.graphics.cell == (12, 24)
+        assert panel._cell == (12, 24)
+        assert app._cell_reply is None and app._cell_pending == 0
+
+
+async def test_no_probe_for_braille():
+    app = week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.request_cell_probe()
+        assert app._cell_reply is None
+
+
+def test_margin_beyond_the_poles():
+    from earthwave.ui.graphics.raster import MARGIN, render_base
+    from earthwave.ui.widgets.braille import Viewport
+
+    pixels = render_base(Viewport(-180.0, -135.0, 180.0, 135.0), 100, 75)
+    assert pixels[:100] == bytes([MARGIN]) * 100 and pixels[-100:] == bytes([MARGIN]) * 100
+    assert pixels[37 * 100 + 50] != MARGIN  # the middle is the globe
+    assert MARGIN not in render_base(Viewport(-180.0, -90.0, 180.0, 90.0), 100, 50)

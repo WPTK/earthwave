@@ -68,6 +68,48 @@ def parse_reply(text: str, cols: int = 0, rows: int = 0) -> ProbeReply | None:
     return ProbeReply(sixel, cell)
 
 
+class CellReply:
+    """Reads a `CSI 6 ; height ; width t` reply (the answer to `CSI 16 t`) one character at a time.
+
+    After startup the terminal's answers come in on Textual's own input stream, as key events (Windows Terminal
+    delivers the escape as a literal `^`), so a font-size change can be re-probed without a second reader on stdin.
+    `feed` returns (consumed, cell): `consumed` is True for characters that belong to the reply, `cell` is set when
+    the reply is complete. Anything that does not look like the reply is passed on as typed.
+    """
+
+    __slots__ = ("buffer", "replies", "state")
+
+    def __init__(self) -> None:
+        self.replies = 0  # complete replies read so far
+        self.state = 0  # 0 waiting for the escape, 1 got it, 2 reading the parameters
+        self.buffer = ""
+
+    def feed(self, char: str) -> tuple[bool, tuple[int, int] | None]:
+        if self.state == 0:
+            if char in ("^", "\x1b"):
+                self.state = 1
+                return True, None
+            if char == "[":  # the console input does not always deliver the escape itself
+                self.state, self.buffer = 2, ""
+                return True, None
+            return False, None
+        if self.state == 1:
+            if char == "[":
+                self.state = 2
+                return True, None
+            self.state = 0
+            return False, None
+        if char.isdigit() or char == ";":
+            self.buffer += char
+            return True, None
+        done = char == "t" and (m := re.fullmatch(r"6;(\d+);(\d+)", self.buffer))
+        cell = _sane(int(m.group(2)), int(m.group(1))) if done else None
+        self.state, self.buffer = 0, ""
+        if done:
+            self.replies += 1
+        return bool(done), cell
+
+
 def _multiplexer(environ: Mapping[str, str]) -> bool:
     term = environ.get("TERM", "")
     return bool(environ.get("TMUX") or environ.get("STY")) or term.startswith(("screen", "tmux"))

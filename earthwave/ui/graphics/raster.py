@@ -22,15 +22,15 @@ from earthwave.ui.widgets.braille import (
     wrap_lon,
 )
 
-SEA, LAND, COAST, OUTLINE = 0, 1, 2, 3  # the fixed palette slots; marker colours are added after them
+SEA, LAND, COAST, OUTLINE, MARGIN = 0, 1, 2, 3, 4  # the fixed palette slots; marker colours are added after them
 BRUSH = 2  # coast line width in pixels
 
 
 class Palette:
-    """Palette under construction: the four fixed colours first, then one slot per distinct colour added."""
+    """Palette under construction: the five fixed colours first, then one slot per distinct colour added."""
 
-    def __init__(self, sea: RGB, land: RGB, coast: RGB, outline: RGB) -> None:
-        self.colours: list[RGB] = [sea, land, coast, outline]
+    def __init__(self, sea: RGB, land: RGB, coast: RGB, outline: RGB, margin: RGB) -> None:
+        self.colours: list[RGB] = [sea, land, coast, outline, margin]
 
     def index(self, colour: RGB) -> int:
         if colour not in self.colours:
@@ -61,6 +61,13 @@ class PixelCanvas(BrailleCanvas):
 def render_base(view: Viewport, width: int, height: int, brush: int = BRUSH) -> bytes:
     """Sea, land and coast as palette indices for a `width` x `height` pixel view of `view`."""
     pixels = bytearray(width * height)  # SEA is 0
+    if view.lat1 > 90 or view.lat0 < -90:  # a wide panel shows more than the globe: past the poles is margin, not sea
+        for lat, edge in ((90.0, view.lat1), (-90.0, view.lat0)):
+            if (edge > 90) if lat > 0 else (edge < -90):
+                fy = project(view.lon0, lat, view, width, height)[1]
+                rows = range(0, max(0, math.ceil(fy))) if lat > 0 else range(max(0, math.floor(fy) + 1), height)
+                for y in rows:
+                    pixels[y * width : (y + 1) * width] = bytes([MARGIN]) * width
     dot = min((view.lon1 - view.lon0) / max(width - 1, 1), (view.lat1 - view.lat0) / max(height - 1, 1))
     level = level_for_dot(dot)
     land = bytes([LAND])

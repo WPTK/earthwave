@@ -18,6 +18,7 @@ from rich.style import Style
 from textual.binding import Binding
 from textual.events import Resize
 from textual.strip import Strip
+from textual.timer import Timer
 from textual.widget import Widget
 
 from earthwave.config import AlertsConfig, HomeConfig
@@ -509,6 +510,7 @@ class PixelColors:
     sea: RGB
     land: RGB
     coast: RGB
+    margin: RGB = (14, 14, 16)  # beyond the poles, when the panel is taller than the globe
     outline: RGB = (6, 10, 18)  # one pixel edge round every marker, so it reads on sea, land and coast alike
     home: RGB = (255, 255, 255)
     attention: RGB = (255, 255, 255)
@@ -522,7 +524,7 @@ def _truecolor(color, theme) -> RGB:
     return (t.red, t.green, t.blue)
 
 
-MARKER_RADIUS = (0.3, 0.42, 0.6, 0.85)  # marker disc radius per magnitude band, in cell widths
+MARKER_RADIUS = (0.38, 0.55, 0.78, 1.05)  # marker disc radius per magnitude band, in cell widths
 PIXEL_BAND = 6  # a sixel band; the image height is a whole number of them
 
 
@@ -544,7 +546,7 @@ def pixel_scene(
         return None
     cw = cell[0]
     view = model.view()
-    palette = Palette(colors.sea, colors.land, colors.coast, colors.outline)
+    palette = Palette(colors.sea, colors.land, colors.coast, colors.outline, colors.margin)
     tints: dict[tuple[int, int], int] = {}
     shapes: list[Shape] = []
     for mark in sorted(model.tsunami, key=lambda m: levels.RANK.get(m.level, 0)):
@@ -623,6 +625,7 @@ class MapPanel(Widget, can_focus=True):
         self._on_terminal: Scene | None = None  # the picture last written, None once something may have erased it
         self._stale = True  # Textual has repainted the cells since the image was written
         self._attention_seen = False
+        self._reprobe: Timer | None = None
         self._rgb_cache: dict[tuple[str, int], RGB] = {}
 
     @property
@@ -662,7 +665,18 @@ class MapPanel(Widget, can_focus=True):
                 exclusive=True,
                 exit_on_error=False,
             )
+        if self._sixel:  # a font-size change moves the cell grid, so ask the terminal again once the resizing settles
+            if self._reprobe is not None:
+                self._reprobe.stop()
+            self._reprobe = self.set_timer(0.25, self.app.request_cell_probe)
         self.refresh()
+
+    def set_cell(self, cell: tuple[int, int]) -> None:
+        """The terminal's cell size changed: the picture is drawn again at the new pixel size."""
+        if cell != self._cell:
+            self._cell = cell
+            self._on_terminal = None
+            self.refresh()
 
     # --- data and keys --------------------------------------------------------------------------------------------
 
@@ -705,6 +719,7 @@ class MapPanel(Widget, can_focus=True):
             (sea.r, sea.g, sea.b),
             _truecolor(self.get_component_rich_style("map--land").bgcolor, theme),
             _truecolor(self.get_component_rich_style("map--coast").color, theme),
+            margin=(round(sea.r * 0.55), round(sea.g * 0.55), round(sea.b * 0.55)),
         )
 
     def rgb_of(self, name: str) -> RGB:

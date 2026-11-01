@@ -3,12 +3,13 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 
 import httpx
-from textual import work
+from textual import events, work
 from textual.app import App
 from textual.binding import Binding
 from textual.filter import Monochrome
@@ -43,7 +44,7 @@ from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
-from earthwave.ui.graphics.probe import BRAILLE, GraphicsChoice
+from earthwave.ui.graphics.probe import BRAILLE, CellReply, GraphicsChoice
 from earthwave.ui.labels import fmt_age, fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
@@ -54,11 +55,13 @@ from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import LegibleMonochrome
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
+from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
 
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+REPROBE_WINDOW = 0.5  # seconds a cell-size reply is looked for among the key events after a resize
 TSUNAMI_FEEDS = (TsunamiGovSource.name, NwsSource.name, JmaSource.name)
 SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
 GAUGE_REFRESH_TICKS = 20  # the open gauge strip redraws every 10 s (ages and 'last batch' text move with the clock)
@@ -101,6 +104,9 @@ class EarthwaveApp(App):
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.graphics = graphics or BRAILLE
         self._overlays: list[Callable[[Callable[[str], None]], None]] = []
+        self._cell_reply: CellReply | None = None
+        self._cell_reply_until = 0.0
+        self._cell_pending = 0
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
         # The steady feed must hold every quake that can alert, whatever magnitude the display filter hides.
@@ -141,6 +147,47 @@ class EarthwaveApp(App):
     def remove_overlay(self, emit: Callable[[Callable[[str], None]], None]) -> None:
         if emit in self._overlays:
             self._overlays.remove(emit)
+
+    def request_cell_probe(self) -> None:
+        """Ask the terminal for its cell size again (a font-size change keeps the window and moves the cell grid).
+
+        The answer comes back on Textual's input stream, so `on_event` picks it out of the key events; nothing reads
+        stdin here. A terminal that does not answer within `REPROBE_WINDOW` seconds leaves the cell size as it was.
+        """
+        if self.graphics.renderer != "sixel" or self._driver is None:
+            return
+        if self._cell_reply is None:
+            self._cell_reply = CellReply()
+        self._cell_pending += 1  # every query written is one reply to take out of the key events
+        self._cell_reply_until = time.monotonic() + REPROBE_WINDOW
+        self._driver.write("\x1b[16t")
+
+    async def on_event(self, event: events.Event) -> None:
+        if isinstance(event, events.Key) and self._cell_reply is not None:
+            if time.monotonic() > self._cell_reply_until:
+                self._cell_reply, self._cell_pending = None, 0
+            else:
+                # A real Escape key is never part of the reply here (Windows Terminal's arrives as `[...` or `^[...`),
+                # so a terminal that does not answer cannot swallow the user's Escape.
+                char = "" if event.key == "escape" else event.character or ""
+                consumed, cell = self._cell_reply.feed(char)
+                if cell is not None:
+                    log.debug("cell probe reply: %s", cell)
+                    self._set_cell(cell)
+                if self._cell_reply.replies >= self._cell_pending:
+                    self._cell_reply, self._cell_pending = None, 0
+                if consumed:
+                    event.stop()
+                    return
+        await super().on_event(event)
+
+    def _set_cell(self, cell: tuple[int, int]) -> None:
+        if self.graphics.cell == cell:
+            return
+        log.info("cell size changed: %s -> %s", self.graphics.cell, cell)
+        self.graphics = replace(self.graphics, cell=cell)
+        for panel in self.dashboard.query(MapPanel):
+            panel.set_cell(cell)
 
     def _end_update(self) -> None:
         """Textual brackets each screen update in a synchronized update; overlays draw inside it, so the cells and the
