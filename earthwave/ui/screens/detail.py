@@ -14,7 +14,7 @@ from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake, QuakeDetail
 from earthwave.ui.labels import fmt_age, fmt_distance, fmt_time
-from earthwave.ui.theme import PAGER_COLORS, mag_color
+from earthwave.ui.theme import PAGER_COLORS, YELLOW, mag_color
 from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
 if TYPE_CHECKING:
@@ -84,7 +84,7 @@ def render_detail(
     text.append("\n")
     _row(text, "Event page", quake.url, "underline")
     if note:
-        text.append(f"\n{note}\n", "yellow")
+        text.append(f"\n{note}\n", YELLOW)
     return text
 
 
@@ -103,7 +103,8 @@ class DetailScreen(Screen):
         self.quake = quake
         self.detail: QuakeDetail | None = None
         self.note = "Loading detail..."
-        self.gone = False  # the store no longer holds the quake (USGS deleted or retyped it)
+        self.gone = False  # the store held the quake when this screen opened and has dropped it since
+        self._held = False  # the store has held the quake while this screen was open
         self._requested: tuple[str, object] | None = None  # (id, updated) the detail was last asked for
         self._fetched: tuple[str, object] | None = None  # (id, updated) the shown detail belongs to
 
@@ -118,7 +119,12 @@ class DetailScreen(Screen):
         yield TooSmall(id="too_small")
 
     def on_resize(self, event: events.Resize) -> None:
-        sync_too_small(self, event)
+        if not sync_too_small(self, event):  # hiding the scroll area dropped its focus, and the scroll keys with it
+            self.call_after_refresh(self._focus_scroll)
+
+    def _focus_scroll(self) -> None:
+        for scroll in self.query("#detail_scroll"):
+            scroll.focus()
 
     def on_mount(self) -> None:
         self._show()
@@ -151,10 +157,11 @@ class DetailScreen(Screen):
     def _show(self) -> None:
         app = self.earthwave
         current = app.store.resolve(self.quake.id)  # follows a preferred-id change through the store's alias map
-        self.gone = current is None
-        self.quake = current or self.quake  # the snapshot only if the store dropped the quake
-        if not self.gone:
-            self._load_if_changed()
+        self._held = self._held or current is not None
+        # A quake the store never held (a history row older than its 35 days) is not "gone": USGS still lists it.
+        self.gone = current is None and self._held
+        self.quake = current or self.quake  # the snapshot only if the store dropped the quake or never held it
+        self._load_if_changed()  # once per revision, whether or not the store holds it
         home = (app.config.home.lat, app.config.home.lon) if app.config.home.enabled else None
         note = "\n".join(n for n in (self.note, GONE_NOTE if self.gone else "") if n)
         self.query_one("#detail", Static).update(

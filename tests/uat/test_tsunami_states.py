@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from conftest import FIXTURES, wait_until
 from test_observations import drive
-from test_tsunami import kam
+from test_tsunami import kam, nws_alert
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -171,3 +171,23 @@ async def test_many_gauge_rows_scroll_and_leave_the_bulletin_its_rows(monkeypatc
         assert text.size.height >= 3
         assert gauges.size.height <= body.size.height * 0.4 + 1
         assert gauges.virtual_size.height >= 18 and gauges.max_scroll_y > 0  # the rest is reachable by scrolling
+
+
+@pytest.mark.parametrize("make", [lambda: nws_alert(), lambda: kam(1)], ids=["nws-84-cell-headline", "cap-headline"])
+async def test_panel_row_shows_overdue_and_the_expiry_whatever_the_headline_length(size, make):
+    """The status is what a reader acts on, so it comes before the headline, which is what gets cut (read from the
+    rendered cells, not from the unclipped Text)."""
+    alert = make()
+    app = kam_alert_app(quake=False)
+    app.store.merge(Batch(alert.source, app.clock.now(), alerts=(alert,)), app.clock)
+    async with app.run_test(size=size) as pilot:
+        app.sync_tsunami()
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        assert "WARNING     expires in" in screen_text(app), "active alert: the expiry is on the level's row"
+        app.clock.advance((app.store.expiry(alert) - app.clock.now()).total_seconds() + 300)
+        app.sync_tsunami()
+        app.dashboard.refresh_view()
+        await pilot.pause()
+        assert app.store.alert_status(alert, app.clock) == "overdue"
+        assert "WARNING     OVERDUE, awaiting follow-up" in screen_text(app)  # same row: the panel wraps, then clips

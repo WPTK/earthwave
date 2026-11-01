@@ -13,6 +13,7 @@ from earthwave.notify.inapp import AttentionTracker
 from earthwave.sources.geo import haversine_km
 from earthwave.state.events import TsunamiIssued
 from earthwave.ui.glyphs import ASCII, UNICODE
+from earthwave.ui.theme import YELLOW
 from earthwave.ui.widgets.braille import WORLD, project_cell, unproject
 from earthwave.ui.widgets.map_panel import (
     COAST_STYLE,
@@ -97,7 +98,7 @@ def test_higher_level_wins_where_alerts_overlap():
     warning = geometry_cells(KAM_WARNING.geometry, WORLD, cols, rows, False)
     watch_only = geometry_cells(KAM_WATCH.geometry, WORLD, cols, rows, False) - warning
     assert warning and all(tint[c].color.name == "red" for c in warning)
-    assert watch_only and all(tint[c].color.name == "yellow" for c in watch_only)
+    assert watch_only and all(tint[c].color.name == YELLOW for c in watch_only)
 
 
 def test_tsunami_attention_blinks_then_settles_when_acknowledged():

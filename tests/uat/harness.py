@@ -28,6 +28,7 @@ __all__ = [
     "kam_alert_app",
     "kam_quake",
     "read",
+    "rendered_fill",
     "screen_text",
     "strip_app",
     "week_app",
@@ -58,6 +59,18 @@ def screen_text(app: EarthwaveApp) -> str:
         width = max(line, default=-1) + 1
         lines.append("".join(line.get(c, " ") for c in range(width)).rstrip())
     return "\n".join(lines)
+
+
+def rendered_fill(app: EarthwaveApp, word: str) -> str:
+    """The fill colour (#rrggbb) the exported screen paints the first run of text that starts with `word`."""
+    svg = app.export_screenshot()
+    run = re.search(rf'<text class="([^"]*)"[^>]*>{re.escape(word)}', svg)
+    assert run, f"{word!r} is not on screen"
+    for cls in run.group(1).split():
+        found = re.search(rf"\.{re.escape(cls)} \{{[^}}]*fill: (#[0-9a-fA-F]{{6}})", svg)
+        if found:
+            return found.group(1).lower()
+    raise AssertionError(f"no fill for {word!r}")
 
 
 def info_alert() -> TsunamiAlert:

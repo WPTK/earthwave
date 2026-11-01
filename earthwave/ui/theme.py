@@ -2,6 +2,11 @@
 
 from earthwave.poll import Freshness
 
+# ANSI "yellow" is not yellow on screen: Textual maps the sixteen ANSI colours through its own terminal theme (Monokai),
+# where yellow is (253,151,31), orange, next to dark_orange. Anything that must read as yellow uses this truecolor.
+# app.tcss defines the same value as $watch.
+YELLOW = "#ffd700"
+
 
 def mag_color(mag: float) -> str:
     """Magnitude bands: <3 grey, 3-4.4 cyan, 4.5-5.4 green, 5.5-6.4 yellow, 6.5-6.9 orange, 7+ red."""
@@ -12,27 +17,28 @@ def mag_color(mag: float) -> str:
     if mag < 5.5:
         return "green"
     if mag < 6.5:
-        return "yellow"
+        return YELLOW
     if mag < 7.0:
         return "dark_orange"
     return "bold red"
 
 
-PAGER_COLORS = {"green": "green", "yellow": "yellow", "orange": "dark_orange", "red": "red"}
+PAGER_COLORS = {"green": "green", "yellow": YELLOW, "orange": "dark_orange", "red": "red"}
 
 FRESHNESS_COLORS = {
     Freshness.LOADING: "grey62",
     Freshness.FRESH: "green",
-    Freshness.STALE: "yellow",
+    Freshness.STALE: YELLOW,
     Freshness.ERROR: "red",
 }
 
-# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue. These colour the level word
-# wherever it is printed; the banner, status bar and panel border take theirs from level-* classes in app.tcss.
+# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue (what each renders as, with
+# the app's ANSI theme applied, is pinned in tests/uat/test_screens.py). These colour the level word wherever it is
+# printed; the banner, status bar and panel border take theirs from level-* classes in app.tcss.
 LEVEL_COLORS = {
     "WARNING": "bold red",
     "ADVISORY": "dark_orange",
-    "WATCH": "yellow",
+    "WATCH": YELLOW,
     "THREAT": "sky_blue1",
     "INFORMATION": "sky_blue1",
     "CANCELLATION": "grey62",

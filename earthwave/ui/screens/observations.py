@@ -12,6 +12,7 @@ from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake
 from earthwave.ui.screens.detail import GONE_NOTE
+from earthwave.ui.theme import YELLOW
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
 from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
@@ -38,7 +39,12 @@ class ObservationsScreen(Screen):
         yield TooSmall(id="too_small")
 
     def on_resize(self, event: events.Resize) -> None:
-        sync_too_small(self, event)
+        if not sync_too_small(self, event):  # hiding the body dropped its focus, and the scroll keys with it
+            self.call_after_refresh(self._focus_body)
+
+    def _focus_body(self) -> None:
+        for body in self.query("#observations_body"):
+            body.focus()
 
     def on_mount(self) -> None:
         self.refresh_gauges()
@@ -50,6 +56,7 @@ class ObservationsScreen(Screen):
         found = app.store.resolve(self.quake.id)  # follows revisions and preferred-id changes
         gone = found is None
         q = self.quake = found or self.quake
+        app.pin_gauge_quake(q)  # USGS may have flagged it since `o` was pressed: its stations are chosen now
         head = Text()
         head.append(f"M{q.mag:.1f} {q.place}\n", "bold")
         if q.tsunami_flag:
@@ -57,7 +64,7 @@ class ObservationsScreen(Screen):
         else:
             head.append("USGS has not flagged this quake for a tsunami; showing the stations already chosen.", "grey62")
         if gone:
-            head.append(f"\n{GONE_NOTE}", "yellow")
+            head.append(f"\n{GONE_NOTE}", YELLOW)
         self.query_one("#observations_header", Static).update(head)
         self.query_one(GaugeStrip).show(app.gauge_rows(), app.clock.now())
 

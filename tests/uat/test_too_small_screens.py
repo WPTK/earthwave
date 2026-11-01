@@ -1,6 +1,7 @@
 """UAT: every screen, not just the dashboard, says so when the terminal is below the minimum size."""
 
 from uat.harness import kam_alert_app, screen_text, week_app
+from uat.test_tsunami_states import observe
 
 OVERLAY = "Terminal too small"
 
@@ -16,7 +17,9 @@ async def _check(app, pilot, key):
     assert app.screen is screen
     await pilot.resize_terminal(120, 40)
     await pilot.pause()
+    await pilot.pause()
     assert OVERLAY not in screen_text(app)
+    assert app.focused is not None  # hiding the body dropped its focus; it comes back with the screen
 
 
 async def test_tsunami_screen_shows_the_too_small_overlay():
@@ -42,6 +45,8 @@ async def test_detail_screen_shows_the_too_small_overlay():
 async def test_tsunami_keys_that_act_on_the_hidden_screen_are_off():
     app = kam_alert_app(0, 1)
     async with app.run_test(size=(80, 24)) as pilot:
+        observe(app, 1)  # a Warning nobody has acknowledged
+        assert app.tracker.tsunami_unacked() == 1
         await pilot.press("t")
         await pilot.pause()
         assert OVERLAY in screen_text(app)
@@ -50,6 +55,12 @@ async def test_tsunami_keys_that_act_on_the_hidden_screen_are_off():
         await pilot.press("j", "a")
         await pilot.pause()
         assert screen.query_one("DataTable").cursor_row == before
+        assert app.tracker.tsunami_unacked() == 1  # acknowledging what nobody can see is off
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert OVERLAY not in screen_text(app) and app.tracker.tsunami_unacked() == 0
 
 
 async def test_observations_key_does_nothing_behind_the_dashboard_overlay():
