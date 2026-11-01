@@ -630,6 +630,7 @@ async def test_the_ticker_names_the_feed_state_when_no_live_batch_can_arrive():
         assert app.quake_feed_wait() == "Waiting for USGS"
         app.scheduler.statuses["usgs"].health.failures = 3
         assert app.quake_feed_wait() == "USGS is not answering"
+        app.scheduler.statuses["usgs"].health.failures = 0
         app.store.warm = True
         assert app.quake_feed_wait() == ""
 

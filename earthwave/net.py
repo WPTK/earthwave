@@ -52,6 +52,10 @@ def retry_after_of(exc: BaseException, now: datetime) -> float | None:
     return None
 
 
+def _endpoint(url: httpx.URL) -> str:
+    return f"{url.scheme}://{url.netloc.decode('ascii')}{url.path}"
+
+
 class _Entry:
     __slots__ = ("body", "etag", "headers", "last_modified", "status")
 
@@ -72,9 +76,10 @@ class PoliteTransport(httpx.AsyncBaseTransport):
     - A GET without a query string whose response carries an ETag or Last-Modified is kept; the next request for the URL
       is conditional, and a 304 from the origin is answered to the caller as the kept 200. Nothing is ever answered
       without asking the origin, so a cached copy can never pass for a fresh poll.
-    - After a 429 (or a 503 with Retry-After) that URL is left alone for the time it named, up to RETRY_AFTER_CAP:
-      requests for it meanwhile get a synthetic 429 carrying the wait that remains, which the scheduler turns into the
-      next poll time. Other URLs, even on the same host, are unaffected.
+    - After a 429 (or a 503 with Retry-After) that endpoint (scheme, host and path; the query is ignored, since the
+      dated queries of fdsnws and CO-OPS change on every request) is left alone for the time it named, up to
+      RETRY_AFTER_CAP: requests for it meanwhile get a synthetic 429 carrying the wait that remains, which the
+      scheduler turns into the next poll time. Other paths, even on the same host, are unaffected.
 
     A request that already carries If-None-Match or If-Modified-Since (the USGS cursor) passes through untouched.
     """
@@ -83,15 +88,15 @@ class PoliteTransport(httpx.AsyncBaseTransport):
         self._inner = inner
         self._clock = clock
         self._cache: dict[str, _Entry] = {}  # least recently used first
-        self._blocked: dict[str, float] = {}  # url -> monotonic time it may be asked again
+        self._blocked: dict[str, float] = {}  # scheme://host/path -> monotonic time it may be asked again
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         key, now = str(request.url), self._clock.monotonic()
-        remaining = self._blocked.get(key, 0.0) - now
-        if remaining > 0:
-            log.debug("polite: %s asked us to wait, %.0fs left", key, remaining)
+        endpoint = _endpoint(request.url)
+        self._blocked = {k: until for k, until in self._blocked.items() if until > now}
+        if (remaining := self._blocked.get(endpoint, 0.0) - now) > 0:
+            log.debug("polite: %s asked us to wait, %.0fs left", endpoint, remaining)
             return httpx.Response(429, headers={"Retry-After": str(math.ceil(remaining))}, request=request)
-        self._blocked.pop(key, None)
         if request.method != "GET" or _CALLER_VALIDATORS & {k.lower() for k in request.headers}:
             return await self._inner.handle_async_request(request)
         entry = self._cache.pop(key, None) if not request.url.query else None
@@ -103,7 +108,7 @@ class PoliteTransport(httpx.AsyncBaseTransport):
                 request.headers["If-Modified-Since"] = entry.last_modified
         response = await self._inner.handle_async_request(request)
         if response.status_code in (429, 503):
-            self._note_rate_limit(key, response, now)
+            self._note_rate_limit(endpoint, response, now)
         elif response.status_code == 304 and entry:
             await response.aclose()
             return entry.response(request)
@@ -155,6 +160,7 @@ class RecordingTransport(httpx.AsyncBaseTransport):
         self._inner = inner
         self._path = Path(path)
         self._clock = clock
+        self._failed = False  # a write failed: recording stopped, the exchange itself carries on
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -172,7 +178,16 @@ class RecordingTransport(httpx.AsyncBaseTransport):
             record["body"] = body.decode("utf-8")
         except UnicodeDecodeError:
             record["body_b64"] = base64.b64encode(body).decode("ascii")
-        line = json.dumps(record, ensure_ascii=False) + "\n"
+        if not self._failed:
+            try:
+                self._append(json.dumps(record, ensure_ascii=False) + "\n")
+            except OSError as exc:  # a full disk or a locked file must not turn every poll into a failure
+                self._failed = True
+                log.error("recording to %s failed and is stopped: %s", self._path, exc)
+        await response.aclose()
+        return httpx.Response(response.status_code, headers=headers, content=body, request=request)
+
+    def _append(self, line: str) -> None:
         if self._path.exists() and self._path.stat().st_size:
             with self._path.open("rb") as fh:
                 fh.seek(-1, 2)
@@ -180,8 +195,6 @@ class RecordingTransport(httpx.AsyncBaseTransport):
                     line = "\n" + line
         with self._path.open("a", encoding="utf-8") as fh:
             fh.write(line)
-        await response.aclose()
-        return httpx.Response(response.status_code, headers=headers, content=body, request=request)
 
     async def aclose(self) -> None:
         await self._inner.aclose()
