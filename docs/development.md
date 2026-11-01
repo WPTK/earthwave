@@ -31,6 +31,28 @@ Tests never touch the network. Saved live payloads live under `tests/fixtures/<s
 `.gitattributes`; never reformat them), and `tests/fixtures/replay/*.jsonl` are recorded HTTP sessions. To re-capture
 the live fixtures, run `scripts\capture_fixtures.py` (one request per URL).
 
+## User acceptance tests (`tests/uat/`)
+
+`pytest tests/uat` needs no terminal and is part of the normal run: the input inventory (`test_inputs.py`: every
+binding, help key, footer label and clickable must have a test, found by introspection in `inventory.py`), the state
+matrix (`test_matrix.py`: 7 screens x 9 states x 4 sizes against a list of contradiction rules; known defects are
+`xfail(strict=True)` with an issue number) and the walkthrough (`test_walkthrough.py`: every screen by keyboard only,
+then mouse only, offline and back, clean quit).
+
+The real-input run drives the released executable through a ConPTY using `tui-test` (a dev dependency) and the kit
+vendored in `tests/uat_kit/` from WPTK/wxbrief e01891b, sending real key bytes and SGR mouse press and release. It
+skips with a reason when the exe or `tui-test` is missing.
+
+```powershell
+gh release download v0.2.0 -p "earthwave-*-windows-x86_64.exe" -p SHA256SUMS -D rel
+$env:EARTHWAVE_EXE = "$PWD\rel\earthwave-v0.2.0-windows-x86_64.exe"; $env:PYTHONUTF8 = "1"
+.venv\Scripts\python -m pytest tests/uat/test_realinput.py -p no:xdist
+```
+
+ConPTY answers no sixel, so this run exercises the braille map path; how sixel looks stays a manual check in a real
+Windows Terminal. Windows keeps its config and history under the user profile whatever the environment says, so the run
+uses `--no-config` and `--replay`. Set `EARTHWAVE_UAT_NETWORK=1` to add one real-network first-run smoke test.
+
 ## Running with a recording
 
 ```powershell

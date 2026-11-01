@@ -40,6 +40,7 @@ dev = [
     "pyinstaller>=6.22,<7",
     "build>=1,<2",
     "pyshp",
+    "tui-test==0.1.1",
 ]
 
 [project.scripts]
