@@ -80,16 +80,21 @@ def legible_grey(fg: Color, bg: Color, minimum: float = 4.5) -> Color:
     return Color(grey, grey, grey)
 
 
+def _carries_meaning(ch: str) -> bool:
+    """A letter, digit or marker glyph: anything but a blank, a box line or block bar (U+2500-259F) or a braille dot."""
+    return not ch.isspace() and not "─" <= ch <= "▟" and not "⠀" <= ch <= "⣿"
+
+
 class LegibleMonochrome(Monochrome):
     """Textual's NO_COLOR filter keeps only luminance, and ANSI red and magenta (our Warning and M7+ colours) come out
-    near-black on the dark background (1.1:1). Words and numbers below 4.5:1 are lifted to the nearest grey that reads;
-    borders, map dots and sparklines (no letters or digits) keep the plain conversion."""
+    near-black on the dark background (1.1:1). Words, numbers and map markers below 4.5:1 are lifted to the nearest grey
+    that reads; borders, map dots and sparklines keep the plain conversion."""
 
     def apply(self, segments: list[Segment], background: Color) -> list[Segment]:
         out = []
         for seg in super().apply(segments, background):
             style = seg.style
-            if style and style.color and not style.reverse and any(c.isalnum() for c in seg.text):
+            if style and style.color and not style.reverse and any(_carries_meaning(c) for c in seg.text):
                 fg = Color.from_rich_color(style.color)
                 bg = Color.from_rich_color(style.bgcolor) if style.bgcolor else background
                 if contrast(fg, bg) < 4.5:
