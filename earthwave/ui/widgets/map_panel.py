@@ -7,7 +7,7 @@ the same projection the raster uses and composes frames. `MapPanel` is the widge
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache, partial
 
@@ -35,6 +35,7 @@ from earthwave.ui.widgets.braille import (
     unproject,
     warm_coastline,
 )
+from earthwave.ui.widgets.map_labels import place_labels
 
 # Plain fallback for a bare `row_segments` call; the panel colours coast and land from the theme
 # (`MapPanel.DEFAULT_CSS`).
@@ -254,6 +255,7 @@ class Frame:
     markers: dict[tuple[int, int], Marker]
     tint: dict[tuple[int, int], Style]
     land: tuple[bytes, ...] = ()
+    labels: dict[tuple[int, int], str] = field(default_factory=dict)
 
 
 def _marker_style(quake: Earthquake, selected: bool, tracker: AttentionTracker | None) -> tuple[Style, bool]:
@@ -307,6 +309,8 @@ def row_segments(
     land: bytes = b"",
     coast: Style = COAST_STYLE,
     land_style: Style | None = None,
+    labels: dict[int, str] | None = None,
+    label_style: Style = COAST_STYLE,
 ) -> list[Segment]:
     """Split one raster row into styled runs: markers by column (any order), `tint` maps columns to a coast colour.
 
@@ -320,6 +324,8 @@ def row_segments(
     for col, ch in enumerate(base):
         if col in by_col:
             glyph, style = by_col[col].glyph, by_col[col].style
+        elif labels and col in labels:
+            glyph, style = labels[col], label_style
         elif land_style is not None and col < len(land) and land[col]:
             glyph, style = ch, land_style
         else:
@@ -479,21 +485,29 @@ class MapModel:
         for key, ring in rings.items():
             if key not in markers:  # rings never cover a quake or the home marker
                 markers[key] = ring
-        return Frame(self.cols, self.rows, view, base, markers, tint, land)
+        labels = (
+            {}
+            if self.ascii_mode
+            else place_labels(view, self.cols, self.rows, coastline_canvas(self.cols, self.rows, view), markers)
+        )
+        return Frame(self.cols, self.rows, view, base, markers, tint, land, labels)
 
     def plain_rows(self) -> list[str]:
-        """Text-only frame (raster plus marker glyphs), used by tests and goldens."""
+        """Text-only frame (raster, labels and marker glyphs), used by tests and goldens."""
         frame = self.frame()
         rows = [list(line) for line in frame.base]
+        for (col, row), ch in frame.labels.items():
+            rows[row][col] = ch
         for marker in frame.markers.values():
             rows[marker.row][marker.col] = marker.glyph
         return ["".join(r) for r in rows]
 
 
 class MapPanel(Widget, can_focus=True):
-    COMPONENT_CLASSES = {"map--coast", "map--land"}
+    COMPONENT_CLASSES = {"map--coast", "map--land", "map--label"}
     DEFAULT_CSS = """
-    MapPanel > .map--coast { color: $primary-lighten-1; }
+    MapPanel > .map--coast { color: $primary-lighten-2; }
+    MapPanel > .map--label { color: $text-muted; }
     MapPanel > .map--land { color: $surface-lighten-3; }
     """
     BINDINGS = [
@@ -593,5 +607,9 @@ class MapPanel(Widget, can_focus=True):
         coast = Style(color=self.get_component_rich_style("map--coast").color)  # the panel supplies the sea
         land_style = Style(color=self.get_component_rich_style("map--land").color)
         land = frame.land[y] if y < len(frame.land) else b""
+        label_style = Style(color=self.get_component_rich_style("map--label").color, italic=True)
+        labels = {col: ch for (col, row), ch in frame.labels.items() if row == y}
         markers = self._by_row.get(y, ())
-        return Strip(row_segments(frame.base[y], markers, self._tint_by_row.get(y), land, coast, land_style))
+        return Strip(
+            row_segments(frame.base[y], markers, self._tint_by_row.get(y), land, coast, land_style, labels, label_style)
+        )

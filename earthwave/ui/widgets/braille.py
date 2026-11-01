@@ -215,6 +215,42 @@ def _unwrap(points: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
     return out
 
 
+FILL_DOT_ROW = 1  # the dot row (0-3) of each cell that carries the land hatch
+SIMPLIFY_DOTS = 0.8  # Douglas-Peucker tolerance in dots: smooth enough that rounding to the grid leaves no jitter
+
+
+def _simplify_dots(pts: list[tuple[float, float]], eps: float = SIMPLIFY_DOTS) -> list[tuple[float, float]]:
+    """Douglas-Peucker on projected dot coordinates (iterative, keeps both ends)."""
+    n = len(pts)
+    if n < 3:
+        return pts
+    keep = [False] * n
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    eps2 = eps * eps
+    while stack:
+        a, b = stack.pop()
+        ax, ay = pts[a]
+        dx, dy = pts[b][0] - ax, pts[b][1] - ay
+        length2 = dx * dx + dy * dy
+        far, far_d = -1, eps2
+        for i in range(a + 1, b):
+            px, py = pts[i][0] - ax, pts[i][1] - ay
+            if length2 == 0:
+                d = px * px + py * py
+            else:
+                t = max(0.0, min(1.0, (px * dx + py * dy) / length2))
+                ex, ey = px - t * dx, py - t * dy
+                d = ex * ex + ey * ey
+            if d > far_d:
+                far, far_d = i, d
+        if far >= 0:
+            keep[far] = True
+            stack.append((a, far))
+            stack.append((far, b))
+    return [p for p, k in zip(pts, keep, strict=True) if k]
+
+
 def _draw_unwrapped(
     canvas: BrailleCanvas, pts: Sequence[tuple[float, float]], bounds: tuple[float, float, float, float], view: Viewport
 ) -> None:
@@ -232,9 +268,12 @@ def _draw_unwrapped(
         shift = 360.0 * k
         if hi + shift < view.lon0 or lo + shift > view.lon1:
             continue
+        dots = _simplify_dots(
+            [((lon + shift - view.lon0) / lon_span * wm, (view.lat1 - lat) / lat_span * hm) for lon, lat in pts]
+        )
         prev: tuple[int, int] | None = None
-        for lon, lat in pts:
-            cur = (round((lon + shift - view.lon0) / lon_span * wm), round((view.lat1 - lat) / lat_span * hm))
+        for fx, fy in dots:
+            cur = (round(fx), round(fy))
             if cur != prev:
                 if prev is None:
                     canvas.set(cur[0], cur[1])  # a polyline collapsing to one dot still leaves that dot
@@ -307,7 +346,8 @@ def _prepared_land(level: int) -> tuple[tuple[tuple[tuple[float, float], ...], t
 @lru_cache(maxsize=16)
 def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
     """Land dots per cell as braille bits, row by row: even-odd scanline fill of the land rings, sampled at dot centres
-    (the same dot coordinates `project` gives the coastline)."""
+    (the same dot coordinates `project` gives the coastline). Only dot row `FILL_DOT_ROW` of each cell is filled:
+    land reads as a quiet horizontal hatch under the coast instead of a mesh of dots."""
     width, height = cols * 2, rows * 4
     lon_scale = (width - 1) / (view.lon1 - view.lon0)
     lat_scale = (height - 1) / (view.lat1 - view.lat0)
@@ -330,10 +370,11 @@ def _land_cached(cols: int, rows: int, view: Viewport) -> bytes:
                 if first > last:
                     continue
                 x0, slope = xs[i], (xs[i + 1] - xs[i]) / (y1 - y0)
-                for y in range(first, last + 1):
+                for y in range(first + (FILL_DOT_ROW - first) % 4, last + 1, 4):
                     crossings[y].append(x0 + (y - y0) * slope)
     bits = [0] * (cols * rows)
-    for y, row in enumerate(crossings):
+    for y in range(FILL_DOT_ROW, height, 4):
+        row = crossings[y]
         if len(row) < 2:
             continue
         row.sort()
