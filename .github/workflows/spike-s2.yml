@@ -19,6 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         terminal: [xterm-vt340, xterm, gnome-terminal, wezterm, kitty, alacritty]
+        theme: [dark, light]
     steps:
       - uses: actions/checkout@v4
       - name: Install terminal and tools
@@ -49,25 +50,31 @@ jobs:
           ./earthwave --version
           echo "EW=$PWD/earthwave" >> "$GITHUB_ENV"
       - name: Run the terminal, click, screenshot
+        env:
+          THEME: ${{ matrix.theme }}
         run: |
           chmod +x scripts/uat/s2/*.sh
-          scripts/uat/s2/xvfb_terminal.sh "${{ matrix.terminal }}" "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/${{ matrix.terminal }}"
+          scripts/uat/s2/xvfb_terminal.sh "${{ matrix.terminal }}" "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/${{ matrix.terminal }}-${{ matrix.theme }}"
       - name: Verdict
         if: always()
-        run: cat "out/${{ matrix.terminal }}/verdict" || true
+        run: cat "out/${{ matrix.terminal }}-${{ matrix.theme }}/verdict" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s2-${{ matrix.terminal }}
+          name: s2-${{ matrix.terminal }}-${{ matrix.theme }}
           path: |
-            out/${{ matrix.terminal }}/*.png
-            out/${{ matrix.terminal }}/*.log
-            out/${{ matrix.terminal }}/*.stdout
-            out/${{ matrix.terminal }}/verdict
+            out/${{ matrix.terminal }}-${{ matrix.theme }}/*.png
+            out/${{ matrix.terminal }}-${{ matrix.theme }}/*.log
+            out/${{ matrix.terminal }}-${{ matrix.theme }}/*.stdout
+            out/${{ matrix.terminal }}-${{ matrix.theme }}/verdict
 
   foot:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        theme: [dark, light]
     steps:
       - uses: actions/checkout@v4
       - name: Install foot, sway and tools
@@ -84,16 +91,18 @@ jobs:
           tar xzf earthwave-*.tar.gz
           echo "EW=$PWD/earthwave" >> "$GITHUB_ENV"
       - name: Run foot under headless sway, click, screenshot
+        env:
+          THEME: ${{ matrix.theme }}
         run: |
           chmod +x scripts/uat/s2/*.sh
-          scripts/uat/s2/foot_sway.sh "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/foot"
+          scripts/uat/s2/foot_sway.sh "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/foot-${{ matrix.theme }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s2-foot
+          name: s2-foot-${{ matrix.theme }}
           path: |
-            out/foot/*.png
-            out/foot/*.log
-            out/foot/*.stdout
-            out/foot/sway.log
-            out/foot/verdict
+            out/foot-${{ matrix.theme }}/*.png
+            out/foot-${{ matrix.theme }}/*.log
+            out/foot-${{ matrix.theme }}/*.stdout
+            out/foot-${{ matrix.theme }}/sway.log
+            out/foot-${{ matrix.theme }}/verdict

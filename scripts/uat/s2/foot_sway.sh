@@ -4,6 +4,8 @@
 set -uo pipefail
 EW=$1 FIX=$2 OUT=$3
 TERMNAME=foot
+THEME=${THEME:-dark}
+if [ "$THEME" = light ]; then BG=ffffff FG=000000; else BG=000000 FG=e0e0e0; fi
 COLS=${COLS:-130} ROWS=${ROWS:-32}
 CLICK_ROW=${CLICK_ROW:-8} SEL_ROW=${SEL_ROW:-2} LIST_COLS=${LIST_COLS:-70}
 mkdir -p "$OUT"
@@ -25,7 +27,7 @@ export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v l
 log "sway socket $WAYLAND_DISPLAY"
 
 mkdir -p "$OUT/home"; export HOME="$OUT/home"
-foot -W "${COLS}x${ROWS}" "$EW" --no-config --replay "$FIX" --hours 720 --min-mag 2.5 --glyphs unicode >"$OUT/foot.stdout" 2>&1 &
+foot -o colors.background=$BG -o colors.foreground=$FG -W "${COLS}x${ROWS}" "$EW" --no-config --replay "$FIX" --hours 720 --min-mag 2.5 --glyphs unicode >"$OUT/foot.stdout" 2>&1 &
 TPID=$!
 rect=""
 for _ in $(seq 40); do

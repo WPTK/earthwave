@@ -4,6 +4,8 @@
 # terminals: xterm-vt340 xterm gnome-terminal wezterm kitty alacritty
 set -uo pipefail
 TERMNAME=$1 EW=$2 FIX=$3 OUT=$4
+THEME=${THEME:-dark}   # dark | light: the terminal's own background and foreground
+if [ "$THEME" = light ]; then BG=ffffff FG=000000; else BG=000000 FG=e0e0e0; fi
 COLS=${COLS:-130} ROWS=${ROWS:-32}
 CLICK_ROW=${CLICK_ROW:-8}     # 0-based screen row of the quake to click (a list row below the first)
 SEL_ROW=${SEL_ROW:-2}         # 0-based screen row of the quake selected at start
@@ -23,16 +25,28 @@ mkdir -p "$OUT/home" ; export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.confi
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"; chmod 700 "$XDG_RUNTIME_DIR"
 
 case $TERMNAME in
-  xterm-vt340) CMD=(xterm +lc -ti vt340 -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -xrm 'XTerm*allowWindowOps: true' -e $APP) ;;
-  xterm)       CMD=(xterm -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -e $APP) ;;
-  gnome-terminal) CMD=(dbus-run-session -- gnome-terminal --wait --hide-menubar --geometry="${COLS}x${ROWS}" -- $APP) ;;
-  kitty)       CMD=(kitty -o initial_window_width=${COLS}c -o initial_window_height=${ROWS}c -o remember_window_size=no -o confirm_os_window_close=0 $APP) ;;
-  alacritty)   CMD=(alacritty -o window.dimensions.columns=$COLS -o window.dimensions.lines=$ROWS -e $APP) ;;
+  xterm-vt340) CMD=(xterm +lc -ti vt340 -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -xrm 'XTerm*allowWindowOps: true' -bg "#$BG" -fg "#$FG" -e $APP) ;;
+  xterm)       CMD=(xterm -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -bg "#$BG" -fg "#$FG" -e $APP) ;;
+  gnome-terminal)
+    cat >"$OUT/gt.sh" <<GT
+P=b1dcc9dd-5262-4d8d-a863-c897e6d979b9
+gsettings set org.gnome.Terminal.ProfilesList list "['\$P']"
+gsettings set org.gnome.Terminal.ProfilesList default "\$P"
+K="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:\$P/"
+gsettings set "\$K" use-theme-colors false
+gsettings set "\$K" background-color "#$BG"
+gsettings set "\$K" foreground-color "#$FG"
+exec gnome-terminal --wait --hide-menubar --geometry=${COLS}x${ROWS} -- $APP
+GT
+    CMD=(dbus-run-session -- bash "$OUT/gt.sh") ;;
+  gnome-terminal-old) CMD=(dbus-run-session -- gnome-terminal --wait --hide-menubar --geometry="${COLS}x${ROWS}" -- $APP) ;;
+  kitty)       CMD=(kitty -o initial_window_width=${COLS}c -o initial_window_height=${ROWS}c -o background="#$BG" -o foreground="#$FG" -o remember_window_size=no -o confirm_os_window_close=0 $APP) ;;
+  alacritty)   CMD=(alacritty -o window.dimensions.columns=$COLS -o window.dimensions.lines=$ROWS -o "colors.primary.background=\"#$BG\"" -o "colors.primary.foreground=\"#$FG\"" -e $APP) ;;
   wezterm)
     cat >"$OUT/wezterm.lua" <<LUA
 local wezterm = require 'wezterm'
 return { initial_cols = $COLS, initial_rows = $ROWS, front_end = 'Software', enable_tab_bar = false,
-  window_decorations = 'NONE', window_padding = { left = 0, right = 0, top = 0, bottom = 0 }, check_for_updates = false, enable_wayland = false }
+  colors = { background = '#$BG', foreground = '#$FG' }, window_decorations = 'NONE', window_padding = { left = 0, right = 0, top = 0, bottom = 0 }, check_for_updates = false, enable_wayland = false }
 LUA
     CMD=(env APPIMAGE_EXTRACT_AND_RUN=1 "$WEZTERM" --config-file "$OUT/wezterm.lua" start --always-new-process -- $APP) ;;
   *) echo "unknown terminal $TERMNAME"; exit 2 ;;
