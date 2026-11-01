@@ -187,6 +187,9 @@ class Terminal:
         _LIVE.add(self)
         argv = [a.replace("{dir}", str(self._dir)) for a in argv]
         child_env = self._env(env or {}, env_remove, isolate)
+        if os.name != "nt":  # trap: a program that reads COLUMNS/LINES (Textual does) sees 80x24 unless they match
+            child_env.setdefault("COLUMNS", str(cols))
+            child_env.setdefault("LINES", str(rows))
         before = {p.pid for p in psutil.Process().children(recursive=True)}
         self._trace_dir = self._dir / "_trace"
         self._raw = ""
