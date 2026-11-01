@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 MAP_MIN_WIDTH = 120  # below this the map hides itself and the list takes the full width
 
 
+HIDDEN_ACTIONS = {"ack_all", "search", "filters", "sort", "toggle_map", "fullscreen_map", "zoom_map"}
+
+
 class DashboardScreen(Screen):
     BINDINGS = [
         Binding("f", "filters", "Filters"),
@@ -49,9 +52,9 @@ class DashboardScreen(Screen):
         self._countable: set[str] = set()  # ids the magnitude and hours filter can show: what the unseen badge counts
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Under the too-small overlay no key may act on what cannot be seen (quit is the app's own binding)."""
-        del action, parameters  # the answer does not depend on which action it is
-        return not self.has_class("too-small")
+        """Under the too-small overlay the keys that act on the hidden dashboard are off (quit is the app's own)."""
+        del parameters
+        return not (self.has_class("too-small") and action in HIDDEN_ACTIONS)
 
     @property
     def earthwave(self) -> "EarthwaveApp":

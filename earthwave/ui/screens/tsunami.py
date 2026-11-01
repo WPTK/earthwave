@@ -89,7 +89,7 @@ class TsunamiScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("LEVEL", "STATUS", "SOURCE", "ISSUED", "EXPIRES", "AREAS")  # the long column goes last
+        table.add_columns("LEVEL", "STATUS", "SOURCE", "ISSUED", "EXPIRES")  # the areas are in the text below
         table.focus()
         self._ready = True
         self.refresh_alerts()
@@ -110,7 +110,6 @@ class TsunamiScreen(Screen):
         self._rows = table_rows(alerts, statuses)
         now = app.clock.now()
         tz = app.config.view.time_zone
-        offset = table.scroll_offset  # a rebuild would send a table scrolled sideways back to the left
         table.clear()
         for alert in self._rows:
             status = statuses[alert.id]
@@ -124,10 +123,8 @@ class TsunamiScreen(Screen):
                 else fmt_until(app.store.expiry(alert), now)
                 if status == "active"
                 else "",
-                Text("; ".join(alert.areas)[:40]),
                 key=alert.id,
             )
-        table.scroll_to(offset.x, offset.y, animate=False, immediate=True)
         if keep is not None:
             for index, alert in enumerate(self._rows):
                 if alert.id == keep.id:

@@ -53,12 +53,15 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
         text.append(f" {glyphs.bar} ", "grey42")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
         text.append(" feeds ok", "grey70")
-    for index, line in enumerate(unhealthy):
-        age = f", last ok {fmt_age(line.age)}" if line.age is not None else ""
+    groups: dict[tuple[Freshness, str], list[SourceLine]] = {}  # one phrase per state: six loading feeds fit the bar
+    for line in unhealthy:
+        groups.setdefault((line.freshness, FRESHNESS_WORDS.get(line.freshness, "incomplete")), []).append(line)
+    for index, ((freshness, word), lines) in enumerate(groups.items()):
         text.append(f" {glyphs.bar} " if index == 0 else "  ", "grey42")
-        text.append(f"{glyphs.dot}", FRESHNESS_COLORS[line.freshness])
-        word = FRESHNESS_WORDS.get(line.freshness, "incomplete")
-        text.append(f" {line.name} {word}{age}", "grey70")
+        text.append(f"{glyphs.dot}", FRESHNESS_COLORS[freshness])
+        names = ", ".join(line.name for line in lines)
+        age = f", last ok {fmt_age(lines[0].age)}" if len(lines) == 1 and lines[0].age is not None else ""
+        text.append(f" {names} {word}{age}" if len(lines) == 1 else f" {word}: {names}", "grey70")
     return text
 
 

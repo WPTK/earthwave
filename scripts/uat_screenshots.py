@@ -7,9 +7,19 @@ to OUT_DIR (created if missing) and is not meant to be committed.
 """
 
 import asyncio
+import os
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
+
+# Colour carries meaning (tsunami levels, magnitude, feed dots). NO_COLOR makes Textual render monochrome and would hide
+# colour defects, so the default run clears it; `--no-color` is the explicit monochrome case.
+MONO = "--no-color" in sys.argv
+if MONO:
+    os.environ["NO_COLOR"] = "1"
+else:
+    os.environ.pop("NO_COLOR", None)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))  # the UAT harness reuses the unit tests' builders and fixtures
@@ -22,6 +32,29 @@ from uat.harness import SIZES, TOO_SMALL_SIZES, info_alert, kam, kam_alert_app, 
 from earthwave.clock import ReplayClock  # noqa: E402
 from earthwave.models import Batch  # noqa: E402
 from earthwave.state.events import TsunamiIssued  # noqa: E402
+
+_HEX = re.compile(r"#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})")
+
+
+def has_chroma(svg: str) -> bool:
+    """True when the SVG uses at least one clearly chromatic colour (channels differ by more than 40)."""
+    for r, g, b in _HEX.findall(svg):
+        channels = (int(r, 16), int(g, 16), int(b, 16))
+        if max(channels) - min(channels) > 40:
+            return True
+    return False
+
+
+def greyscale(svg: str) -> str:
+    """What NO_COLOR does on a real terminal (Textual's Monochrome filter): every colour becomes its grey level.
+    export_screenshot() does not run that filter, so the monochrome case applies it to the SVG itself."""
+
+    def grey(m: re.Match) -> str:
+        r, g, b = (int(c, 16) for c in m.groups())
+        y = round(0.299 * r + 0.587 * g + 0.114 * b)
+        return f"#{y:02x}{y:02x}{y:02x}"
+
+    return _HEX.sub(grey, svg)
 
 
 def merge(app, *alerts):
@@ -145,7 +178,7 @@ STATES = {
 def write_png(svg: str, target: Path) -> bool:
     try:
         import cairosvg  # type: ignore[import-not-found]
-    except ImportError:
+    except (ImportError, OSError):  # OSError: cairosvg installed but the native cairo DLL is missing (Windows)
         return False
     cairosvg.svg2png(bytestring=svg.encode("utf-8"), write_to=str(target))
     return True
@@ -159,7 +192,13 @@ async def capture(out: Path, name: str, size: tuple[int, int]) -> Path:
         await driver(app, pilot)
         await pilot.pause()
         svg = app.export_screenshot(title=f"{name} {size[0]}x{size[1]}")
-    target = out / f"{name}_{size[0]}x{size[1]}.svg"
+        if MONO:
+            assert app.no_color, "NO_COLOR was not picked up by the app"
+            svg = greyscale(svg)
+    if not MONO and size not in TOO_SMALL_SIZES and not has_chroma(svg):
+        raise SystemExit(f"FAIL: {name} {size[0]}x{size[1]} has no chromatic colour (NO_COLOR set or theme broken?)")
+    suffix = "_nocolor" if MONO else ""
+    target = out / f"{name}_{size[0]}x{size[1]}{suffix}.svg"
     target.write_text(svg, encoding="utf-8")
     write_png(svg, target.with_suffix(".png"))
     return target
@@ -179,6 +218,7 @@ async def main(out: Path) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: uat_screenshots.py OUT_DIR")
-    sys.exit(asyncio.run(main(Path(sys.argv[1]))))
+    args = [a for a in sys.argv[1:] if a != "--no-color"]
+    if len(args) != 1:
+        sys.exit("usage: uat_screenshots.py OUT_DIR [--no-color]")
+    sys.exit(asyncio.run(main(Path(args[0]))))

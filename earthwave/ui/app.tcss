@@ -144,7 +144,11 @@ Screen.too-small #main,
 Screen.too-small #ticker,
 Screen.too-small #status,
 Screen.too-small Footer,
-Screen.too-small #search {
+Screen.too-small #search,
+Screen.too-small #history_head,
+Screen.too-small #history_stats,
+Screen.too-small #history_header,
+Screen.too-small #history_list {
     display: none;
 }
 
