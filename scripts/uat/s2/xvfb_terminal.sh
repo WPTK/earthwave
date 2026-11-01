@@ -25,14 +25,14 @@ mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"; chmod 700 "$XDG_RUNTIME_DIR"
 case $TERMNAME in
   xterm-vt340) CMD=(xterm +lc -ti vt340 -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -xrm 'XTerm*allowWindowOps: true' -e $APP) ;;
   xterm)       CMD=(xterm -geometry "${COLS}x${ROWS}" -fa Monospace -fs 11 -e $APP) ;;
-  gnome-terminal) CMD=(dbus-run-session -- gnome-terminal --wait --geometry="${COLS}x${ROWS}" -- $APP) ;;
+  gnome-terminal) CMD=(dbus-run-session -- gnome-terminal --wait --hide-menubar --geometry="${COLS}x${ROWS}" -- $APP) ;;
   kitty)       CMD=(kitty -o initial_window_width=${COLS}c -o initial_window_height=${ROWS}c -o remember_window_size=no -o confirm_os_window_close=0 $APP) ;;
   alacritty)   CMD=(alacritty -o window.dimensions.columns=$COLS -o window.dimensions.lines=$ROWS -e $APP) ;;
   wezterm)
     cat >"$OUT/wezterm.lua" <<LUA
 local wezterm = require 'wezterm'
 return { initial_cols = $COLS, initial_rows = $ROWS, front_end = 'Software', enable_tab_bar = false,
-  window_decorations = 'NONE', check_for_updates = false, enable_wayland = false }
+  window_decorations = 'NONE', window_padding = { left = 0, right = 0, top = 0, bottom = 0 }, check_for_updates = false, enable_wayland = false }
 LUA
     CMD=(env APPIMAGE_EXTRACT_AND_RUN=1 "$WEZTERM" --config-file "$OUT/wezterm.lua" start --always-new-process -- $APP) ;;
   *) echo "unknown terminal $TERMNAME"; exit 2 ;;
@@ -71,10 +71,14 @@ import -window root "$OUT/$TERMNAME-before.png"
 cw=$((gw / COLS)); ch=$((gh / ROWS))
 cx=$((gx + 12 * cw)); cy=$((gy + CLICK_ROW * ch + ch / 2))
 log "cell ${cw}x${ch} click at $cx,$cy (row $CLICK_ROW)"
-xdotool mousemove $((cx - 30)) "$cy"; sleep 0.2; xdotool mousemove "$cx" "$cy"; sleep 0.3
-xdotool click 1; sleep 1.5
-import -window root "$OUT/$TERMNAME-after.png"
-
+xdotool windowfocus "$win" 2>/dev/null; sleep 0.5
 . "$(dirname "$0")/verify.sh"
-verify "$TERMNAME" "$OUT"
+for attempt in 1 2; do
+  xdotool mousemove $((cx - 30)) "$cy"; sleep 0.2; xdotool mousemove "$cx" "$cy"; sleep 0.3
+  xdotool click 1; sleep 1.5
+  import -window root "$OUT/$TERMNAME-after.png"
+  log "click attempt $attempt"
+  verify "$TERMNAME" "$OUT" && break
+done
+echo "attempts=$attempt $VERDICT_NUMBERS" >>"$OUT/verdict"
 kill "$TPID" 2>/dev/null; sleep 1; pkill -P "$TPID" 2>/dev/null; true

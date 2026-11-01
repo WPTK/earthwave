@@ -12,9 +12,10 @@ verify() {
   band "$o/$n-before.png" $((CLICK_ROW + 6)) >"$o/f-before.miff"; band "$o/$n-after.png" $((CLICK_ROW + 6)) >"$o/f-after.miff"
   dc=$(diffpx "$o/c-before.miff" "$o/c-after.miff"); ds=$(diffpx "$o/s-before.miff" "$o/s-after.miff"); df=$(diffpx "$o/f-before.miff" "$o/f-after.miff")
   log "changed pixels: clicked row=$dc, previously selected row=$ds, untouched row=$df"
+  VERDICT_NUMBERS="clicked=$dc previous=$ds untouched=$df"
   if [ "$dc" -gt 200 ] && [ "$ds" -gt 200 ] && [ "$df" -lt 50 ]; then
     log "SELECTION CHANGED (verdict from pixels; the PNGs still have to be viewed)"; echo PASS >"$o/verdict"
-  else
-    log "SELECTION NOT CONFIRMED"; echo FAIL >"$o/verdict"
+    return 0
   fi
+  log "SELECTION NOT CONFIRMED"; echo FAIL >"$o/verdict"; return 1
 }
