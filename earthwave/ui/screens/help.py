@@ -27,6 +27,7 @@ HELP_TEXT = """\
   Quakes: USGS (earthquake.usgs.gov), public domain.
   Tsunami and sea level: NOAA / NWS, Japan Meteorological Agency.
   Coastlines: Natural Earth, public domain.
+  Not an official tsunami or quake warning; follow local authorities.
 
 [dim]Esc or ? to close[/dim]
 """

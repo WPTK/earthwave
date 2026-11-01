@@ -59,8 +59,12 @@ Contributor rules and the milestone workflow are in [`CLAUDE.md`](CLAUDE.md) and
 - [Japan Meteorological Agency](https://www.jma.go.jp/) (JMA) tsunami information, used with attribution
 - [Natural Earth](https://www.naturalearthdata.com/) coastlines, public domain
 
-earthwave is not affiliated with any of these agencies. Do not rely on it for safety decisions; follow official
-warnings from your local authorities.
+earthwave is not an official tsunami or earthquake warning service and is not affiliated with any of these agencies.
+Do not rely on it for safety decisions; follow your local authorities.
+
+It identifies itself to every feed (`earthwave/<version>` with the repository URL, plus `[notify] contact` if you set
+one), asks the feed whether a copy has changed (ETag, Last-Modified) instead of downloading it again, and after a 429 or 503
+leaves that address alone for as long as its `Retry-After` asks, up to five minutes.
 
 ## Versioning and changelog
 

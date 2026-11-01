@@ -10,6 +10,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
+from earthwave.net import retry_after_of
 from earthwave.sources import levels
 from earthwave.sources.base import SourceHealth
 
@@ -227,8 +228,10 @@ def trusted_url(url: str) -> str | None:
 
 
 def permanent(exc: Exception) -> bool:
-    """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse."""
+    """A failure that retrying is unlikely to fix: a 4xx answer or a CAP that does not parse. Not a rate limit."""
     if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == 429 or "Retry-After" in exc.response.headers:
+            return False
         return 400 <= exc.response.status_code < 500
     return not isinstance(exc, httpx.HTTPError)
 
@@ -302,7 +305,8 @@ class TsunamiGovSource:
                     alerts.append(fallback_alert(entry))
                 done.append(entry["id"])
         if len(failures) == len(FEEDS):
-            raise failures[0]
+            now = self._clock.now()
+            raise max(failures, key=lambda exc: retry_after_of(exc, now) or 0.0)
         for entry_id in done:  # nothing above awaits from here on, so a cancelled poll never leaves _seen ahead
             self._failures.pop(entry_id, None)
             self._seen[entry_id] = None

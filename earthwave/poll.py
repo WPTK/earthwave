@@ -12,6 +12,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch
+from earthwave.net import retry_after_of
 from earthwave.sources.base import Source, SourceHealth
 from earthwave.state.events import Event, SourceDegraded, SourceRecovered
 from earthwave.state.store import Store
@@ -160,6 +161,7 @@ class Scheduler:
         events: list[Event] = []
         batch = None
         error = None
+        asked = None
         try:
             async with asyncio.timeout(FETCH_DEADLINE):
                 batch = await source.fetch(client, self._cursors.get(name))
@@ -168,6 +170,7 @@ class Scheduler:
             raise
         except Exception as exc:
             error = describe(exc)
+            asked = retry_after_of(exc, self._clock.now())
             log.warning("%s: poll failed: %s", name, error)
         health = status.health
         if error is None:
@@ -191,6 +194,8 @@ class Scheduler:
             if health.failures == 1:
                 events.append(SourceDegraded(name, error))
             delay = backoff_delay(source.interval(health), health.failures, self._rng)
+            if asked is not None:  # a 429 or 503 names its own wait; never come back sooner than that
+                delay = max(delay, asked)
             status.next_due = self._clock.monotonic() + delay
         status.in_flight = False
         result = PollResult(name, generation, tuple(events), batch, error)
