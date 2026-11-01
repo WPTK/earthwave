@@ -322,6 +322,12 @@ def test_broken_toml_names_the_file(tmp_path):
         load_config(path)
 
 
+def test_a_config_saved_with_a_utf8_bom_loads(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_bytes(b"\xef\xbb\xbf[view]\nmin_magnitude = 5.0\n")
+    assert load_config(path).view.min_magnitude == 5.0
+
+
 def test_overrides_and_home_parsing():
     config = with_overrides(Config(), 4.0, 48, parse_home("40.7,-74"), "ascii")
     assert (config.view.min_magnitude, config.view.hours, config.view.glyphs) == (4.0, 48, "ascii")

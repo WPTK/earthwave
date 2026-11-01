@@ -12,6 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
@@ -48,13 +49,14 @@ jobs:
           - os: windows-latest
             name: windows-x86_64
             exe: earthwave.exe
-          - os: ubuntu-latest
+          - os: ubuntu-22.04  # the oldest glibc we can build on: the binary runs on glibc 2.35 and newer
             name: linux-x86_64
             exe: earthwave
           - os: macos-latest
             name: macos-arm64
             exe: earthwave
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -87,6 +89,7 @@ jobs:
   release:
     needs: [verify, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

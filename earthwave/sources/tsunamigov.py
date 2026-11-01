@@ -286,6 +286,8 @@ class TsunamiGovSource:
                             try:
                                 bulletin = await self._get_text(client, bulletin_url)
                             except (httpx.HTTPError, ValueError) as exc:
+                                if not permanent(exc):  # an outage: retry the whole product next poll
+                                    raise
                                 log.warning("tsunamigov: bulletin %s unavailable: %r", bulletin_url, exc)
                         if (alert := parse_cap(cap, bulletin, cap_url)) is not None:
                             alerts.append(alert)

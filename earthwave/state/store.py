@@ -114,6 +114,7 @@ class Store:
         self._readings: dict[str, dict[datetime, GaugeReading]] = {}
         self._residuals: dict[str, dict[datetime, ndbc.Residual | coops.Residual]] = {}
         self._predictions: dict[str, list[coops.Prediction]] = {}
+        self._gauge_selected: set[str] | None = None  # None until the app first names the stations it polls
         self._evaluated: dict[str, datetime] = {}  # station -> newest residual already judged for an anomaly
         self._episode_end: dict[str, datetime] = {}  # station -> latest exceedance of its current anomaly episode
         self.predictions_for: Callable[[str], list[coops.Prediction]] = lambda station_id: []
@@ -308,6 +309,8 @@ class Store:
             self._gauge_stations[station.id] = station
         by_station: dict[str, list[GaugeReading]] = {}
         for reading in batch.readings:
+            if self._gauge_selected is not None and reading.station_id not in self._gauge_selected:
+                continue  # a fetch that was in flight when the station left the selection
             by_station.setdefault(reading.station_id, []).append(reading)
         events: list[Event] = []
         for station_id, rows in by_station.items():
@@ -326,13 +329,21 @@ class Store:
             events.extend(self._judge_gauge(station_id, kind, clock, silent))
         return events
 
+    def select_gauges(self, station_ids: Iterable[str]) -> None:
+        """The stations being polled: readings for other stations are ignored, and those that left are forgotten."""
+        chosen = set(station_ids)
+        self.forget_gauges((self._gauge_selected or set()) - chosen)
+        self._gauge_selected = chosen
+
     def forget_gauges(self, station_ids: Iterable[str]) -> None:
-        """Stations that left the selection: their next look is a first look again (see `_judge_gauge`).
+        """Stations that left the selection: their readings go, and their next look is a first look again (see
+        `_judge_gauge`).
 
         An episode in progress is kept, so a station that comes back mid-episode is not announced a second time.
         """
         for station_id in station_ids:
-            self._evaluated.pop(station_id, None)
+            for table in (self._evaluated, self._readings, self._residuals, self._predictions):
+                table.pop(station_id, None)
 
     def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
         """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""

@@ -5,6 +5,7 @@ import json
 import re
 import time
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
@@ -604,12 +605,55 @@ async def test_the_ticker_waits_for_data_and_keeps_the_gauge_value_on_a_long_lin
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         ticker = app.dashboard.query_one(Ticker)
-        ticker.show(None, 0.0, warm=False)
+        ticker.show(None, 0.0, waiting="Waiting for USGS")
         assert "Waiting for USGS" in str(ticker.render())
-        ticker.show(None, 0.0, warm=True)
+        ticker.show(None, 0.0)
         assert "No major quakes in the loaded data" in str(ticker.render())
         quake = make_quake("big", 7.2, place="267 km ESE of Petropavlovsk-Kamchatsky, Russia " * 2)
         ticker.show(quake, 12 * 3600.0, "180 NM West of Iquique, Chile -0.03 m")
         text = str(ticker.render())
         assert text.endswith("180 NM West of Iquique, Chile -0.03 m") and "12h ago" in text and "…" in text
         assert len(text) <= ticker.size.width
+
+
+async def test_the_ticker_names_the_feed_state_when_no_live_batch_can_arrive():
+    app = week_app(offline=True)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        ticker = app.dashboard.query_one(Ticker)
+        ticker.show(None, 0.0, waiting=app.quake_feed_wait())
+        assert "Quakes are not being fetched" in str(ticker.render())
+    app = week_app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert app.quake_feed_wait() == "Waiting for USGS"
+        app.scheduler.statuses["usgs"].health.failures = 3
+        assert app.quake_feed_wait() == "USGS is not answering"
+        app.store.warm = True
+        assert app.quake_feed_wait() == ""
+
+
+async def test_the_detail_screen_follows_a_revision_in_the_store():
+    app = week_app(offline=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        top = app.dashboard.query_one(QuakeList).rows[0]
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DetailScreen)
+        revised = replace(top, mag=top.mag + 0.7, updated=top.updated + timedelta(minutes=1))
+        app.store.merge(Batch("usgs", WEEK_NOW, quakes=(revised,)), app.clock)
+        screen._show()
+        assert screen.quake.mag == revised.mag
+        assert f"M{revised.mag:.1f}" in str(screen.query_one("#detail").render())
+
+
+async def test_a_failed_backfill_is_tried_again_on_the_next_good_poll():
+    app = week_app(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._coverage_checked = True
+        app._backfill_if_needed(force=True)
+        await asyncio.wait({app._backfill})
+        assert app._coverage_checked is False

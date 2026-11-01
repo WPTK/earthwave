@@ -363,6 +363,11 @@ class MapModel:
             return self.home.lon, self.home.lat, HOME_LAT_SPAN
         return None
 
+    @property
+    def shown(self) -> str:
+        """The name of the view actually drawn: a zoom without its anchor falls back to the world."""
+        return self.mode.value if self._anchor() is not None else ZoomMode.WORLD.value
+
     def pan(self, dx: int, dy: int) -> None:
         """Move the view by `dx`/`dy` quarter-steps (east and north positive).
 
@@ -474,10 +479,12 @@ class MapPanel(Widget, can_focus=True):
 
     def set_quakes(self, quakes: Sequence[Earthquake], selected: Earthquake | None) -> None:
         self.model.set_quakes(quakes, selected)
+        self._update_title()
         self.refresh()
 
     def select(self, quake: Earthquake | None) -> None:
         self.model.select(quake)
+        self._update_title()
         self.refresh()
 
     def set_tsunami(self, marks: Sequence[TsunamiMark]) -> None:
@@ -497,7 +504,7 @@ class MapPanel(Widget, can_focus=True):
 
     def _update_title(self) -> None:
         sep = "·" if self._glyphs.unicode else "-"
-        self.border_title = f"Map {sep} {self.model.mode.value}"
+        self.border_title = f"Map {sep} {self.model.shown}"
 
     # --- rendering ------------------------------------------------------------------------------------------------
 

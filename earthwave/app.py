@@ -333,6 +333,18 @@ class EarthwaveApp(App):
         partial = [(n, f) for n, f in state if f is Freshness.FRESH and self.scheduler.statuses[n].health.incomplete]
         return down + partial, bool(names) and all(f is not Freshness.FRESH for _, f in state)
 
+    def quake_feed_wait(self) -> str:
+        """Why the quake list is not loaded yet, in words ("" once a live USGS batch has arrived). An offline run or a
+        disabled USGS feed will never load it, and a failing feed is not "waiting"."""
+        if self.store.warm:
+            return ""
+        if self.offline or not self.config.sources.usgs:
+            return "Quakes are not being fetched"
+        fresh = self.scheduler.freshness("usgs")
+        if fresh is Freshness.ERROR:
+            return "USGS is not answering"
+        return "Waiting for USGS"
+
     def tsunami_feeds_loading(self) -> bool:
         """True while an enabled tsunami feed has not answered yet: an empty list says nothing until it has, because
         another feed (NWS, JMA) answering first does not cover what only this one carries."""
@@ -381,7 +393,7 @@ class EarthwaveApp(App):
             self.store, self.clock, self.dart.stations, self.coops.stations, self.dart.unavailable, self._gauge_quake
         )
         old, self.gauge_selection = self.gauge_selection, chosen
-        self.store.forget_gauges(set(old.ids) - set(chosen.ids))
+        self.store.select_gauges(chosen.ids)
         if chosen.dart_ids != old.dart_ids:
             self.dart.set_selection(chosen.dart_ids)
             self.scheduler.reschedule(self.dart.name, immediate=True)
@@ -414,6 +426,7 @@ class EarthwaveApp(App):
                     threshold_m=limit,
                     kind=station.kind,
                     exceeded_at=exceeded[-1] if exceeded else None,
+                    residual_at=residuals[-1].ts if residuals else None,
                 )
             )
         return rows
@@ -449,9 +462,15 @@ class EarthwaveApp(App):
             end = self.clock.now()
             start = end - timedelta(hours=self.view.hours)
             min_mag = self.view.min_magnitude
-            self._backfill = self.scheduler.submit_backfill(
-                "usgs", self.client, lambda c: self.usgs.fetch_range(c, start, end, min_mag)
-            )
+
+            async def job(client: httpx.AsyncClient) -> Batch:
+                try:
+                    return await self.usgs.fetch_range(client, start, end, min_mag)
+                except Exception:
+                    self._coverage_checked = False  # the next good steady poll tries the backfill again
+                    raise
+
+            self._backfill = self.scheduler.submit_backfill("usgs", self.client, job)
         else:
             self.store.coverage_lapsed = False  # what lapsed does not touch this view
 

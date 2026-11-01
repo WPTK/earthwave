@@ -78,6 +78,21 @@ async def test_too_small_terminal_still_quits_on_q():
     assert app.return_code == 0
 
 
+async def test_too_small_terminal_ignores_keys_that_act_on_what_cannot_be_seen():
+    app = week_app()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        acked = []
+        app.tracker.ack_all = lambda: acked.append(True)
+        await pilot.press("a", "slash")
+        await pilot.pause()
+        assert acked == [] and not app.dashboard.query_one("#search").display
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        await pilot.press("a")
+        assert acked == [True]
+
+
 async def test_live_resize_relays_out_and_keeps_working():
     app = week_app()
     async with app.run_test(size=(120, 30)) as pilot:
