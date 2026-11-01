@@ -50,7 +50,7 @@ def test_quake_then_503_then_reset_then_recovery():
     env = {"SSL_CERT_FILE": info["ca"]}
     with Terminal([EXE, "--no-config"], 130, 32, env=env) as term:
         # 1. a quake that only the fake origin can have served
-        term.wait_for_text("shown of", 90)
+        term.wait_for(lambda s: "shown of" in s and "0 shown of 0" not in s.text, 90, "quakes listed")
         term.hold(3)
         ok = snap(term, "1-ok")
         assert "Port-Olry" in ok or "Vanuatu" in ok, ok

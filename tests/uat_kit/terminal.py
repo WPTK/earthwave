@@ -200,6 +200,10 @@ class Terminal:
             self.close()
             raise
         self._pids = {p.pid for p in psutil.Process().children(recursive=True)} - before
+        if os.name != "nt":
+            # trap: tui-test 0.1.1 on Linux and macOS starts the child at 80x24 whatever cols/rows say (the app showed
+            # "Terminal too small: 80x24"); an explicit resize applies the size and the app redraws
+            self.resize(cols, rows)
 
     def _run(self, coro: Any) -> Any:
         return self._loop.run_until_complete(coro)
