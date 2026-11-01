@@ -18,6 +18,7 @@ from earthwave.state.events import (
     QuakeMajor,
     QuakeNearHome,
     QuakeNew,
+    QuakeRenamed,
     QuakeUpdated,
     TsunamiCancelled,
     TsunamiChanged,
@@ -162,18 +163,21 @@ class Store:
         update the store without raising events, so launch never produces a flash storm.
         """
         if batch.not_modified:
-            if batch.coverage:
-                self._claim(batch)  # the feed still lists what it did: its claims are current
+            if batch.coverage and batch.generated:
+                self._claim(batch)  # the feed is unchanged since it was made: its claims are current up to then
             return []
         silent = batch.backfill or bool(batch.meta.get("silent")) or not self.warm
         events: list[Event] = []
         for quake in batch.quakes:
-            old = self._known(quake)
+            known = self._known(quake)
+            old = known[0] if known else None
             if old is not None and quake.updated and old.updated and quake.updated < old.updated:
                 continue
-            if old is not None and old.id != quake.id:  # USGS moved the event to another preferred id
-                del self._quakes[old.id]
-                self._repoint(old.id, quake.id)
+            for other in known:
+                if other.id != quake.id:  # USGS moved the event to another preferred id
+                    del self._quakes[other.id]
+                    self._relink(other.id, quake.id)
+                    events.append(QuakeRenamed(other.id, quake))
             self._quakes[quake.id] = quake
             if silent:
                 continue
@@ -188,6 +192,8 @@ class Store:
         if batch.coverage:
             self._reconcile(batch)
             self._claim(batch)
+        if batch.backfill:
+            self.coverage_lapsed = False  # the backfill that closes a lapsed claim has landed (even if it was partial)
         if not batch.backfill and batch.source not in GAUGE_SOURCES | ALERT_SOURCES:
             self.warm = True
         events.extend(self._merge_alerts(batch, clock))
@@ -196,46 +202,48 @@ class Store:
         self._prune(clock)
         return events
 
-    def _known(self, quake: Earthquake) -> Earthquake | None:
-        """The stored version of this event under any id USGS has given it."""
-        for quake_id in (quake.id, *quake.also_ids):
-            if (old := self._quakes.get(quake_id)) is not None:
-                return old
-        return None
+    def _known(self, quake: Earthquake) -> list[Earthquake]:
+        """Every stored version of this event under any id USGS has given it, the one under its own id first."""
+        return [old for quake_id in (quake.id, *quake.also_ids) if (old := self._quakes.get(quake_id)) is not None]
 
-    def _repoint(self, old_id: str, new_id: str) -> None:
+    def _relink(self, old_id: str, new_id: str | None) -> None:
+        """Alerts naming a quake that is gone follow it to its new id, or lose the link so `_link` can find it again."""
         for alert_id, alert in self._tsunamis.items():
             if alert.quake_ref == old_id:
                 self._tsunamis[alert_id] = replace(alert, quake_ref=new_id)
 
     def _reconcile(self, batch: Batch) -> None:
-        """A batch with coverage lists every quake of its window and magnitude floor, so a stored quake it omits was
-        deleted or revised out of the feed. The edges are spared: a feed lags, and its window slides."""
+        """A summary feed names every quake of its window and magnitude floor, so a stored quake it leaves out was
+        deleted or revised out of the feed. A quake revised below the floor is dropped by design: the feed no longer
+        vouches for it. The window is measured from when the feed was made, and its edges are spared (a feed lags and
+        its window slides). An empty listing proves nothing and removes nothing."""
         assert batch.coverage is not None
+        if not batch.listed or batch.generated is None:
+            return
         hours, floor = batch.coverage
-        oldest = batch.fetched_at - timedelta(hours=hours) + FEED_LAG
-        newest = batch.fetched_at - FEED_LAG
-        listed = {q.id for q in batch.quakes}
+        oldest = batch.generated - timedelta(hours=hours) + FEED_LAG
+        newest = batch.generated - FEED_LAG
         for quake in [q for q in self._quakes.values() if oldest <= q.time <= newest and q.mag >= floor]:
-            if quake.id not in listed:
+            if batch.listed.isdisjoint((quake.id, *quake.also_ids)):
                 del self._quakes[quake.id]
+                self._relink(quake.id, None)
 
     def _claim(self, batch: Batch) -> None:
         """Record what the batch covers. A steady feed keeps every claim at or above its floor current, but only if it
         saw the claim within its own window; an outage longer than that leaves a hole, so the claim lapses."""
         assert batch.coverage is not None
         hours, floor = batch.coverage
-        at = batch.fetched_at
+        at = batch.generated or batch.fetched_at
         if not batch.backfill:
             window = timedelta(hours=hours)
             lapsed = [claim for claim, seen in self._coverage.items() if seen < at - window]
             self.coverage_lapsed |= bool(lapsed)
             for claim in lapsed:
                 del self._coverage[claim]
-            for claim in self._coverage:
+            for claim, seen in self._coverage.items():
                 if claim[1] >= floor:
-                    self._coverage[claim] = at
-        self._coverage[batch.coverage] = at
+                    self._coverage[claim] = max(seen, at)
+        self._coverage[batch.coverage] = max(at, self._coverage.get(batch.coverage, at))
 
     # --- gauges -------------------------------------------------------------------------------------------------
 

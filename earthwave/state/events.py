@@ -17,6 +17,18 @@ class QuakeNew:
 
 
 @dataclass(frozen=True, slots=True)
+class QuakeRenamed:
+    """USGS moved an event to another preferred id: whatever was kept about `old_id` belongs to `quake.id` now."""
+
+    old_id: str
+    quake: Earthquake
+    kind: ClassVar[str] = "quake_renamed"
+
+    def __str__(self) -> str:
+        return f"renamed {self.old_id} -> {self.quake.id}"
+
+
+@dataclass(frozen=True, slots=True)
 class QuakeUpdated:
     quake: Earthquake
     changed: tuple[str, ...]
@@ -109,6 +121,7 @@ class SourceRecovered:
 Event = (
     QuakeNew
     | QuakeUpdated
+    | QuakeRenamed
     | QuakeMajor
     | QuakeNearHome
     | TsunamiIssued

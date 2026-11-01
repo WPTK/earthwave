@@ -160,15 +160,17 @@ class History:
         unseen_ids: set[str],
         alerts: Iterable[TsunamiAlert],
         fetched_at: datetime,
+        replaced: Iterable[str] = (),
     ) -> None:
         """Queue a merged batch. Quakes in `unseen_ids` (announced live, or just made major) are saved unseen,
         even if already stored; the rest start seen. Encoding happens in the writer job, off the event loop."""
-        quakes, alerts = tuple(quakes), tuple(alerts)
+        quakes, alerts, replaced = tuple(quakes), tuple(alerts), tuple(replaced)
         if not quakes and not alerts:
             return
         stamp = _iso(self._clock.now())
 
         def write(db: sqlite3.Connection) -> None:
+            db.executemany("DELETE FROM quakes WHERE id = ?", [(i,) for i in replaced])  # ids USGS replaced
             db.executemany(
                 "INSERT INTO quakes (id, time, data, seen_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET time = excluded.time, data = excluded.data, "

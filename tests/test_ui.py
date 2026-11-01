@@ -462,6 +462,35 @@ async def test_coverage_backfill_waits_for_the_first_good_steady_batch():
         assert calls == [False]
 
 
+async def test_lapsed_coverage_reruns_the_backfill_until_one_lands():
+    from types import SimpleNamespace
+
+    from earthwave.poll import PollResult
+
+    app = week_app()
+    calls = []
+    app._backfill_if_needed = lambda force: calls.append(force)
+    app.usgs._startup.clear()
+    steady = PollResult("usgs", 0, batch=Batch("usgs", WEEK_NOW, quakes=()))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.on_poll_done(SimpleNamespace(result=steady))
+        assert calls == [False]  # the first good answer
+        late = Batch("usgs", WEEK_NOW + timedelta(hours=70), quakes=(), coverage=(24.0, 4.5))
+        app.store.merge(late, app.clock)  # a feed that was silent for three days
+        assert app.store.coverage_lapsed
+        app.on_poll_done(SimpleNamespace(result=steady))
+        app.on_poll_done(SimpleNamespace(result=steady))  # the backfill has not landed: one more try per poll
+        assert calls == [False, False, False]
+        app._backfill = asyncio.get_running_loop().create_future()  # a backfill still in flight
+        app.on_poll_done(SimpleNamespace(result=steady))
+        assert calls == [False, False, False]
+        app.store.merge(Batch("usgs", WEEK_NOW, backfill=True, coverage=(168.0, 4.5)), app.clock)
+        app._backfill = None
+        app.on_poll_done(SimpleNamespace(result=steady))
+        assert calls == [False, False, False]  # landed: nothing left to retry
+
+
 async def test_empty_hint_waits_for_the_first_poll():
     app = week_app()  # backfilled only: no steady poll has answered, so an empty list proves nothing
     assert not app.store.warm

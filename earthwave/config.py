@@ -94,10 +94,10 @@ CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("view", "time_zone"): ("local", "UTC"),
     ("alerts", "pager_min"): ("green", "yellow", "orange", "red"),
 }
-# (minimum, maximum); None means unbounded. USGS is never polled faster than 60 s, and no feed is polled so rarely
-# that the status bar would call it fresh for hours.
 MAX_VIEW_HOURS = 24 * 35  # the store keeps 35 days of quakes, so no view reaches further back
 
+# (minimum, maximum); None means unbounded. USGS is never polled faster than 60 s, and no feed is polled so rarely
+# that the status bar would call it fresh for hours.
 RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
     ("poll", "usgs_seconds"): (60, 3600),
     ("poll", "tsunami_seconds"): (30, 600),

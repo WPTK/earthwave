@@ -10,6 +10,7 @@ from earthwave.state.events import (
     GaugeAnomaly,
     QuakeMajor,
     QuakeNew,
+    QuakeRenamed,
     QuakeUpdated,
     TsunamiCancelled,
     TsunamiChanged,
@@ -107,6 +108,9 @@ class AttentionTracker:
             elif isinstance(event, QuakeUpdated):
                 if self._gate.allow(event.quake.id, AttentionKind.UPDATED):
                     self._start(event.quake.id, AttentionKind.UPDATED)
+            elif isinstance(event, QuakeRenamed):
+                if (item := self._items.pop(event.old_id, None)) is not None:
+                    self._items.setdefault(event.quake.id, item)
             elif isinstance(event, QuakeMajor):
                 self._start(event.quake.id, AttentionKind.MAJOR)
             elif isinstance(event, TsunamiIssued | TsunamiChanged):
