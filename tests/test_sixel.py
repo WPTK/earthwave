@@ -14,7 +14,7 @@ from earthwave.ui.graphics.probe import (
     decide,
     parse_reply,
 )
-from earthwave.ui.graphics.sixel import encode, sixel_rgb
+from earthwave.ui.graphics.sixel import HOLE, encode, sixel_rgb
 from earthwave.ui.widgets.map_panel import MapPanel
 
 # What Windows Terminal 1.25 answered to the real probe (cell 10x20, text area 1200x600, DA1 with attribute 4).
@@ -53,6 +53,26 @@ def test_encoder_envelope_and_opaque():
     assert out.startswith("\x1bP") and out.endswith("\x1b\\")
     rows, _, _ = decode(out)
     assert all(px is not None for row in rows for px in row)  # colour 0 is written too: no background shows through
+
+
+def test_encoder_leaves_holes_unpainted():
+    out = encode(bytes([HOLE]) * 6 + bytes(6), 4, 3, [(1, 2, 3)])  # row 0 and the first half of row 1 are holes
+    rows, _, _ = decode(out)
+    assert [px is None for px in rows[0]] == [True] * 4
+    assert [px is None for px in rows[1]] == [True, True, False, False]
+    assert all(px is not None for px in rows[2])
+
+
+def test_punch_holes_marks_cell_rectangles():
+    from dataclasses import replace
+
+    from earthwave.ui.graphics.raster import Scene
+    from earthwave.ui.widgets.map_panel import punch_holes
+
+    scene = Scene(view=None, width=8, height=12, palette=((0, 0, 0),), cell=(2, 3), holes=((1, 1, 2, 2),))
+    out = punch_holes(bytes(8 * 12), scene)
+    assert [i for i, p in enumerate(out) if p == HOLE] == [y * 8 + x for y in range(3, 9) for x in range(2, 6)]
+    assert replace(scene, holes=()) != scene  # the holes are part of the cache key
 
 
 def test_encoder_rejects_wrong_length():
@@ -227,6 +247,38 @@ async def test_image_not_written_under_another_screen():
         assert panel._on_terminal == panel._scene
 
 
+async def test_toast_over_the_image_gets_a_hole_in_the_picture():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40), notifications=True) as pilot:
+        await pilot.press("M")  # the full-screen map: a toast sits on the image
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        assert panel._holes == () and panel._scene.holes == ()
+        app.notify("hello", title="toast", timeout=30)
+        await wait_for(lambda: app.screen.query("Toast"))
+        writes: list[str] = []
+        panel._stale = True
+        panel.emit_image(
+            writes.append
+        )  # the overlay hook of the real app: it sees the toast and holds the picture back
+        assert writes == [] and panel._holes
+        await wait_for(lambda: panel._scene.holes == panel._holes)
+        await wait_for(lambda: panel._scene in panel._images)
+        data = panel._images[panel._scene]
+        rows, _, _ = decode(data)
+        col, row = panel._holes[0][:2]
+        cw, ch = panel._cell
+        assert rows[row * ch + 1][col * cw + 1] is None  # nothing painted under the toast
+        assert rows[1][1] is not None  # and the rest of the picture is there
+        panel._stale = True
+        panel.emit_image(writes.append)  # now the picture with the hole is written
+        assert writes and panel._on_terminal == panel._scene
+        for toast in list(app.screen.query("Toast")):
+            await toast.remove()
+        panel.emit_image(writes.append)
+        await wait_for(lambda: panel._holes == () and panel._scene.holes == ())
+
+
 async def test_write_failure_falls_back_to_braille():
     app = week_app(graphics=SIXEL)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -280,6 +332,11 @@ async def test_spare_rows_show_legend_then_strongest_quakes(sixel):
         await pilot.pause()
         strips = panel._spare_strips()
         assert strips and "7+" in strips[0].text
+        for label in ("<3", "3-4.4", "4.5-5.4", "5.5-6.4", "6.5-6.9", "7+"):  # the real bands of mag_color, no gaps
+            assert label in strips[0].text
+        background = {seg.style.bgcolor for strip in strips for seg in strip if seg.style}
+        assert len(background) == 1 and None not in background  # text and padding share the panel's colour
+        assert all(strip.cell_length == panel.size.width for strip in strips)
         mags = [float(s.text.split()[0][1:]) for s in strips[1:]]
         assert mags and mags == sorted(mags, reverse=True)
         assert panel.render_line(panel.model.map_rows).text == strips[0].text

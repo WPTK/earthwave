@@ -106,6 +106,7 @@ class Scene:
     tints: tuple[tuple[int, int, int], ...] = ()  # (col, row, palette index): coast pixels of that cell take the colour
     shapes: tuple[Shape, ...] = ()  # drawn in order, so the last one is on top
     brush: int = BRUSH
+    holes: tuple[tuple[int, int, int, int], ...] = ()  # (col, row, cols, rows) cell rectangles left unpainted (toasts)
 
 
 def _span(pixels: bytearray, width: int, height: int, y: int, x0: int, x1: int, value: int) -> None:

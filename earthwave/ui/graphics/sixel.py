@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from functools import cache
 
 RGB = tuple[int, int, int]
+HOLE = 255  # pixel value that is not painted
 
 _ADD_63 = bytes((i + 63) & 0xFF for i in range(256))
 _RUN = re.compile(rb"(.)\1{3,}", re.DOTALL)
@@ -45,11 +46,12 @@ def encode(pixels: bytes, width: int, height: int, palette: Sequence[RGB]) -> st
     """Sixel string (DCS ... ST) for `pixels`, row-major palette indices, `width` x `height`.
 
     Every pixel is written (colour 0 included), so the image is opaque and the terminal background never shows
-    through. `height` need not be a multiple of 6; the last band is padded with blank rows.
+    through, except pixels equal to `HOLE`, which are left unpainted so what is under them (a toast) stays.
+    `height` need not be a multiple of 6; the last band is padded with blank rows.
     """
     if len(pixels) != width * height:
         raise ValueError("pixel buffer does not match width x height")
-    if pixels and max(pixels) >= len(palette):
+    if pixels and max((p for p in set(pixels) if p != HOLE), default=0) >= len(palette):
         raise ValueError("pixel index outside the palette")
     out = [b'\x1bP0;1;0q"1;1;%d;%d' % (width, height)]
     for index, (r, g, b) in enumerate(palette):
@@ -59,7 +61,7 @@ def encode(pixels: bytes, width: int, height: int, palette: Sequence[RGB]) -> st
         end = min(top + 6, height)
         rows = [pixels[y * width : (y + 1) * width] for y in range(top, end)]
         rows += [blank] * (6 - len(rows))
-        for colour in sorted(set(pixels[top * width : end * width])):
+        for colour in sorted(set(pixels[top * width : end * width]) - {HOLE}):
             out.append(b"#%d%s$" % (colour, _band_data(rows, width, colour)))
         out.append(b"-")
     out.append(b"\x1b\\")

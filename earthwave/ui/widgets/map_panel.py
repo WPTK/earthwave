@@ -10,7 +10,7 @@ import logging
 import math
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache, partial
@@ -32,7 +32,7 @@ from earthwave.sources.geo import haversine_km
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.graphics.probe import FALLBACK_CELL, GraphicsChoice
 from earthwave.ui.graphics.raster import Palette, Scene, Shape
-from earthwave.ui.graphics.sixel import RGB, encode
+from earthwave.ui.graphics.sixel import HOLE, RGB, encode
 from earthwave.ui.graphics.smooth import render_smooth
 from earthwave.ui.labels import fmt_age
 from earthwave.ui.theme import LEVEL_COLORS, mag_color
@@ -61,7 +61,14 @@ PAN_GRID = 5  # panned view centres snap to this many degrees so rasters are reu
 IMAGE_CACHE = 4  # encoded sixel images kept (a few hundred KB each): the views the user is flipping between
 WRITE_CHUNK = 8192  # Textual writes Windows output in chunks this size, and so does the image
 SPARE_MIN = 2  # rows left under a world map for the legend and the strongest quakes; fewer and nothing is drawn there
-LEGEND = ((2.5, "<3"), (3.5, "3-4"), (4.5, "4.5-5"), (5.5, "5.5-6"), (6.5, "6.5-7"), (7.0, "7+"))  # (magnitude, label)
+LEGEND = (
+    (2.5, "<3"),
+    (3.5, "3-4.4"),
+    (4.5, "4.5-5.4"),
+    (5.5, "5.5-6.4"),
+    (6.5, "6.5-6.9"),
+    (7.0, "7+"),
+)  # (magnitude, label)
 TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
 
 # Magnitude band -> marker. Bands: <4.5, 4.5-5.4, 5.5-6.4, 6.5+.
@@ -555,6 +562,17 @@ def pixel_size(cols: int, rows: int, cell: tuple[int, int]) -> tuple[int, int]:
     return cols * cell[0], rows * cell[1] // PIXEL_BAND * PIXEL_BAND
 
 
+def punch_holes(pixels: bytes, scene: Scene) -> bytes:
+    """`pixels` with the scene's hole rectangles (cell units) marked `HOLE`, so the image is not painted there."""
+    buf = bytearray(pixels)
+    cw, ch = scene.cell
+    for col, row, cols, rows in scene.holes:
+        x0, x1 = col * cw, min(scene.width, (col + cols) * cw)
+        for y in range(row * ch, min(scene.height, (row + rows) * ch)):
+            buf[y * scene.width + x0 : y * scene.width + x1] = bytes([HOLE]) * max(0, x1 - x0)
+    return bytes(buf)
+
+
 def pixel_scene(
     model: MapModel, cell: tuple[int, int], colors: PixelColors, rgb_of: Callable[[str], RGB]
 ) -> Scene | None:
@@ -650,6 +668,7 @@ class MapPanel(Widget, can_focus=True):
         self._reprobe: Timer | None = None
         self._spare: list[Strip] | None = None
         self._spare_key: tuple[str, ...] = ()
+        self._holes: tuple[tuple[int, int, int, int], ...] = ()  # cell rectangles of toasts over the image
         self._rgb_cache: dict[tuple[str, int], RGB] = {}
 
     @property
@@ -756,6 +775,8 @@ class MapPanel(Widget, can_focus=True):
     def _sync_image(self) -> bool:
         """Work out the picture the model calls for; True when the cells must be repainted for a new, ready image."""
         scene = pixel_scene(self.model, self._cell, self.pixel_colors(), self.rgb_of)
+        if scene is not None and self._holes:
+            scene = replace(scene, holes=self._holes)
         self._attention_seen = self.model.has_attention()
         if scene == self._scene:
             return False
@@ -772,6 +793,8 @@ class MapPanel(Widget, can_focus=True):
     def _build(self, scene: Scene) -> None:
         """Worker thread: rasterise and encode `scene`, then hand it back to the event loop."""
         pixels, palette = render_smooth(scene)
+        if scene.holes:
+            pixels = punch_holes(pixels, scene)
         data = encode(pixels, scene.width, scene.height, palette)
         self.app.call_from_thread(self._built, scene, data)
 
@@ -781,8 +804,23 @@ class MapPanel(Widget, can_focus=True):
             self._images.popitem(last=False)
         if self._building == scene:
             self._building = None
-        if scene == self._scene:  # still what is wanted: repaint the cells, the image follows in the same update
-            super().refresh()
+        if scene == self._scene:
+            if self._overwrite():
+                return
+            super().refresh()  # repaint the cells, the image follows in the same update
+
+    def _overwrite(self) -> bool:
+        """Put the new picture over the old one in place, in a synchronized update of its own. The cells under the old
+        picture are still blank and untouched, so nothing needs repainting and the map never shows an empty frame
+        between the two pictures (a pan or zoom). False when the picture is not on the terminal to start with."""
+        driver = getattr(self.app, "_driver", None)
+        if driver is None or self._on_terminal is None or self._stale:
+            return False
+        before = self._on_terminal
+        driver.write("\x1b[?2026h")
+        self.emit_image(driver.write)
+        driver.write("\x1b[?2026l")
+        return self._on_terminal != before
 
     def invalidate_image(self) -> None:
         """The cells under the image were repainted by something this panel did not see (another screen came and
@@ -791,6 +829,19 @@ class MapPanel(Widget, can_focus=True):
             self._on_terminal = None
             self._stale = True
             super().refresh()
+
+    def _toast_holes(self, region: Region) -> tuple[tuple[int, int, int, int], ...]:
+        """Cell rectangles, relative to the image, of the toasts that overlap it."""
+        holes = []
+        try:
+            toasts = list(self.screen.query("Toast"))
+        except Exception:
+            return ()
+        for toast in toasts:
+            overlap = toast.region.intersection(region)
+            if overlap.area:
+                holes.append((overlap.x - region.x, overlap.y - region.y, overlap.width, overlap.height))
+        return tuple(sorted(holes))
 
     def emit_image(self, write: Callable[[str], None]) -> None:
         """Write the picture to the terminal if the cells under it were repainted since it was last written.
@@ -808,6 +859,13 @@ class MapPanel(Widget, can_focus=True):
         region = self.content_region
         if not on_top or not self.display or region.width < 1 or region.height < 1:
             self._on_terminal = None
+            return
+        holes = self._toast_holes(region)
+        if holes != self._holes:
+            # a toast came or went over the image: the picture is wanted with (or without) a hole there. Writing the
+            # old one now would paint over the toast, so wait for the repaint that follows
+            self._holes = holes
+            self.call_later(self.refresh)
             return
         scene = self._scene
         data = self._images.get(scene) if scene is not None else None
@@ -843,7 +901,8 @@ class MapPanel(Widget, can_focus=True):
             clock = getattr(self.app, "clock", None)
             now = clock.now() if clock is not None else datetime.now(UTC)
             marks = UNICODE_MARKERS if self._glyphs.unicode else ASCII_MARKERS
-            base = self.rich_style
+            # the panel's own background (what the sea is drawn on), not the screen's, so the text and its padding match
+            base = Style(color=self.rich_style.color, bgcolor=self.background_colors[1].rich_color)
             legend: list[Segment] = []
             for mag, label in LEGEND:
                 legend.append(Segment(marks[marker_band(mag)] + " ", base + Style.parse(mag_color(mag))))
@@ -857,13 +916,15 @@ class MapPanel(Widget, can_focus=True):
                         Segment(f" {age} {quake.place}", base),
                     ]
                 )
-            self._spare = [Strip(line).adjust_cell_length(width, self.rich_style) for line in lines]
+            self._spare = [Strip(line).adjust_cell_length(width, base) for line in lines]
             self._spare_key = tuple(strip.text for strip in self._spare)
         return self._spare
 
     def _spare_row(self, index: int) -> Strip:
         strips = self._spare_strips()
-        return strips[index] if index < len(strips) else Strip.blank(self.size.width, self.rich_style)
+        if index < len(strips):
+            return strips[index]
+        return Strip.blank(self.size.width, Style(bgcolor=self.background_colors[1].rich_color))
 
     def refresh(self, *regions, **kwargs):
         self._frame = None
