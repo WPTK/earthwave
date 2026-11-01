@@ -132,8 +132,21 @@ async def test_tsunami_screen_fits_without_a_sideways_scroll():
         assert "AREAS" not in screen_text(app)  # the areas are in the text below, not cut off in a cell
 
 
-async def test_help_names_the_colours_it_shows():
-    from earthwave.ui.screens.help import HELP_TEXT
+def _hue(style: str) -> str:
+    """The plain colour word for a Rich style, read off the colour it actually renders in."""
+    import colorsys
 
-    assert "Watch yellow" not in HELP_TEXT and "yellow <6.5" not in HELP_TEXT
-    assert "Advisory and Watch orange" in HELP_TEXT
+    from rich.style import Style
+
+    red, green, blue = Style.parse(style).color.get_truecolor()
+    hue = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)[0] * 360
+    return "red" if hue < 20 or hue >= 340 else "orange" if hue < 40 else "yellow" if hue < 70 else "blue"
+
+
+def test_help_names_the_colours_it_shows():
+    from earthwave.ui.screens.help import HELP_TEXT
+    from earthwave.ui.theme import LEVEL_COLORS
+
+    for level in ("WARNING", "ADVISORY", "WATCH"):  # what the level word really renders in, not a literal
+        assert f"{level.title()} {_hue(LEVEL_COLORS[level])}" in HELP_TEXT, level
+    assert "yellow <6.5" not in HELP_TEXT

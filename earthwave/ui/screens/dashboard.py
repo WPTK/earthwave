@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 MAP_MIN_WIDTH = 120  # below this the map hides itself and the list takes the full width
 
 
-HIDDEN_ACTIONS = {"ack_all", "search", "filters", "sort", "toggle_map", "fullscreen_map", "zoom_map"}
+HIDDEN_ACTIONS = {"ack_all", "search", "filters", "sort", "toggle_map", "fullscreen_map", "zoom_map", "observations"}
 
 
 class DashboardScreen(Screen):
@@ -120,11 +120,12 @@ class DashboardScreen(Screen):
         width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
-        empty.display = (
-            not rows and app.quake_feed_wait() != "Waiting for USGS"
-        )  # until the first poll it means nothing
-        hint = "Press / to change the search." if in_filters else "Press f to change filters."  # what emptied it
-        empty.update(Text(f"No quakes match {filter_summary(app.view)}. {hint}"))
+        empty.display = not rows
+        if wait := app.quake_feed_wait():  # no live batch yet: say why, a filter did not empty this list
+            empty.update(Text(wait))
+        else:
+            hint = "Press / to change the search." if in_filters else "Press f to change filters."  # what emptied it
+            empty.update(Text(f"No quakes match {filter_summary(app.view)}. {hint}"))
         self.refresh_ticker()
         self.refresh_tsunami()
         self.refresh_status(shown=len(rows))
@@ -173,6 +174,7 @@ class DashboardScreen(Screen):
         app = self.earthwave
         if shown is None:
             shown = len(self.query_one(QuakeList).rows)
+        _, actionable, _, state = self.tsunami_state()
         sched = app.scheduler
         lines = tuple(
             SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
@@ -190,7 +192,8 @@ class DashboardScreen(Screen):
                 filter_text=filter_summary(app.view),
                 unseen=app.tracker.unseen(self._countable),
                 sort=app.sort.value,
-                alert_state=self.tsunami_state()[3],
+                alert_state=state,
+                alert_level=actionable[0].level if actionable else None,  # highest first
             )
         )
 

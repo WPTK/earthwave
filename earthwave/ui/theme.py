@@ -27,7 +27,8 @@ FRESHNESS_COLORS = {
     Freshness.ERROR: "red",
 }
 
-# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue.
+# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue. These colour the level word
+# wherever it is printed; the banner, status bar and panel border take theirs from level-* classes in app.tcss.
 LEVEL_COLORS = {
     "WARNING": "bold red",
     "ADVISORY": "dark_orange",
@@ -36,3 +37,10 @@ LEVEL_COLORS = {
     "INFORMATION": "sky_blue1",
     "CANCELLATION": "grey62",
 }
+
+
+def mark_level(widget, level: str | None) -> None:
+    """Give a widget the level-<name> class of the alert it is showing (none when it shows no actionable alert), so
+    app.tcss can colour it from theme variables: a Warning and a Watch call for different actions."""
+    for name in LEVEL_COLORS:
+        widget.set_class(name == level, f"level-{name.lower()}")

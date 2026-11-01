@@ -63,27 +63,65 @@ Screen {
     padding: 0 1;
 }
 
-#tsunami.pulse {
-    border: round red;
+/* Tsunami level colours, from theme variables. A Warning is red and a Watch or Advisory amber, because they call for
+   different actions; the level word is printed too, so the difference survives NO_COLOR. */
+#tsunami.level-warning {
+    border: round $error-darken-2;
+}
+
+#tsunami.level-advisory,
+#tsunami.level-watch {
+    border: round $warning-darken-3;
+}
+
+#tsunami.level-threat {
+    border: round $primary-darken-2;
+}
+
+#tsunami.pulse.level-warning {
+    border: round $error;
+}
+
+#tsunami.pulse.level-advisory,
+#tsunami.pulse.level-watch {
+    border: round $warning;
+}
+
+#tsunami.pulse.level-threat {
+    border: round $primary;
 }
 
 #banner {
     display: none;
     height: 1;
-    background: #b91c1c;
-    color: white;
+    background: $error;
+    color: $text;
+}
+
+#banner.level-advisory,
+#banner.level-watch {
+    background: $warning-darken-3;
+}
+
+#banner.level-threat {
+    background: $primary-darken-1;
 }
 
 #status.alert-info {
-    background: #1e3a8a;
+    background: $primary-darken-2;
 }
 
-#status.alert-active {
-    background: #7c2d12;
+#status.level-warning {
+    background: $error;
 }
 
-#status.alert-alarm {
-    background: #b91c1c;
+#status.level-advisory,
+#status.level-watch {
+    background: $warning-darken-3;
+}
+
+#status.level-threat {
+    background: $primary-darken-1;
 }
 
 TsunamiScreen {
@@ -148,7 +186,10 @@ Screen.too-small #search,
 Screen.too-small #history_head,
 Screen.too-small #history_stats,
 Screen.too-small #history_header,
-Screen.too-small #history_list {
+Screen.too-small #history_list,
+Screen.too-small #tsunami_body,
+Screen.too-small #observations_body,
+Screen.too-small #detail_scroll {
     display: none;
 }
 
@@ -156,17 +197,17 @@ Screen.no-map #map {
     display: none;
 }
 
-/* Narrow: the map is gone (no-map) but the tsunami panel stays, as a strip under the list, so a state that has no
-   other text here (UNKNOWN, an acknowledged alert) is still readable. */
-Screen.narrow #main {
+/* No map (hidden with m, view.map = false, or a narrow terminal): the list takes the full width and the tsunami panel
+   stays as a strip under it, so a state that has no other text here (UNKNOWN, an acknowledged alert) is still readable. */
+Screen.no-map #main {
     layout: vertical;
 }
 
-Screen.narrow #left {
+Screen.no-map #left {
     height: 1fr;
 }
 
-Screen.narrow #right {
+Screen.no-map #right {
     width: 100%;
     height: auto;
 }

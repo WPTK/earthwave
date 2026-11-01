@@ -8,7 +8,7 @@ from textual.widgets import Static
 from earthwave.poll import Freshness
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_countdown
-from earthwave.ui.theme import FRESHNESS_COLORS
+from earthwave.ui.theme import FRESHNESS_COLORS, mark_level
 
 ALERT_STATES = ("info", "active", "alarm")
 FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
@@ -32,12 +32,13 @@ class StatusInfo:
     unseen: int
     sort: str = "time"
     alert_state: str = "none"  # none | info | active | alarm
+    alert_level: str | None = None  # the highest actionable level in force, which colours the bar
 
 
 def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
     if info.alert_state == "alarm":
-        text.append(" TSUNAMI ", "bold white on #7f1d1d")
+        text.append(" TSUNAMI ", "bold reverse")
     text.append(f" {info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")
     text.append(info.filter_text, "cyan")
@@ -73,4 +74,5 @@ class StatusBar(Static):
     def show(self, info: StatusInfo) -> None:
         for state in ALERT_STATES:
             self.set_class(info.alert_state == state, f"alert-{state}")
+        mark_level(self, info.alert_level)
         self.update(build_status(info, self._glyphs))

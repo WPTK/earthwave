@@ -126,6 +126,10 @@ class Store:
     def get(self, quake_id: str) -> Earthquake | None:
         return self._quakes.get(quake_id)
 
+    def resolve(self, quake_id: str) -> Earthquake | None:
+        """The stored quake under this id, or under the id USGS has since replaced it with; None once it is gone."""
+        return self._quakes.get(quake_id) or self._quakes.get(self._by_alias.get(quake_id, ""))
+
     def all(self) -> tuple[Earthquake, ...]:
         return tuple(self._quakes.values())
 

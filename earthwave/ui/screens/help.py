@@ -21,7 +21,8 @@ HELP_TEXT = """\
 [b]Colors[/b]
   mag: grey <3, cyan <4.5, green <5.5, orange <7 (deeper from 6.5), red 7+
   new rows flash cyan, updated rows yellow, major quakes pulse red
-  tsunami: Warning red, Advisory and Watch orange, others blue
+  tsunami: Warning red, Advisory orange, Watch yellow, others blue
+  alert bars: red for Warning, amber for Advisory or Watch
 
 [b]Data[/b]
   Quakes: USGS (earthquake.usgs.gov), public domain.

@@ -14,7 +14,7 @@ from earthwave.sources.geo import COOPS_MAX_KM
 from earthwave.state.store import GAUGE_FRESH
 from earthwave.ui.labels import fmt_age
 
-MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
+MAX_POINTS = 240  # sparkline samples drawn per row; the "24 h max" summary reads every stored residual
 NAME_WIDTH = 26
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
 RESIDUAL_LAG = timedelta(hours=1)  # residuals this far behind the newest reading no longer describe the water now
@@ -36,7 +36,7 @@ class GaugeRowData:
 
 
 def shown_residuals(residuals: Sequence[float]) -> list[float]:
-    """The residuals the row draws and summarises: the newest MAX_POINTS, NaN dropped."""
+    """The residuals the row draws: the newest MAX_POINTS, NaN dropped. The summary is not limited to these."""
     return [r for r in residuals[-MAX_POINTS:] if not math.isnan(r)]
 
 
@@ -104,7 +104,7 @@ def is_over_now(row: GaugeRowData, now: datetime) -> bool:
 
 
 def max_text(row: GaugeRowData, now: datetime) -> Text:
-    peak = max_residual(shown_residuals(row.residuals))
+    peak = max_residual(row.residuals)  # all stored residuals (about 24 h), not just the drawn tail
     if peak is None:
         return Text("no residual", style="grey50", no_wrap=True)
     if is_stale(row, now):  # old data is never flagged or coloured as if it were live

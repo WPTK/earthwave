@@ -7,8 +7,9 @@ from rich.text import Text
 from textual.widgets import Static
 
 from earthwave.models import TsunamiAlert
+from earthwave.sources import levels
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import LEVEL_COLORS
+from earthwave.ui.theme import LEVEL_COLORS, mark_level
 
 
 def fmt_until(expires: datetime | None, now: datetime) -> str:
@@ -81,7 +82,9 @@ class TsunamiPanel(Static):
             build_panel(alerts, now, overdue=overdue, down=down, unknown=unknown, checking=checking, expiry=expiry)
         )
         self.set_class(pulse, "pulse")
+        mark_level(self, alerts[0].level if alerts and alerts[0].level in levels.ACTIONABLE else None)  # highest first
 
     def show_offline(self) -> None:
         self.update(offline_panel())
+        mark_level(self, None)
         self.set_class(False, "pulse")
