@@ -10,6 +10,7 @@ import httpx
 from textual import work
 from textual.app import App
 from textual.binding import Binding
+from textual.filter import Monochrome
 from textual.message import Message
 
 from earthwave.clock import Clock, SystemClock
@@ -49,6 +50,7 @@ from earthwave.ui.screens.help import HelpScreen
 from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
+from earthwave.ui.theme import LegibleMonochrome
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
 from earthwave.ui.widgets.quake_list import QuakeList
 
@@ -88,6 +90,7 @@ class EarthwaveApp(App):
         history_error: str | None = None,
     ):
         super().__init__()
+        self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
         self.config = config
         self.clock: Clock = clock or SystemClock()
         self.store = store if store is not None else Store(config.alerts, config.home)
