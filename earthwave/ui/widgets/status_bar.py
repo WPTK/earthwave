@@ -38,7 +38,7 @@ class StatusInfo:
 
 def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
-    if info.alert_state == "alarm":
+    if info.alert_state in ("active", "alarm"):  # an acknowledged alert is still in force
         text.append(" TSUNAMI ", "bold reverse")
     text.append(f" {info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")

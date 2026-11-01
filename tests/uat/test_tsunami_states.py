@@ -47,7 +47,7 @@ async def test_state_watch_raises_the_banner_and_the_status_alarm(size):
         assert "WATCH " in text.split("t details, a acknowledge")[-1]  # panel row, level column, at every size
 
 
-async def test_state_warning_banner_then_acknowledge_clears_it(size):
+async def test_state_warning_banner_then_acknowledge_keeps_it_as_acknowledged(size):
     app = kam_alert_app(0, 1)
     async with app.run_test(size=size) as pilot:
         observe(app, 1)
@@ -64,8 +64,10 @@ async def test_state_warning_banner_then_acknowledge_clears_it(size):
         await pilot.press("a")
         await pilot.pause()
         text = screen_text(app)
-        assert "t details, a acknowledge" not in text and not banner.display
+        assert "t details, a acknowledge" not in text and banner.display
+        assert "TSUNAMI WARNING" in text and "acknowledged" in text  # the banner stays, reading acknowledged
         assert app.dashboard.query_one("#status").has_class("alert-active")
+        assert "TSUNAMI" in text.splitlines()[-2]  # and so does the status bar
         assert "WARNING" in text  # the panel keeps listing it while it is in force, at every size
 
 

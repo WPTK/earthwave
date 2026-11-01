@@ -13,10 +13,11 @@ MIN_PLACE = 8  # the place is shortened to fit the line, but never below this
 class Ticker(Static):
     def __init__(self, **kwargs):
         super().__init__("", **kwargs)
-        self.show(None, 0.0, waiting="Waiting for USGS")
+        self.show(None, 0.0, waiting=True)
 
-    def show(self, quake: Earthquake | None, age_seconds: float, gauge: str = "", waiting: str = "") -> None:
-        """The latest major quake (or a quiet message, or `waiting`: why nothing has loaded), then any gauge anomaly.
+    def show(self, quake: Earthquake | None, age_seconds: float, gauge: str = "", waiting: bool = False) -> None:
+        """The latest major quake (or a quiet message, or a blank line when `waiting`: the list below says why
+        nothing has loaded), then any gauge anomaly.
 
         The place is shortened first when the line is too long; with under MIN_PLACE columns left, the end is cut.
         """
@@ -27,7 +28,7 @@ class Ticker(Static):
             tail.append("   Gauge anomaly: ", "grey62")
             tail.append(gauge, "bold red")
         if quake is None:
-            text = Text(f" {waiting}" if waiting else " No major quakes in the loaded data", style="grey50")
+            text = Text(" " if waiting else " No major quakes in the loaded data", style="grey50")
         else:
             text = Text(" Latest major: ", style="grey62")
             text.append(f"M{quake.mag:.1f} ", mag_color(quake.mag))

@@ -18,8 +18,8 @@ from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
 from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusBar, StatusInfo
 from earthwave.ui.widgets.ticker import Ticker
-from earthwave.ui.widgets.too_small import TooSmall, is_too_small
-from earthwave.ui.widgets.tsunami_panel import TsunamiPanel
+from earthwave.ui.widgets.too_small import TooSmall, is_too_small, refresh_too_small
+from earthwave.ui.widgets.tsunami_panel import TsunamiPanel, recent_cancellation
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -77,7 +77,9 @@ class DashboardScreen(Screen):
             with Vertical(id="right"):
                 yield MapPanel(app.tracker, app.glyphs, app.config.home, ticks=app.ticking, id="map")
                 yield TsunamiPanel(id="tsunami")
-        yield Input(placeholder="search place, Enter to apply, Esc to clear", id="search")
+        search = Input(placeholder="search place", id="search")
+        search.border_subtitle = "Enter apply, Esc cancel"  # in view for as long as the box is open, typed text or not
+        yield search
         yield StatusBar(app.glyphs, id="status")
         yield Footer(compact=True, show_command_palette=False)
         yield TooSmall(id="too_small")
@@ -97,7 +99,7 @@ class DashboardScreen(Screen):
         was_small = self.has_class("too-small")
         self.set_class(small, "too-small")
         if small:
-            self.query_one(TooSmall).show(width, height)
+            refresh_too_small(self, width, height)
         else:  # hiding the widgets (too small, or the map on resize) drops focus; give it back once they are shown
             self.call_after_refresh(self._restore_focus, was_small)
         self.set_class(not self.show_map or width < MAP_MIN_WIDTH, "no-map")
@@ -121,7 +123,9 @@ class DashboardScreen(Screen):
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
         empty.display = not rows
-        if wait := app.quake_feed_wait():  # no live batch yet: say why, a filter did not empty this list
+        wait = app.quake_feed_wait()
+        searched_out = bool(in_filters) and wait.startswith("Waiting")  # quakes are held: the search emptied the list
+        if wait and not searched_out:  # no live batch yet, or a feed that is not answering: say why, not a filter hint
             empty.update(Text(wait))
         else:
             hint = "Press / to change the search." if in_filters else "Press f to change filters."  # what emptied it
@@ -135,7 +139,7 @@ class DashboardScreen(Screen):
         major = [q for q in app.store.all() if q.mag >= app.config.alerts.major_magnitude]
         latest = max(major, key=lambda q: q.time, default=None)
         age = (app.clock.now() - latest.time).total_seconds() if latest else 0.0
-        self.query_one(Ticker).show(latest, age, app.gauge_ticker(), app.quake_feed_wait())
+        self.query_one(Ticker).show(latest, age, app.gauge_ticker(), bool(app.quake_feed_wait()))
 
     def tsunami_state(self) -> tuple[list, list, int, str]:
         """(alerts in force, actionable ones, unacknowledged count, status bar state) from the store and tracker."""
@@ -150,9 +154,10 @@ class DashboardScreen(Screen):
         app = self.earthwave
         active, actionable, unacked, _ = self.tsunami_state()
         blink = int(app.clock.monotonic() * 2) % 2 == 0
-        self.query_one(Banner).show(actionable, unacked)
-        self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         overdue = frozenset(a.id for a in active if app.store.alert_status(a, app.clock) == "overdue")
+        self.query_one(Banner).show(actionable, unacked, bool(actionable) and actionable[0].id in overdue)
+        refresh_too_small(self, self.size.width, self.size.height)
+        self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         feeds, none_fresh = app.tsunami_feeds_down()
         down = tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
         pulse = bool(unacked) and blink
@@ -168,6 +173,9 @@ class DashboardScreen(Screen):
             unknown=none_fresh and bool(down),
             checking=app.tsunami_feeds_loading() and not down,
             expiry=app.store.expiry,
+            cancelled=recent_cancellation(
+                app.store.alerts(), app.store.get_alert, app.clock.now(), app.config.view.time_zone
+            ),
         )
 
     def refresh_status(self, shown: int | None = None) -> None:
@@ -176,9 +184,13 @@ class DashboardScreen(Screen):
             shown = len(self.query_one(QuakeList).rows)
         _, actionable, _, state = self.tsunami_state()
         sched = app.scheduler
-        lines = () if app.offline else tuple(  # offline polls nothing: every feed would read "loading" all session
-            SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
-            for name in sched.statuses
+        lines = (
+            ()
+            if app.offline
+            else tuple(  # offline polls nothing: every feed would read "loading" all session
+                SourceLine(name, sched.freshness(name), sched.age(name), sched.statuses[name].health.incomplete)
+                for name in sched.statuses
+            )
         )
         next_poll = (
             min((sched.next_poll_in(n) for n in sched.statuses), default=None) if app.scheduler_running else None
