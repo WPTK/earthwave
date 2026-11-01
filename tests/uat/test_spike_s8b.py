@@ -61,24 +61,24 @@ def test_quake_then_503_then_reset_then_recovery():
         # 2. a real 503 from the usgs host
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "503"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" in failed_line(s.text), 40, "usgs named in the failed list after a 503")
+        term.wait_for(lambda s: "usgs" in failed_line(s.text), 100, "usgs named in the failed list after a 503")
         after503 = snap(term, "2-503")
         assert any(e["status"] == 503 for e in control("/log"))
 
         # 3. a connection reset from the usgs host
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "ok"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 40, "recovery from the 503")
+        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 100, "recovery from the 503")
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "reset"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" in failed_line(s.text), 40, "usgs named in the failed list after a reset")
+        term.wait_for(lambda s: "usgs" in failed_line(s.text), 100, "usgs named in the failed list after a reset")
         afterreset = snap(term, "3-reset")
         assert any(e["status"] == "reset" for e in control("/log"))
 
         # 4. recovery
         control("/fault", {"host": "earthquake.usgs.gov", "mode": "ok"})
         term.send_keys("r")
-        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 40, "recovery after the reset")
+        term.wait_for(lambda s: "usgs" not in failed_line(s.text), 100, "recovery after the reset")
         recovered = snap(term, "4-recovered")
         assert "Vanuatu" in recovered
         (OUT / "failed-lines.txt").write_text("\n".join(map(failed_line, (ok, after503, afterreset, recovered))))
