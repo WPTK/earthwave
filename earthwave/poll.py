@@ -52,6 +52,13 @@ class PollResult:
     error: str | None = None
 
 
+def describe(exc: Exception) -> str:
+    """An error as the status bar shows it; the deadline's TimeoutError has no text of its own."""
+    if isinstance(exc, TimeoutError):
+        return f"no answer within {FETCH_DEADLINE:g} s"
+    return f"{type(exc).__name__}: {exc}"[:200]
+
+
 def backoff_delay(interval: float, failures: int, rng: random.Random) -> float:
     """interval x 2 per consecutive failure, capped at 10 minutes, with +-10% jitter."""
     base = max(interval, BACKOFF_FLOOR)
@@ -160,7 +167,7 @@ class Scheduler:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"[:200]
+            error = describe(exc)
             log.warning("%s: poll failed: %s", name, error)
         health = status.health
         if error is None:
@@ -204,7 +211,7 @@ class Scheduler:
                 raise
             except Exception as exc:
                 log.warning("%s: backfill failed: %r", source, exc)
-                self._on_done(PollResult(source, generation, error=f"{type(exc).__name__}: {exc}"[:200]))
+                self._on_done(PollResult(source, generation, error=describe(exc)))
                 return
             if generation != self.generation:
                 log.debug("%s: dropping backfill from generation %d (now %d)", source, generation, self.generation)

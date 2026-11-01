@@ -121,18 +121,17 @@ class JmaSource:
     def interval(self, health: SourceHealth) -> float:
         return self._interval
 
-    def _remember(self, name: str) -> None:
-        self._seen[name] = None
+    def _commit(self, names: list[str], events: dict[str, list[str]]) -> None:
+        """Take over what a poll learned, newest SEEN_LIMIT of each. Nothing awaits in here, and nothing above calls
+        it before the batch is complete, so a poll cancelled part-way never leaves this state ahead of the store."""
+        for name in names:
+            self._failures.pop(name, None)
+            self._seen[name] = None
         while len(self._seen) > SEEN_LIMIT:
             del self._seen[next(iter(self._seen))]
-
-    def _link(self, event: str, alert_id: str) -> tuple[str, ...]:
-        """The earlier reports of this event, which `alert_id` supersedes; the newest SEEN_LIMIT events are kept."""
-        earlier = self._ids_by_event.pop(event, [])  # re-inserted below, so an active event stays newest
-        self._ids_by_event[event] = [*earlier, alert_id]
+        self._ids_by_event = events
         while len(self._ids_by_event) > SEEN_LIMIT:
             del self._ids_by_event[next(iter(self._ids_by_event))]
-        return tuple(earlier)
 
     async def fetch(self, client: httpx.AsyncClient, since: str | None) -> Batch:
         response = await client.get(f"{BASE}list.json")
@@ -143,11 +142,13 @@ class JmaSource:
         now = self._clock.now()
         alerts: list[TsunamiAlert] = []
         skipped = False  # a report that could not be fetched: this poll is not a full answer
+        done: list[str] = []  # reports finished this poll
+        events = dict(self._ids_by_event)  # event -> report ids; replaced, never edited, until the poll is whole
         # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
         for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
             name = entry.get("json")
             reported = parse_time(entry.get("rdt"))
-            if not name or name in self._seen or reported is None or now - reported > MAX_AGE:
+            if not name or name in self._seen or name in done or reported is None or now - reported > MAX_AGE:
                 continue
             try:
                 detail = await client.get(f"{BASE}{name}")
@@ -166,9 +167,11 @@ class JmaSource:
                     continue
                 log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)
                 alert = fallback_alert(entry)
-            alert = replace(alert, references=self._link(str(entry.get("eid") or name), alert.id))
-            self._failures.pop(name, None)
-            self._remember(name)
-            alerts.append(alert)
+            event = str(entry.get("eid") or name)
+            earlier = events.pop(event, [])  # re-inserted below, so an active event stays newest
+            events[event] = [*earlier, alert.id]
+            alerts.append(replace(alert, references=tuple(earlier)))
+            done.append(name)
+        self._commit(done, events)
         log.debug("jma: %d new reports", len(alerts))
         return Batch(self.name, now, alerts=tuple(alerts), meta={"incomplete": skipped})

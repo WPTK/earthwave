@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -19,7 +19,7 @@ from earthwave.models import Batch
 from earthwave.net import RecordingTransport, load_recording
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.poll import Scheduler
-from earthwave.sources import jma, tsunamigov
+from earthwave.sources import coops, jma, tsunamigov
 from earthwave.state.events import QuakeNew, TsunamiIssued
 from earthwave.state.store import Store
 from earthwave.ui.screens.detail import DetailScreen
@@ -40,20 +40,24 @@ LONG = "Tsunami warning " + "Aleutian Islands and the coast of Alaska " * 5
 
 
 @pytest.mark.parametrize(
-    ("url", "ok"),
+    ("url", "result"),
     [
-        ("https://www.tsunami.gov/events/PAAQ/x/PAAQCAP.xml", True),
-        ("https://tsunami.gov/x", True),
-        ("http://www.tsunami.gov/x", False),
-        ("https://evil.example/x", False),
-        ("https://www.tsunami.gov.evil.example/x", False),
-        ("https://eviltsunami.gov/x", False),
-        ("file:///etc/passwd", False),
-        ("", False),
+        ("https://www.tsunami.gov/events/PAAQ/x/PAAQCAP.xml", "https://www.tsunami.gov/events/PAAQ/x/PAAQCAP.xml"),
+        ("https://tsunami.gov/x", "https://tsunami.gov/x"),
+        ("https://www.tsunami.gov:443/x?a=1", "https://www.tsunami.gov/x?a=1"),
+        ("http://www.tsunami.gov/x", "https://www.tsunami.gov/x"),  # the CAP products carry http links
+        ("https://www.tsunami.gov:8443/x", None),
+        ("https://www.tsunami.gov:bad/x", None),
+        ("ftp://www.tsunami.gov/x", None),
+        ("https://evil.example/x", None),
+        ("https://www.tsunami.gov.evil.example/x", None),
+        ("https://eviltsunami.gov/x", None),
+        ("file:///etc/passwd", None),
+        ("", None),
     ],
 )
-def test_only_https_on_tsunami_gov_is_followed(url, ok):
-    assert tsunamigov.trusted_url(url) is ok
+def test_only_tsunami_gov_is_followed_and_always_over_https(url, result):
+    assert tsunamigov.trusted_url(url) == result
 
 
 async def test_feed_supplied_links_off_tsunami_gov_are_never_fetched(clock):
@@ -123,7 +127,7 @@ async def test_a_fetch_that_never_finishes_is_given_up_on(clock, monkeypatch):
     source = SlowSource(asyncio.Event())  # never released: a server trickling bytes
     sched = Scheduler([source], Store(), clock, lambda r: None)
     result = await asyncio.wait_for(sched.poll_source("slow", None), 2)
-    assert result.error and result.error.startswith("TimeoutError")
+    assert result.error == "no answer within 0.05 s"
     assert sched.statuses["slow"].health.failures == 1 and not sched.statuses["slow"].in_flight
 
 
@@ -145,13 +149,122 @@ async def test_recording_after_a_cut_off_line_starts_on_a_fresh_line(tmp_path, c
     assert [r["url"] for r in load_recording(path)] == ["u", "https://example.com/new"]
 
 
-def test_jma_remembers_only_the_newest_events():
-    source = JmaFeed({"a.json": ("51", "2026-10-10T03:30:00+09:00")}).source
-    for n in range(jma.SEEN_LIMIT + 50):
-        source._link(f"event{n}", f"id{n}")
-    assert len(source._ids_by_event) == jma.SEEN_LIMIT
-    assert "event0" not in source._ids_by_event and f"event{jma.SEEN_LIMIT + 49}" in source._ids_by_event
-    assert source._link("event249", "later") == ("id249",)  # an event still in the window keeps its history
+async def test_jma_remembers_only_the_newest_events():
+    reports = {f"{n}.json": ("51", "2026-10-10T03:30:00+09:00") for n in range(jma.SEEN_LIMIT + 30)}
+    feed = JmaFeed(reports)
+    for n, entry in enumerate(feed.entries):
+        entry["eid"] = f"event{n}"
+    await feed.poll()
+    assert len(feed.source._seen) == jma.SEEN_LIMIT
+    assert len(feed.source._ids_by_event) == jma.SEEN_LIMIT
+    assert "event0" not in feed.source._ids_by_event and f"event{jma.SEEN_LIMIT + 29}" in feed.source._ids_by_event
+
+
+def test_coops_baseline_has_no_dead_span_check():
+    assert not hasattr(coops, "BASELINE_MIN_SPAN")  # r.ts - prior[0].ts >= BASELINE_LAG always, so it could never fire
+    t0 = datetime(2026, 10, 31, tzinfo=UTC)
+    pred = [coops.Prediction("S", t0 + timedelta(minutes=6 * i), 1.0) for i in range(40)]
+    obs = [coops.GaugeReading("S", "coops", p.ts, 1.2, "6m") for p in pred]
+    out = coops.remove_baseline(coops.residuals(obs, pred))
+    # the first sample with BASELINE_MIN_POINTS in the window ending BASELINE_LAG before it
+    assert out[0].ts == t0 + coops.BASELINE_LAG + timedelta(minutes=6 * (coops.BASELINE_MIN_POINTS - 1))
+
+
+async def test_a_cancelled_poll_leaves_no_product_marked_seen(clock, monkeypatch):
+    """The deadline cancels a fetch part-way; what it had already read must be fetched again, not lost."""
+    atom = read(TG / "PAAQAtom.xml")
+    start, end = atom.index("<entry>"), atom.index("</entry>") + len("</entry>")
+    older = atom[start:end].replace("tnfxzn", "oldr01").replace("890504a1", "00000001")
+    atom = atom[:end] + older + atom[end:]  # the feed lists newest first: the older product is processed first
+    hang = True
+
+    async def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=atom)
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text=EMPTY_ATOM)
+        if hang and url.endswith("tnfxzn/1/WEAK53/WEAK53.txt"):  # the newer product's bulletin
+            await asyncio.sleep(30)
+        return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
+
+    monkeypatch.setattr(poll, "FETCH_DEADLINE", 0.3)
+    source = tsunamigov.TsunamiGovSource(clock)
+    sched = Scheduler([source], Store(), clock, lambda r: None)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        first = await sched.poll_source("tsunamigov", client)
+        assert first.error and not first.batch
+        hang = False
+        second = await sched.poll_source("tsunamigov", client)
+    assert second.error is None and len(second.batch.alerts) == 2  # both products, the older one included
+
+
+async def test_a_cancelled_jma_poll_leaves_no_report_marked_seen():
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:30:00+09:00"), "b.json": ("62", "2026-10-10T03:40:00+09:00")})
+    hang = True
+
+    async def handler(request):
+        if request.url.path.endswith("list.json"):
+            return httpx.Response(200, json=feed.entries)
+        name = request.url.path.rsplit("/", 1)[1]
+        if hang and name == "b.json":
+            await asyncio.sleep(30)
+        return httpx.Response(200, json=feed.details[name])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.3):
+                await feed.source.fetch(client, None)
+        hang = False
+        batch = await feed.source.fetch(client, None)
+    assert len(batch.alerts) == 2 and batch.alerts[1].references == (batch.alerts[0].id,)
+
+
+async def test_a_backfill_that_never_finishes_is_given_up_on(clock, monkeypatch):
+    monkeypatch.setattr(poll, "FETCH_DEADLINE", 0.05)
+    results = []
+    sched = Scheduler([], Store(), clock, results.append)
+
+    async def never(client):
+        await asyncio.Event().wait()
+
+    await asyncio.wait_for(sched.submit_backfill("usgs", None, never), 2)
+    assert [r.error for r in results] == ["no answer within 0.05 s"]
+
+
+async def test_a_redirect_off_tsunami_gov_is_not_trusted(clock):
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text=EMPTY_ATOM)
+        if request.url.host == "www.tsunami.gov":
+            return httpx.Response(302, headers={"Location": "https://evil.example/cap.xml"})
+        return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        batch = await tsunamigov.TsunamiGovSource(clock).fetch(client, None)
+    assert batch.alerts == () and batch.meta["incomplete"]
+
+
+async def test_http_links_in_the_feed_are_fetched_over_https(clock):
+    atom = read(TG / "PAAQAtom.xml").replace(
+        'href="https://www.tsunami.gov/events/PAAQ/', 'href="http://www.tsunami.gov/events/PAAQ/'
+    )
+    requested = []
+
+    def handler(request):
+        requested.append(str(request.url))
+        if str(request.url) == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=atom)
+        if str(request.url) == tsunamigov.FEEDS[1]:
+            return httpx.Response(200, text=EMPTY_ATOM)
+        return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await tsunamigov.TsunamiGovSource(clock).fetch(client, None)
+    assert len(batch.alerts) == 1 and all(u.startswith("https://") for u in requested)
 
 
 def test_seen_quakes_do_not_pile_up_when_nobody_takes_them(clock):
@@ -211,9 +324,13 @@ def test_banner_keeps_the_count_and_key_hint_after_a_long_headline():
 
 async def test_banner_on_screen_ends_with_the_key_hint():
     app = kam_app()
-    app.store.merge(Batch("tsunamigov", NOW, alerts=(replace(kam(1), headline=LONG),)), app.clock)
+    long = replace(
+        kam(1), id="long", dedupe_key="long", headline=LONG, issued=NOW, updated=NOW, expires=NOW + timedelta(hours=3)
+    )
+    app.store.merge(Batch("tsunamigov", NOW, alerts=(long,)), app.clock)
     async with app.run_test(size=(100, 30)) as pilot:
-        app.tracker.observe([TsunamiIssued(kam(1))])
+        assert app.dashboard.tsunami_state()[1][0].id == "long"  # it is the banner's top alert
+        app.tracker.observe([TsunamiIssued(long)])
         app.dashboard.refresh_view()
         await wait_until(pilot, lambda: "a acknowledge" in screen_text(app), what="the key hint")
 

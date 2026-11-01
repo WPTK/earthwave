@@ -22,7 +22,9 @@ def build_banner(alerts: list[TsunamiAlert], width: int = 0) -> Text:
 
 
 class Banner(Static):
-    _alerts: list[TsunamiAlert] = []
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._alerts: list[TsunamiAlert] = []
 
     def show(self, alerts: list[TsunamiAlert], unacked: int) -> None:
         visible = bool(alerts) and unacked > 0
