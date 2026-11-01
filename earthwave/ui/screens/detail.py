@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 def _row(text: Text, label: str, value: str, style: str = "white") -> None:
-    text.append(f"{label:<14}", "grey62")
+    text.append(f"{label:<16}", "grey62")
     text.append(f"{value}\n", style)
 
 
@@ -75,6 +75,9 @@ def render_detail(
     return text
 
 
+REFRESH_SECONDS = 1.0
+
+
 class DetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "Back"),
@@ -99,6 +102,7 @@ class DetailScreen(Screen):
 
     def on_mount(self) -> None:
         self._show()
+        self.set_interval(REFRESH_SECONDS, self._show)  # the store holds revisions, and the age moves on
         self.run_worker(self._load(), exit_on_error=False)
 
     async def _load(self) -> None:
@@ -116,6 +120,7 @@ class DetailScreen(Screen):
 
     def _show(self) -> None:
         app = self.earthwave
+        self.quake = app.store.get(self.quake.id) or self.quake  # the snapshot only if the store dropped the quake
         home = (app.config.home.lat, app.config.home.lon) if app.config.home.enabled else None
         self.query_one("#detail", Static).update(
             render_detail(self.quake, self.detail, self.note, home, app.config.view.time_zone, app.clock.now())

@@ -213,3 +213,30 @@ async def test_strip_renders_one_row_per_station_and_updates():
 
 def test_gauge_strip_snapshot_110x8(snap_compare):
     assert snap_compare(StripApp(fixture_rows()), terminal_size=(110, 8))
+
+
+def test_an_old_residual_is_not_shown_as_the_current_value():
+    row = _row(newest=NOW - timedelta(minutes=5), residual_at=NOW - timedelta(hours=3), residuals=(0.001,))
+    text = max_text(row, NOW)
+    assert text.plain == "resid 2h old" and "green" not in str(text.style)
+    keeping_up = _row(newest=NOW - timedelta(minutes=5), residual_at=NOW - timedelta(minutes=20), residuals=(0.001,))
+    assert max_text(keeping_up, NOW).plain == "+0.001 m"
+
+
+def test_a_long_name_ends_in_an_ellipsis_not_a_dangling_dash():
+    row = _row(name="Station name that is lon – Unalaska Bay", distance_km=None)  # noqa: RUF001
+    label = row_label(row, NOW).plain
+    assert "lon…" in label and "–" not in label  # noqa: RUF001
+
+
+async def test_strip_says_loading_while_the_tide_gauge_list_is_empty():
+    class Stations:
+        stations: list = []
+
+    dart_only = [r for r in fixture_rows() if r.kind == "dart"]
+    app = StripApp(dart_only)
+    app.coops = Stations()
+    async with app.run_test(size=(110, 8)) as pilot:
+        await pilot.pause()
+        text = " ".join(str(w.render()) for w in app.query("Static"))
+        assert "list not loaded yet" in text and "No tide gauge within" not in text

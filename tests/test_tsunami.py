@@ -225,8 +225,10 @@ async def test_tsunamigov_source_follows_cap_links_once(clock):
 async def test_tsunamigov_survives_one_feed_failing_and_a_missing_bulletin(clock):
     def handler(request):
         url = str(request.url)
-        if url == tsunamigov.FEEDS[1] or url.endswith(".txt"):
+        if url == tsunamigov.FEEDS[1]:
             return httpx.Response(500)
+        if url.endswith(".txt"):
+            return httpx.Response(404)
         if url == tsunamigov.FEEDS[0]:
             return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
         return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
@@ -236,6 +238,28 @@ async def test_tsunamigov_survives_one_feed_failing_and_a_missing_bulletin(clock
     assert batch.meta["incomplete"]  # one Atom feed was down
     assert [a.id for a in batch.alerts] == ["PAAQ-1-tnfxzn"]
     assert batch.alerts[0].dedupe_key.startswith("WEAK53 PAAQ")  # header rebuilt from the URL
+
+
+async def test_tsunamigov_retries_a_product_whose_bulletin_had_a_transient_failure(clock):
+    bulletin_status = [503]
+
+    def handler(request):
+        url = str(request.url)
+        if url == tsunamigov.FEEDS[1]:
+            return httpx.Response(500)
+        if url.endswith(".txt"):
+            return httpx.Response(bulletin_status[0], text="BULLETIN TEXT")
+        if url == tsunamigov.FEEDS[0]:
+            return httpx.Response(200, text=read(TG / "PAAQAtom.xml"))
+        return httpx.Response(200, text=read(TG / "PAAQ_0.cap.xml"))
+
+    source = tsunamigov.TsunamiGovSource(clock)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        first = await source.fetch(client, None)
+        assert first.alerts == () and first.meta["incomplete"]  # not kept without its bulletin, and not final
+        bulletin_status[0] = 200
+        second = await source.fetch(client, None)
+    assert [a.id for a in second.alerts] == ["PAAQ-1-tnfxzn"] and "BULLETIN TEXT" in second.alerts[0].text
 
 
 async def test_tsunamigov_raises_when_every_feed_fails(clock):

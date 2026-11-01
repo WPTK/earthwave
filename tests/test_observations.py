@@ -174,7 +174,7 @@ def test_a_late_exceedance_for_a_polled_station_is_reported(dclock):
 
 def test_a_reselected_station_does_not_replay_hours_old_history(dclock):
     store = anomaly_store(dclock)
-    store.forget_gauges(["46402"])  # the selection dropped it; its readings stay in the store
+    store.forget_gauges(["46402"])  # the selection dropped it, and its readings go with it
     dclock.advance(3 * 3600)
     assert merge_dart(store, dclock, pulse_rows(dart_rows()[-1], range(1, 40), 0.15)) == []
 
@@ -685,3 +685,14 @@ async def test_tsunami_screen_embeds_the_strip():
         assert isinstance(app.screen, TsunamiScreen)
         text = strip_text(app)
         assert "South Dutch Harbor" in text and "last batch" in text and "1850 km" in text
+
+
+def test_a_batch_in_flight_when_a_station_leaves_the_selection_is_ignored(dclock):
+    store = anomaly_store(dclock)
+    store.select_gauges(["46402"])
+    store.select_gauges([])  # the alert ended while the next fetch was running
+    assert store.gauge_readings("46402") == [] and store.gauge_residuals("46402") == []
+    dclock.advance(3 * 3600)
+    late = pulse_rows(dart_rows()[-1], range(1, 40), 0.15)
+    assert merge_dart(store, dclock, late) == []
+    assert store.gauge_readings("46402") == [] and "46402" not in store._evaluated  # no stale mark to replay from

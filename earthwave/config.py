@@ -230,7 +230,7 @@ def load_config(path: Path | None = None) -> Config:
             raise ConfigError(f"{path}: cannot write the first-run template: {exc}") from exc
         log.info("config: wrote first-run template to %s", path)
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     try:

@@ -15,8 +15,9 @@ from earthwave.state.store import GAUGE_FRESH
 from earthwave.ui.labels import fmt_age
 
 MAX_POINTS = 240  # sparkline samples per row; older residuals are dropped from the drawing
-NAME_WIDTH = 20
+NAME_WIDTH = 26
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
+RESIDUAL_LAG = timedelta(hours=1)  # residuals this far behind the newest reading no longer describe the water now
 STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
 
 
@@ -31,6 +32,7 @@ class GaugeRowData:
     threshold_m: float  # the anomaly threshold for this station's kind
     kind: str = ""  # dart | coops
     exceeded_at: datetime | None = None  # timestamp of the newest residual at or past the threshold
+    residual_at: datetime | None = None  # timestamp of the newest residual; it lags `newest` while detection is blind
 
 
 def shown_residuals(residuals: Sequence[float]) -> list[float]:
@@ -60,6 +62,23 @@ def sparkline_data(residuals: Sequence[float], threshold_m: float) -> list[float
     return [0.0, threshold_m, *(abs(r) for r in shown_residuals(residuals))]
 
 
+def short_name(name: str) -> str:
+    """The name cut to NAME_WIDTH with an ellipsis, never ending on a dangling separator ("South Dutch Harbor -")."""
+    if len(name) <= NAME_WIDTH:
+        return name
+    cut = name[: NAME_WIDTH - 1]
+    while cut and cut[-1] in " -–—,.:/":  # noqa: RUF001
+        cut = cut[:-1]
+    return cut + "…"
+
+
+def residual_lag(row: GaugeRowData) -> timedelta | None:
+    """How far the newest residual trails the newest reading, when that is long enough to matter."""
+    if row.newest is None or row.residual_at is None or row.newest - row.residual_at <= RESIDUAL_LAG:
+        return None
+    return row.newest - row.residual_at
+
+
 def age_text(row: GaugeRowData, now: datetime) -> str:
     """'42s ago' for live data; 'last batch 3h ago' for a 15-minute DART file, which arrives in batches."""
     if row.newest is None:
@@ -72,7 +91,7 @@ def row_label(row: GaugeRowData, now: datetime) -> Text:
     name = row.name or row.station_id
     dist = f"{row.distance_km:5.0f} km" if row.distance_km is not None else "       "
     text = Text(no_wrap=True, overflow="ellipsis")
-    text.append(f"{name[:NAME_WIDTH]:<{NAME_WIDTH}} ", "bold")
+    text.append(f"{short_name(name):<{NAME_WIDTH}} ", "bold")
     text.append(f"{dist} ", "grey62")
     text.append(f"{row.mode:<3} ", "cyan")
     text.append(age_text(row, now), "grey70")
@@ -90,6 +109,9 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
         return Text("no residual", style="grey50", no_wrap=True)
     if is_stale(row, now):  # old data is never flagged or coloured as if it were live
         return Text(f"{peak:+.3f} m stale", style="grey50", no_wrap=True)
+    lag = residual_lag(row)
+    if lag is not None:  # detection is blind here: an old residual must not read as the current, calm value
+        return Text(f"resid {fmt_age(lag.total_seconds())} old", style="yellow", no_wrap=True)
     if is_over_now(row, now):
         return Text(f"{peak:+.3f} m !", style="bold red", no_wrap=True)
     if abs(peak) >= row.threshold_m:  # it settled: the peak is history, not a current exceedance
@@ -99,10 +121,9 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
 
 class GaugeRow(Horizontal):
     DEFAULT_CSS = """
-    GaugeRow { height: 1; }
-    GaugeRow > .gauge-label { width: 52; }
-    GaugeRow > Sparkline { width: 1fr; min-width: 8; margin: 0 1; }
-    GaugeRow > .gauge-max { width: 14; text-align: right; }
+    GaugeRow > Sparkline > .sparkline--min-color { color: $success; }
+    GaugeRow > Sparkline > .sparkline--max-color { color: $warning; }
+    GaugeRow.over > Sparkline > .sparkline--max-color { color: $error; }
     """
 
     def __init__(self, row: GaugeRowData, now: datetime):
@@ -111,19 +132,32 @@ class GaugeRow(Horizontal):
         self._now = now
 
     def compose(self) -> ComposeResult:
-        over = is_over_now(self.row, self._now)
+        self.set_class(is_over_now(self.row, self._now), "over")
         yield Static(row_label(self.row, self._now), classes="gauge-label")
-        yield Sparkline(
-            sparkline_data(self.row.residuals, self.row.threshold_m),
-            min_color="green",
-            max_color="red" if over else "yellow",
-        )
+        if shown_residuals(self.row.residuals):
+            yield Sparkline(sparkline_data(self.row.residuals, self.row.threshold_m), classes="gauge-spark")
+        else:  # nothing to draw: Sparkline would scale an empty series to a solid block
+            yield Static("", classes="gauge-spark")
         yield Static(max_text(self.row, self._now), classes="gauge-max")
+
+
+class GaugeHeader(Horizontal):
+    """The column headings, in the same columns as the rows."""
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"{'Station':<{NAME_WIDTH}} {'Distance':>8} {'Mode':<3} Reading", classes="gauge-label")
+        yield Static("Residual", classes="gauge-spark")
+        yield Static("24 h max", classes="gauge-max")
 
 
 class GaugeStrip(Vertical):
     DEFAULT_CSS = """
     GaugeStrip { height: auto; }
+    GaugeStrip > Horizontal { height: 1; }
+    GaugeStrip > GaugeHeader { color: $text-muted; }
+    GaugeStrip .gauge-label { width: 58; }
+    GaugeStrip .gauge-spark { width: 1fr; min-width: 8; margin: 0 1; }
+    GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: right; }
     GaugeStrip > .gauge-empty { color: $text-muted; }
     """
 
@@ -136,10 +170,15 @@ class GaugeStrip(Vertical):
         if not self._rows or self._now is None:
             yield Static("No gauge stations selected.", classes="gauge-empty")
             return
+        yield GaugeHeader()
         for row in self._rows:
             yield GaugeRow(row, self._now)
         if any(r.kind == "dart" for r in self._rows) and not any(r.kind == "coops" for r in self._rows):
-            yield Static(f"No tide gauge within {COOPS_MAX_KM:.0f} km.", classes="gauge-empty")
+            coops = getattr(self.app, "coops", None)
+            if coops is not None and not coops.stations:  # an outage or the first fetch, not a fact about the coast
+                yield Static("Tide gauge list not loaded yet.", classes="gauge-empty")
+            else:
+                yield Static(f"No tide gauge within {COOPS_MAX_KM:.0f} km.", classes="gauge-empty")
 
     def show(self, rows: Sequence[GaugeRowData], now: datetime) -> None:
         self._rows = tuple(rows)

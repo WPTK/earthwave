@@ -54,7 +54,8 @@ scripts\build_exe.ps1            # builds dist\earthwave.exe, then runs --versio
 ```
 
 On Linux and macOS, run `python -m PyInstaller --noconfirm --clean earthwave.spec`; the result is `dist/earthwave`.
-A PyInstaller binary is built for the OS and CPU it was built on. The binary has no `tests/fixtures` folder, so its
+A PyInstaller binary is built for the OS and CPU it was built on. The release workflow builds the Linux binary on
+Ubuntu 22.04, so it needs glibc 2.35 or newer. The binary has no `tests/fixtures` folder, so its
 `--selftest` skips the fixture parse and still renders a headless frame.
 
 ### Signing

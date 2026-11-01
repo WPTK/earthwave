@@ -87,7 +87,7 @@ async def test_dart_event_mode_replay_on_screen(monkeypatch, terminal):
         app.screen.refresh_gauges()
         await pilot.pause()
         text = screen_text(app)
-        assert "180 NM West of Iquiq" in text  # the DART buoy nearest the quake
+        assert "180 NM West of Iqui" in text  # the DART buoy nearest the quake
         assert "last batch" in text and not fake.sent
 
         # event mode: the pulse is flagged on screen and announced once

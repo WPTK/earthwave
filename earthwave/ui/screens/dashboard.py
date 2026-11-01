@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 MAP_MIN_WIDTH = 120  # below this the map hides itself and the list takes the full width
 
 
+HIDDEN_ACTIONS = {"ack_all", "search", "filters", "sort", "toggle_map", "fullscreen_map", "zoom_map"}
+
+
 class DashboardScreen(Screen):
     BINDINGS = [
         Binding("f", "filters", "Filters"),
@@ -47,6 +50,11 @@ class DashboardScreen(Screen):
         super().__init__()
         self.show_map = True
         self._countable: set[str] = set()  # ids the magnitude and hours filter can show: what the unseen badge counts
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Under the too-small overlay the keys that act on the hidden dashboard are off (quit is the app's own)."""
+        del parameters
+        return not (self.has_class("too-small") and action in HIDDEN_ACTIONS)
 
     @property
     def earthwave(self) -> "EarthwaveApp":
@@ -112,7 +120,9 @@ class DashboardScreen(Screen):
         width = quake_list.scrollable_content_region.width  # the rows are drawn inside the scrollbar
         self.query_one("#header", Static).update(header_text(width, app.config.home.enabled))
         empty = self.query_one("#empty", Static)
-        empty.display = not rows and app.store.warm  # before the first poll an empty list means nothing yet
+        empty.display = (
+            not rows and app.quake_feed_wait() != "Waiting for USGS"
+        )  # until the first poll it means nothing
         hint = "Press / to change the search." if in_filters else "Press f to change filters."  # what emptied it
         empty.update(Text(f"No quakes match {filter_summary(app.view)}. {hint}"))
         self.refresh_ticker()
@@ -124,7 +134,7 @@ class DashboardScreen(Screen):
         major = [q for q in app.store.all() if q.mag >= app.config.alerts.major_magnitude]
         latest = max(major, key=lambda q: q.time, default=None)
         age = (app.clock.now() - latest.time).total_seconds() if latest else 0.0
-        self.query_one(Ticker).show(latest, age, app.gauge_ticker(), app.store.warm)
+        self.query_one(Ticker).show(latest, age, app.gauge_ticker(), app.quake_feed_wait())
 
     def tsunami_state(self) -> tuple[list, list, int, str]:
         """(alerts in force, actionable ones, unacknowledged count, status bar state) from the store and tracker."""
