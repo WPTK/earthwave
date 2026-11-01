@@ -3,6 +3,11 @@
 An earthquake and tsunami tracker for the terminal. It follows free, keyless public feeds, with USGS as the backbone,
 and is written in Python 3.13 with [Textual](https://textual.textualize.io/).
 
+![earthwave replaying a recorded Kamchatka earthquake: a tsunami watch, then a warning, then the quake in the list and on the map](docs/img/demo.svg)
+
+*Recorded data, not live: the app replaying `tests/fixtures/replay/kamchatka_watch_to_warning.jsonl` with
+`--replay`. Re-record it with `python scripts/record_demo.py`.*
+
 **Status: pre-release (0.0.x).** Milestones M1 to M6 are in progress. Follow them on the
 [milestones](https://github.com/WPTK/earthwave/milestones) page and the
 [issue tracker](https://github.com/WPTK/earthwave/issues). The design is in [`docs/plan.md`](docs/plan.md).
