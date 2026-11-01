@@ -195,12 +195,16 @@ def unstick(term: Terminal, base: tuple[int, int]) -> None:
     if rules.classify(term.screen_text()) == "too_small":
         term.resize(*base)
         term.settle(0.3)
+    def at_dashboard() -> bool:
+        text = term.screen_text()
+        return rules.classify(text) == "dashboard" and "Enter apply, Esc cancel" not in text  # the search box is open
+
     for _ in range(3):
-        if rules.classify(term.screen_text()) == "dashboard":
+        if at_dashboard():
             return
         term.send_keys("escape")
         term.settle(0.3)
-    if rules.classify(term.screen_text()) != "dashboard":
+    if not at_dashboard():
         raise Failure(
             "dead-end", f"three Escapes did not return to the dashboard (screen: {rules.classify(term.screen_text())})"
         )
