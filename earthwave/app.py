@@ -96,7 +96,7 @@ class EarthwaveApp(App):
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
         self.config = config
         self.clock: Clock = clock or SystemClock()
-        self.store = store if store is not None else Store(config.alerts, config.home)
+        self.store = store if store is not None else Store(config.alerts, config.home, launched=self.clock.now())
         self.tracker = AttentionTracker(self.clock)
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.graphics = graphics or BRAILLE

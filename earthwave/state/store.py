@@ -96,7 +96,9 @@ def changed_fields(old: Earthquake, new: Earthquake) -> tuple[str, ...]:
 
 
 class Store:
-    def __init__(self, alerts: AlertsConfig | None = None, home: HomeConfig | None = None):
+    def __init__(
+        self, alerts: AlertsConfig | None = None, home: HomeConfig | None = None, launched: datetime | None = None
+    ):
         self._alerts = alerts or AlertsConfig()
         self._home = home or HomeConfig()
         self._quakes: dict[str, Earthquake] = {}
@@ -105,7 +107,9 @@ class Store:
         self._coverage: dict[tuple[float, float], datetime] = {}
         self.coverage_lapsed = False  # a claim was dropped because the steady feed missed more than its window
         self.warm = False
-        self._steady_at: datetime | None = None  # when the steady feed last answered
+        # When the steady feed last answered (server time). Until it first does, the launch time, so a quake published
+        # after launch is announced from a silent batch even when every startup feed failed.
+        self._steady_at: datetime | None = launched
         self._tsunamis: dict[str, TsunamiAlert] = {}
         self._first_seen: dict[str, datetime] = {}
         self._alias: dict[str, str] = {}  # id of a merged duplicate -> id it was merged into
