@@ -95,4 +95,6 @@ for attempt in 1 2; do
   verify "$TERMNAME" "$OUT" && break
 done
 echo "attempts=$attempt $VERDICT_NUMBERS" >>"$OUT/verdict"
-kill "$TPID" 2>/dev/null; sleep 1; pkill -P "$TPID" 2>/dev/null; true
+kill "$TPID" 2>/dev/null; sleep 1; pkill -P "$TPID" 2>/dev/null
+# the job must go red when the click did not move the selection
+grep -q '^PASS' "$OUT/verdict"
