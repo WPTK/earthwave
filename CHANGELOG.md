@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0] - 2026-11-01
+
+### Changed
+
+- Draw the map at pixel resolution with sixel graphics when the terminal reports them, with braille as the fallback; `map_renderer` under `[view]` forces either
+- Enlarge the markers for magnitudes 3.4 to 5.9
+- Redraw the braille map with coast and land on one dot grid, a smoother coast and a light land hatch
+- Show the world map at equal scale at any panel size, and zoom through world, wide, region and close views with or without a selected quake
+
+### Added
+
+- Add land fill under the coastline
+- Add place labels to the braille map
+- Add a magnitude legend and a list of the strongest quakes in the rows left under the world map
+
+### Fixed
+
+- Fix M7+ map markers and text that were nearly invisible under `NO_COLOR`
+- Fix quakes published after launch going unannounced when every startup feed failed
+
 ## [0.1.0] - 2026-11-01
 
 ### Added
@@ -19,4 +39,5 @@
 - Add one-file binaries for Windows, Linux and macOS, attached to each GitHub release with checksums
 - Add `--version` and `--selftest`
 
+[0.2.0]: https://github.com/WPTK/earthwave/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WPTK/earthwave/releases/tag/v0.1.0

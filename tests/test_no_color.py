@@ -7,6 +7,24 @@ from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
 
 
+def test_major_quake_marker_stays_visible_and_map_dots_do_not_change():
+    """The M7+ marker is the most important dot on the map; plain Monochrome makes it near-black on the dark ground."""
+    from rich.segment import Segment
+    from rich.style import Style
+    from textual.color import Color
+
+    from earthwave.ui.theme import LegibleMonochrome, contrast
+
+    dark = Color(30, 30, 30)
+    red = Style(color="rgb(120,0,0)")
+    filtered = LegibleMonochrome().apply
+    marker = filtered([Segment("●", red)], dark)[0]
+    assert contrast(Color.from_rich_color(marker.style.color), dark) >= 4.5
+    plain = super(LegibleMonochrome, LegibleMonochrome())
+    for dots in ("⣿", "─", "▇"):
+        assert filtered([Segment(dots, red)], dark)[0].style == plain.apply([Segment(dots, red)], dark)[0].style
+
+
 async def test_app_renders_with_no_color_set(monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     app = week_app()
