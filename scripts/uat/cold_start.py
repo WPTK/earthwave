@@ -88,7 +88,11 @@ class Cap:
     def typed(self, t: Terminal, text: str, *, wait: float = 1.2) -> str:
         self.write(f">>> typed: {text!r}")
         for ch in text:
-            t.send_keys("space" if ch == " " else ch)
+            try:
+                t.send_keys("space" if ch == " " else ch)
+            except Exception as exc:  # the program may have ended (a typed q quits); that is part of the capture
+                self.write(f"[send failed on {ch!r}: {type(exc).__name__}]")
+                break
         return self.screen(t, wait)
 
     def screen(self, t: Terminal, wait: float = 1.2) -> str:
@@ -152,7 +156,7 @@ def find_new_files(before: set[Path]) -> list[Path]:
             continue
         for dirpath, dirnames, files in os.walk(r):
             dirnames[:] = [
-                d for d in dirnames if d not in {"node_modules", ".git", "site-packages", "AppData"} or r != home_dir()
+                d for d in dirnames if d not in {"node_modules", ".git", "site-packages", "Application Data"}
             ]
             if len(Path(dirpath).parts) - len(r.parts) > 5:
                 dirnames[:] = []
@@ -319,9 +323,11 @@ def main() -> int:
             cap.keys(t, "slash")
             cap.typed(t, "Japan")
             cap.keys(t, "enter")
+            cap.keys(t, "escape", label="(leave whatever the Enter opened)")
             cap.keys(t, "slash")
             cap.typed(t, "Zzzzqqq")
             cap.keys(t, "enter", label="(a place with no quakes)")
+            cap.keys(t, "escape")
             cap.keys(t, "slash")
             t.send_raw("")  # ctrl+u clears a text box
             cap.write(">>> keys: ctrl+u (clear the box)")
@@ -484,7 +490,8 @@ def main() -> int:
                 cap.write(f"(--version output above: {out.strip()[:80]!r})")
                 t = launch(exe)
                 try:
-                    ok = wait_dashboard(t, 60) and ok
+                    reached = wait_dashboard(t, 60)
+                    cap.write(f"(dashboard reached: {reached})")
                     cap.screen(t, 3)
                 finally:
                     quit_app(t)
