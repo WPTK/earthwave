@@ -1,0 +1,57 @@
+name: spike-kitty-repeat
+
+# Spike only: repeats kitty (light) 20 times to find out how often the app shows Help unprompted, and where a '?' came from.
+on:
+  push:
+    branches: [uat/spikes]
+    paths:
+      - ".github/workflows/spike-kitty-repeat.yml"
+      - "scripts/uat/s2/**"
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        wrap: ["0", "1"]   # 1 = log the bytes the app receives through script(1)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xdotool imagemagick x11-utils mesa-utils libgl1-mesa-dri dbus-x11 fonts-dejavu-core kitty
+      - name: Fetch the released Linux binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          gh release download v0.2.0 -R WPTK/earthwave -p '*linux-x86_64.tar.gz' -p SHA256SUMS
+          grep linux SHA256SUMS | sha256sum -c -
+          tar xzf earthwave-*.tar.gz
+          echo "EW=$PWD/earthwave" >> "$GITHUB_ENV"
+      - name: Repeat kitty light 20 times
+        env:
+          THEME: light
+          WRAP_INPUT: ${{ matrix.wrap }}
+        run: |
+          chmod +x scripts/uat/s2/*.sh
+          scripts/uat/s2/repeat_kitty.sh "$EW" "$PWD/tests/fixtures/replay/usgs_short.jsonl" "$PWD/out/kitty-light-wrap${{ matrix.wrap }}" kitty 20
+      - name: Summary
+        if: always()
+        run: cat "out/kitty-light-wrap${{ matrix.wrap }}/summary.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kitty-light-wrap${{ matrix.wrap }}
+          path: |
+            out/**/summary.txt
+            out/**/verdict
+            out/**/*.png
+            out/**/*.log
+            out/**/*.stdout
+            out/**/app-input.*
