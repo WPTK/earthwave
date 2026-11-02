@@ -14,8 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from uat import rules
-from uat.target import evidence, launch, needs_kit, status_line
+from uat.target import evidence, launch, needs_kit, screen_violations, status_line
 
 CORPUS = sorted((Path(__file__).parent / "corpus").glob("*.jsonl"))
 
@@ -27,7 +26,8 @@ def test_l8_saved_capture_replays_through_the_parsers(capture: Path) -> None:
         t.wait_for(lambda s: bool(re.search(r"[1-9]\d* shown of", s.text)), 90, "quakes parsed from the capture")
         t.settle(2.0)
         text = evidence(t, "l8", capture.stem)
-        assert not rules.violations(text, t.cols, t.rows), rules.violations(text, t.cols, t.rows)
+        found = screen_violations(t, text, "l8", capture.stem)
+        assert not found, found
         assert "failed" not in status_line(text).lower(), f"a feed of the capture did not parse: {status_line(text)}"
         t.send_keys("q")
         assert t.wait_exit(10) is not None

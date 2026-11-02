@@ -8,8 +8,7 @@ import re
 import time
 from pathlib import Path
 
-from uat import rules
-from uat.target import evidence, launch, log_text, needs_kit, needs_network, needs_state, ready
+from uat.target import evidence, launch, log_text, needs_kit, needs_network, needs_state, ready, screen_violations
 
 pytestmark = [needs_kit, needs_network, needs_state]
 
@@ -33,7 +32,7 @@ def test_live_session_keeps_the_rules_and_records(tmp_path: Path) -> None:
             t.send_keys(key)
             time.sleep(0.4)
             text = evidence(t, "live", f"{step:02d}-{key}")
-            found = rules.violations(text, t.cols, t.rows)
+            found = screen_violations(t, text, "live", f"{step:02d}-{key}")
             assert not found, f"after {key!r}: {found}\n{text}"
         t.settle(2.0)
         text = t.screen_text()

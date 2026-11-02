@@ -15,6 +15,7 @@ _LEAK = re.compile(
     r"\[/?(?:b|i|u|dim|bold|italic|reverse|red|green|yellow|orange|cyan|white|grey\d*|\$[\w-]+)\]|\[@click|link="
 )
 _PLACEHOLDER = re.compile(r"\b(?:None|nan|NaN|inf)\b|\{[a-z_]+[^}]*\}|<(?:object|bound method) ")
+ROWS_MISMATCH = "rows are drawn"  # ends the status-vs-rows sentences; target.screen_violations reads twice for these
 _ROW = re.compile(r"^[▌> ]\s*\d+[smhd]\s+\d\.\d")
 
 

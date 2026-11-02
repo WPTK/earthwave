@@ -20,12 +20,15 @@ import os
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from uat_kit import Terminal, unavailable_reason
+
+from uat import rules
 
 EXE = os.environ.get("EARTHWAVE_EXE") or None
 TARGET = "exe" if EXE else "source"
@@ -169,6 +172,20 @@ def evidence(term: Terminal, test: str, name: str) -> str:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{name}.txt").write_text(f"{term.cols}x{term.rows}\n{text}\n", encoding="utf-8")
     return text
+
+
+def screen_violations(term: Terminal, text: str, test: str, name: str) -> list[str]:
+    """``rules.violations`` for a frame ``evidence`` saved. A status count against drawn rows only counts when a second
+    read 500 ms later shows a mismatch too: one read can catch the status bar and the list mid-repaint. The second frame is
+    saved as ``<name>-second-read`` beside the first, so an artifact shows every time a mismatch was seen."""
+    found = rules.violations(text, term.cols, term.rows)
+    if not any(rules.ROWS_MISMATCH in f for f in found):
+        return found
+    time.sleep(0.5)
+    again = evidence(term, test, f"{name}-second-read")
+    print(f"{test}/{name}: {found}", "first read:", text, "second read:", again, sep="\n")
+    second = [f for f in rules.violations(again, term.cols, term.rows) if rules.ROWS_MISMATCH in f]
+    return [f for f in found if rules.ROWS_MISMATCH not in f] + second
 
 
 @contextmanager

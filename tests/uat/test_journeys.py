@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from uat import rules
 from uat.known import known
 from uat.replays import Rec, all_quiet, warning_with_expiry
 from uat.target import (
@@ -34,6 +33,7 @@ from uat.target import (
     needs_kit,
     needs_posix,
     ready,
+    screen_violations,
     selected_row,
     status_line,
 )
@@ -46,7 +46,7 @@ NO_MODES = ("focus_events",)  # Textual's own; a bare Textual app leaves it too
 def clean(term, name: str, test: str) -> str:
     """Save the frame, check the generic rules and return the text."""
     text = evidence(term, test, name)
-    found = rules.violations(text, term.cols, term.rows)
+    found = screen_violations(term, text, test, name)
     assert not found, f"{name}: {found}\n{text}"
     return text
 

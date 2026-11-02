@@ -19,7 +19,6 @@ from pathlib import Path
 import psutil
 import pytest
 
-from uat import rules
 from uat.known import known, unfiled
 from uat.replays import Rec
 from uat.target import (
@@ -37,6 +36,7 @@ from uat.target import (
     needs_state,
     program,
     ready,
+    screen_violations,
     selected_row,
     status_line,
 )
@@ -50,7 +50,7 @@ LONG_MINUTES = float(os.environ.get("UAT_J19_MINUTES", "1"))
 
 def clean(term, name: str, test: str) -> str:
     text = evidence(term, test, name)
-    found = rules.violations(text, term.cols, term.rows)
+    found = screen_violations(term, text, test, name)
     assert not found, f"{name}: {found}\n{text}"
     return text
 

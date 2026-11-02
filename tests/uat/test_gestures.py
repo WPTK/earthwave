@@ -15,8 +15,7 @@ import re
 
 import pytest
 
-from uat import rules
-from uat.target import BASE, USGS, evidence, launch, list_rows, log_text, needs_kit, ready
+from uat.target import BASE, USGS, evidence, launch, list_rows, log_text, needs_kit, ready, screen_violations
 
 pytestmark = needs_kit
 
@@ -130,9 +129,10 @@ GESTURES = [
 def check(t, label: str) -> None:
     assert t.alive(), f"{label}: the program is gone: {t.exit_code()}"
     t.settle()
-    text = evidence(t, "gestures", re.sub(r"\W+", "_", label))
+    name = re.sub(r"\W+", "_", label)
+    text = evidence(t, "gestures", name)
     assert not LEAK.search(text), f"{label}: input leaked onto the screen\n{text}"
-    found = rules.violations(text, t.cols, t.rows)
+    found = screen_violations(t, text, "gestures", name)
     assert not found, f"{label}: {found}\n{text}"
     assert "Traceback" not in log_text(t), f"{label}: traceback in the log\n{log_text(t)}"
 
