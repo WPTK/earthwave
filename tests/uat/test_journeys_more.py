@@ -287,6 +287,7 @@ def test_j18_replay_says_it_is_not_live() -> None:
 
 # -- J19 ------------------------------------------------------------------------------------------------------------
 
+long_timeout = pytest.mark.timeout(int(LONG_MINUTES * 60) + 400)  # pyproject sets 120 s for everything else
 long_only = pytest.mark.skipif(
     not LONG, reason="long session: UAT_LONG=1 (the UAT workflow's long job); UAT_J19_MINUTES sets the length"
 )
@@ -338,12 +339,14 @@ def long_session(t, minutes: float, name: str, *, similarity: float) -> None:
 
 
 @long_only
+@long_timeout
 def test_j19_long_session_on_a_replay() -> None:
     with launch("--replay", str(USGS), "--speed", "5", *BASE) as t:
         long_session(t, LONG_MINUTES, "replay", similarity=1.0)
 
 
 @long_only
+@long_timeout
 @needs_state
 @needs_network
 def test_j19_long_session_live(tmp_path: Path, seeded: Seeded) -> None:
