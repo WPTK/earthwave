@@ -265,6 +265,7 @@ def test_j18_record_then_replay_at_speeds_1_and_5(tmp_path: Path, seeded: Seeded
             quit_cleanly(t)
 
 
+# Windows real input once read "0 shown" with one row drawn here: transient, kit read mid-repaint, unconfirmed.
 def test_j18_replay_shows_the_readme_demo_story() -> None:
     """The README image caption: a tsunami watch, then a warning, then the quake in the list and on the map."""
     with launch("--replay", str(KAM), "--speed", "20") as t:

@@ -86,7 +86,7 @@ def stuck_lines(text: str) -> list[str]:
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("delay", [5, 20])
+@pytest.mark.parametrize("delay", [5, 15])  # under the 20 s read timeout in earthwave/net.py: at 20 the answer races it
 def test_l3_cold_start_with_a_slow_origin_updates_without_a_keypress(delay: int) -> None:
     fault(f"delay:{delay}")
     with start() as t:
