@@ -81,6 +81,20 @@ jobs:
         run: |
           export S4PY="$HOME/s4venv/bin/python"
           "$S4PY" "$S4/journeys.py" ${{ matrix.term }} 2>&1 | tee "$OUT/drive.log"
+      - name: Fail unless the journeys ran to the end
+        run: |
+          python - <<'EOF'
+          import json, os, sys
+
+          steps = json.load(open(os.path.join(os.environ["OUT"], "result.json")))["steps"]
+          failed = [s["name"] for s in steps if not s["ok"]]
+          if not any(s["name"] == "summary" for s in steps):
+              print(f"::error::No coverage: the journeys stopped after {len(steps)} setup steps")
+              sys.exit(1)
+          for name in failed:  # report-only: a failed step can be the harness, see issue 276
+              print(f"::warning::Failed step: {name}")
+          print(f"{len(steps) - 1} steps, {len(failed)} failed")
+          EOF
       - name: Final screen
         if: always()
         run: screencapture -x "$OUT/final_screen.png" || true
