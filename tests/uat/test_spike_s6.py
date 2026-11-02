@@ -3,6 +3,7 @@ monochrome run (NO_COLOR) and passes on a colour run. Runs the source (python -m
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,7 +13,10 @@ from uat_kit.terminal import sgr_chromatic
 
 USGS = Path(__file__).parents[1] / "fixtures" / "replay" / "usgs_short.jsonl"
 ALT_SCREEN = chr(27) + "[?1049h"
-pytestmark = pytest.mark.skipif(unavailable_reason() is not None, reason=str(unavailable_reason()))
+pytestmark = [
+    pytest.mark.skipif(os.environ.get("UAT_REAL") != "1", reason="a spike, not part of default runs: set UAT_REAL=1"),
+    pytest.mark.skipif(unavailable_reason() is not None, reason=str(unavailable_reason())),
+]
 
 
 def launch(no_color: bool) -> Terminal:
