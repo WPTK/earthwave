@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 
 from uat import rules
-from uat.target import evidence, launch, log_text, needs_kit, needs_network, ready
+from uat.target import evidence, launch, log_text, needs_kit, needs_network, needs_state, ready
 
-pytestmark = [needs_kit, needs_network]
+pytestmark = [needs_kit, needs_network, needs_state]
 
 OUT = Path(os.environ.get("UAT_OUT") or ".")
 
@@ -19,7 +19,13 @@ OUT = Path(os.environ.get("UAT_OUT") or ".")
 def test_live_session_keeps_the_rules_and_records(tmp_path: Path) -> None:
     rec = OUT / "live-record.jsonl"
     rec.parent.mkdir(parents=True, exist_ok=True)
-    with launch("--record", str(rec)) as t:
+    # isolate=False: the isolation points every proxy at a dead port, and this test is about the real feeds
+    env = {
+        "XDG_DATA_HOME": "{dir}/xdg-data",
+        "XDG_CONFIG_HOME": "{dir}/xdg-config",
+        "XDG_CACHE_HOME": "{dir}/xdg-cache",
+    }
+    with launch("--record", str(rec), env=env, isolate=False) as t:
         ready(t, timeout=90)
         for step, key in enumerate(
             ("j", "j", "enter", "escape", "s", "s", "t", "escape", "o", "escape", "m", "m", "?", "?", "f", "escape")

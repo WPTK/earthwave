@@ -11,7 +11,7 @@ Journey ids (J1..) are the ones in ``tests/uat/traceability.toml``.
 from __future__ import annotations
 
 import re
-import stat
+import shutil
 import time
 from pathlib import Path
 
@@ -265,17 +265,20 @@ def test_j20_control_warning_with_a_sane_expiry_alerts(tmp_path: Path) -> None:
 
 
 @needs_posix
-@known(246, "b with a console browser leaves the app dead (written on Windows, not yet run on POSIX)", strict=False)
-def test_j4_browser_key_with_a_console_browser(tmp_path: Path) -> None:
-    fake = tmp_path / "console-browser"
-    fake.write_text("#!/bin/sh\nprintf '\\033[?1049h\\033[2J'\nsleep 2\nprintf '\\033[?1049l'\n")
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-    with launch("--replay", str(USGS), *BASE, env={"BROWSER": str(fake)}) as t:
+@pytest.mark.skipif(
+    shutil.which("w3m") is None, reason="needs a real console browser: apt install w3m (CI installs it)"
+)
+@known(246, "b with a real console browser (w3m, no DISPLAY) leaves the app dead: screen stale, keys ignored")
+def test_j4_browser_key_with_a_real_console_browser() -> None:
+    gone = ("NO_COLOR", "DISPLAY", "WAYLAND_DISPLAY", "BROWSER")  # no GUI to open, so Python's webbrowser picks w3m
+    with launch("--replay", str(USGS), *BASE, env_remove=gone) as t:
         ready(t)
         t.send_keys("enter")
         t.wait_for_text("Event page", 10)
         t.send_keys("b")
-        time.sleep(3.0)
+        time.sleep(4.0)
+        t.send_raw("Q")  # w3m: quit without asking
+        time.sleep(1.5)
         t.send_keys("escape")
         t.wait_for_text("shown of", 10)
         assert t.alive(), "the app died after b"

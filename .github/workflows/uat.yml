@@ -6,6 +6,10 @@ name: UAT
 # re-injection of closed bugs, both of which run only on the commit being tagged.
 on:
   workflow_dispatch:
+    inputs:
+      long_minutes:
+        description: "J19 session length in minutes (replay and live, each)"
+        default: "15"
   push:
     branches: [uat/phase3]
     paths: [".github/workflows/uat.yml", "tests/uat/**", "tests/uat_kit/**", "scripts/uat/**"]
@@ -26,6 +30,7 @@ jobs:
       UAT_REAL: "1"
       UAT_DISPOSABLE: "1"
       UAT_ALLOW_BROWSER: "1"
+      UAT_NETWORK: "1" # J18 records a real session
       UAT_OUT: uat-out
       PYTHONUTF8: "1"
     steps:
@@ -35,8 +40,11 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install -e ".[dev]"
+      - name: A real console browser for J4 (#246), with DISPLAY unset in the test
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y w3m
       - name: Journeys and gesture self-tests
-        run: python -m pytest tests/uat/test_journeys.py tests/uat_kit -p no:xdist -q --tb=short -rxX
+        run: python -m pytest tests/uat/test_journeys.py tests/uat/test_journeys_more.py tests/uat_kit -p no:xdist -q --tb=short -rxX
       - name: Gestures on the dashboard and detail screens
         run: python -m pytest tests/uat/test_gestures.py -k "dashboard or detail or legacy or application or unbound" -p no:xdist -q --tb=short
       - name: Seeded walk, 5 minutes
@@ -50,6 +58,41 @@ jobs:
         if: always()
         with:
           name: uat-${{ matrix.os }}
+          path: uat-out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  long:
+    # J19: a long session across refresh ticks with selection, screen switches and memory sampled. Dispatch only (the
+    # push run would add 30+ minutes per OS). Set long_minutes low (2) to check the code path.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      UAT_REAL: "1"
+      UAT_DISPOSABLE: "1"
+      UAT_NETWORK: "1"
+      UAT_LONG: "1"
+      UAT_J19_MINUTES: ${{ inputs.long_minutes }}
+      UAT_OUT: uat-out
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: J19 long session, replay then live
+        run: python -m pytest tests/uat/test_journeys_more.py -k j19 -p no:xdist -q --tb=short -s
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uat-long-${{ matrix.os }}
           path: uat-out
           if-no-files-found: ignore
           retention-days: 14
