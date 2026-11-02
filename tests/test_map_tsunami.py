@@ -3,7 +3,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from conftest import make_quake
+from conftest import SNAPSHOT_NOW, make_quake
 from rich.style import Style
 from test_tsunami import kam, kam_app, kam_quake, nws_alert
 from textual.app import App
@@ -155,7 +155,9 @@ class TsunamiHarness(App):
 
     def __init__(self, ascii_mode):
         super().__init__()
-        self.tracker = AttentionTracker(ReplayClock(datetime(2026, 10, 31, 12, tzinfo=UTC), real=lambda: 0.0))
+        # the app clock MapPanel reads for the quake ages under the map; pinned, so the ages do not move with the date
+        self.clock = ReplayClock(SNAPSHOT_NOW, real=lambda: 0.0)
+        self.tracker = AttentionTracker(self.clock)
         self.tracker.observe([TsunamiIssued(KAM_WARNING)])
         self.panel = MapPanel(self.tracker, ASCII if ascii_mode else UNICODE, None, ticks=False)
 
