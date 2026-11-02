@@ -1,0 +1,54 @@
+name: UAT L3 tmux
+
+# #272 second driver: the published v0.2.0 Linux binary in tmux (no tui-test kit) against the S8b origin with every feed
+# held 20 s, three runs in one job. Edits the hosts file of the runner, which is thrown away after the job.
+# Report-only. Manual, or on a push that changes this file.
+on:
+  workflow_dispatch:
+  push:
+    branches: [uat/phase3]
+    paths:
+      - ".github/workflows/uat-l3-tmux.yml"
+      - "scripts/uat/l3_tmux.py"
+
+permissions:
+  contents: read
+
+jobs:
+  l3-tmux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      S8B_DISPOSABLE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Fetch the released binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          gh release download v0.2.0 -R WPTK/earthwave -p '*linux-x86_64.tar.gz' -p SHA256SUMS
+          grep -i 'linux-x86_64.tar.gz' SHA256SUMS | sha256sum -c -
+          tar xzf earthwave-*.tar.gz && chmod +x earthwave
+          echo "EXE=$PWD/earthwave" >> "$GITHUB_ENV"
+          echo "S8B_DIR=$RUNNER_TEMP/s8b-work" >> "$GITHUB_ENV"
+      - name: Origin and hosts file
+        run: |
+          mkdir -p "$S8B_DIR" uat-out
+          PY=$(python -c 'import sys;print(sys.executable)')
+          sudo nohup "$PY" scripts/uat/s8b/origin.py --dir "$S8B_DIR" > uat-out/origin.out 2>&1 &
+          for i in $(seq 40); do [ -f "$S8B_DIR/listening.json" ] && break; sleep 0.5; done
+          cat "$S8B_DIR/listening.json"
+          sudo -E "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"
+      - name: Three cold starts with every feed held 20 s
+        run: python scripts/uat/l3_tmux.py --exe "$EXE" --work "$S8B_DIR" --out uat-out --delay 20 --runs 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uat-l3-tmux
+          path: uat-out
+          retention-days: 14

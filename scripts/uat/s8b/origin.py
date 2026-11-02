@@ -122,7 +122,15 @@ class Origin:
                     return
                 else:
                     if mode.startswith("delay:"):
-                        await asyncio.sleep(float(mode.split(":")[1]))
+                        # hold the answer, but notice a client that gives up first (EOF) and record how long it waited
+                        held_from = time.monotonic()
+                        try:
+                            await asyncio.wait_for(reader.read(1), float(mode.split(":")[1]))
+                            entry["status"] = "client-closed"
+                            entry["held_s"] = round(time.monotonic() - held_from, 2)
+                            return
+                        except TimeoutError:
+                            entry["held_s"] = round(time.monotonic() - held_from, 2)
                     rec = self.rec.get(f"https://{host}{target}")
                     if rec is None:
                         status, body, ctype = 404, b"no recording", "text/plain"
