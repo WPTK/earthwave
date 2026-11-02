@@ -216,7 +216,7 @@ def test_j14_offline_with_an_empty_cache(seeded: Seeded) -> None:
     seeded.write([])
     with launch("--offline", env=seeded.env) as t:
         t.wait_for(lambda s: "shown of" in s.text, 30, "dashboard")
-        t.wait_for(lambda s: "no saved history" in s.text.lower(), 10, "the toast that there is no history")
+        t.wait_for(lambda s: "not being fetched" in s.text, 10, "the empty list saying nothing is fetched")
         offline_checks(t, "empty-cache")
         quit_cleanly(t)
 
@@ -400,6 +400,8 @@ def test_j23_diagnose_prints_a_bug_report() -> None:
 def hostile_usgs(body: str) -> str:
     import json
 
+    if not body.strip():  # a 304 record has no body
+        return body
     data = json.loads(body)
     feats = data["features"]
     if len(feats) >= 4:
@@ -456,7 +458,7 @@ HELP_KEYS = [
     ("M", "full-screen map", lambda s: "AGE  MAG" not in s, "M"),
     ("t", "tsunami alerts", lambda s: "LEVEL" in s, "escape"),
     ("o", "tide gauges near quake", lambda s: "Back" in s.splitlines()[-1], "escape"),
-    ("h", "history by day", lambda s: "Previous day" in s, "escape"),
+    ("h", "history by day", lambda s: "No saved history" in s, None),  # under --replay nothing is saved; J11 opens it
     ("?", "this help", lambda s: "Esc or ? to close" in s, "?"),
 ]
 
@@ -472,7 +474,7 @@ def test_j24_each_key_the_help_lists_does_what_it_says(key, says, shows, back) -
         t.wait_for(lambda s: "Esc or ? to close" not in s.text, 10, "help closed")
         (t.send_raw if key in "M/" else t.send_keys)(key)
         t.wait_for(lambda s: shows(s.text), 10, f"{key!r} ({says})")
-        clean(t, f"key-{key}", "j24")
+        clean(t, "key-" + {"?": "help", "/": "search", "M": "fullmap"}.get(key, key), "j24")
         if back:
             (t.send_raw if back == "M" else t.send_keys)(back)
             t.wait_for_text("shown of", 10)

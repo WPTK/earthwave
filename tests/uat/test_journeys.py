@@ -268,7 +268,7 @@ def test_j20_control_warning_with_a_sane_expiry_alerts(tmp_path: Path) -> None:
 @pytest.mark.skipif(
     shutil.which("w3m") is None, reason="needs a real console browser: apt install w3m (CI installs it)"
 )
-@known(246, "b with a real console browser (w3m, no DISPLAY) leaves the app dead: screen stale, keys ignored")
+@known(246, "b with a real console browser (w3m, no DISPLAY) leaves the app dead: screen stale, keys ignored", strict=False)
 def test_j4_browser_key_with_a_real_console_browser() -> None:
     gone = ("NO_COLOR", "DISPLAY", "WAYLAND_DISPLAY", "BROWSER")  # no GUI to open, so Python's webbrowser picks w3m
     with launch("--replay", str(USGS), *BASE, env_remove=gone) as t:

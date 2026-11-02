@@ -45,6 +45,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y w3m
       - name: Journeys and gesture self-tests
         run: python -m pytest tests/uat/test_journeys.py tests/uat/test_journeys_more.py tests/uat_kit -p no:xdist -q --tb=short -rxX
+      - name: J4 (#246) against the published v0.2.0 Linux binary, w3m, DISPLAY unset
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.2.0 -R WPTK/earthwave -p '*linux-x86_64.tar.gz' -D rel
+          mkdir rel/x && tar -xzf rel/*.tar.gz -C rel/x
+          EXE=$(find "$PWD/rel/x" -type f -perm -u+x -name earthwave | head -1)
+          echo "binary: $EXE"
+          EARTHWAVE_EXE="$EXE" python -m pytest tests/uat/test_journeys.py -k j4 -p no:xdist -q --tb=short -rxX
       - name: Gestures on the dashboard and detail screens
         run: python -m pytest tests/uat/test_gestures.py -k "dashboard or detail or legacy or application or unbound" -p no:xdist -q --tb=short
       - name: Seeded walk, 5 minutes
