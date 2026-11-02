@@ -126,10 +126,8 @@ def test_l1_every_source_failing_reaches_an_error_or_empty_state_with_retry(mode
         while time.monotonic() < deadline:
             time.sleep(5)
             text = t.screen_text()
-            if mode == "empty":  # on Windows the history of earlier runs may fill the list: judge the status bar
-                done = "feeds ok" in status_line(text)
-            else:
-                done = "failed" in status_line(text).lower()
+            # empty: on Windows the history of earlier runs may fill the list, so judge the status bar
+            done = "feeds ok" in status_line(text) if mode == "empty" else "failed" in status_line(text).lower()
             if done and not stuck_lines(status_line(text)) and "Waiting for" not in text:
                 break
         dash = snap(t, name, "dashboard")
@@ -184,7 +182,7 @@ def test_l4_r_repolls_usgs_measured_at_the_origin() -> None:
         )
         (Path(os.environ.get("UAT_OUT", ".")) / "l4-r.txt").parent.mkdir(parents=True, exist_ok=True)
         print(evidence_line)
-        report("r sends no USGS request within 13 s (toast shows: %s)" % shown, [] if added else [evidence_line])
+        report(f"r sends no USGS request within 13 s (toast shows: {shown})", [] if added else [evidence_line])
         quit_app(t)
 
 
