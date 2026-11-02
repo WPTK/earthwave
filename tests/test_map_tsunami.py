@@ -155,7 +155,7 @@ class TsunamiHarness(App):
 
     def __init__(self, ascii_mode):
         super().__init__()
-        # the app's clock, which MapPanel reads for the quake ages under the map; pinned so those never move with the date
+        # the app clock MapPanel reads for the quake ages under the map; pinned, so the ages do not move with the date
         self.clock = ReplayClock(SNAPSHOT_NOW, real=lambda: 0.0)
         self.tracker = AttentionTracker(self.clock)
         self.tracker.observe([TsunamiIssued(KAM_WARNING)])
