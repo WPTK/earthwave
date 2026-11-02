@@ -1,0 +1,42 @@
+name: UAT cold start
+
+# A new user on a fresh runner following only the README, through the 20 cold-start tasks, saving command, stdout and
+# screen text after every step. Capture only: nothing judges. Real network, the runner's own (throw-away) profile.
+# Windows (windows-2025) and macOS (macos-26, arm64). Manual, or on a push that changes this file or the script.
+on:
+  workflow_dispatch:
+  push:
+    branches: [uat/phase3]
+    paths:
+      - ".github/workflows/uat-cold-start.yml"
+      - "scripts/uat/cold_start.py"
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-26]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]"
+      - name: Capture
+        shell: bash
+        run: python scripts/uat/cold_start.py --out cold-start-out --long-minutes 15
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cold-start-${{ matrix.os }}
+          path: cold-start-out
+          retention-days: 30

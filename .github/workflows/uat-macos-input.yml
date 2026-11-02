@@ -1,0 +1,93 @@
+name: UAT macOS input
+
+# One pass of the input journeys (real keys, real mouse click) on Terminal.app and iTerm2 of a GitHub macOS runner, with
+# the v0.2.0 arm64 binary replaying the shipped recording. Method from eyewall spike S4 (TCC grant through sudo sqlite3,
+# which needs SIP off and passwordless sudo on the hosted image): CI runner only. Report-only, one run per cell.
+on:
+  workflow_dispatch:
+  push:
+    branches: [uat/phase3]
+    paths:
+      - ".github/workflows/uat-macos-input.yml"
+      - "scripts/uat/macos/**"
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: ${{ matrix.os }} / ${{ matrix.term }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
+        term: [Terminal, iTerm2]
+    env:
+      S4: ${{ github.workspace }}/scripts/uat/macos
+      OUT: ${{ github.workspace }}/out
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tools
+        run: |
+          mkdir -p "$OUT"
+          python -m venv "$HOME/s4venv"
+          "$HOME/s4venv/bin/pip" -q install pyobjc-framework-Quartz pyobjc-framework-ApplicationServices
+          brew install cliclick 2>&1 | tail -2
+          if [ "${{ matrix.term }}" = iTerm2 ]; then
+            brew install --cask iterm2 2>&1 | tail -2
+            "$HOME/s4venv/bin/pip" -q install iterm2
+            sudo xattr -dr com.apple.quarantine /Applications/iTerm.app
+            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/iTerm.app
+          fi
+      - name: The release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          gh release download v0.2.0 -R WPTK/earthwave -p '*macos-arm64.tar.gz' -p SHA256SUMS
+          grep -i 'macos-arm64.tar.gz' SHA256SUMS | shasum -a 256 -c -
+          tar xzf earthwave-*.tar.gz && chmod +x earthwave
+          echo "EXE=$PWD/earthwave" >> "$GITHUB_ENV"
+          "$PWD/earthwave" --version
+      - name: Grant the runner's agent control of the terminals (TCC), preflight
+        run: |
+          for i in 1 2 3; do
+            bash "$S4/grant.sh" > "$OUT/grant$i.txt" 2>&1
+            sleep 3
+            if osascript -e 'tell application "System Events" to key code 0' >> "$OUT/ax_preflight.txt" 2>&1; then echo "AX preflight ok on try $i" >> "$OUT/ax_preflight.txt"; break; fi
+            echo "AX preflight FAILED on try $i" >> "$OUT/ax_preflight.txt"
+          done
+          cat "$OUT/ax_preflight.txt"
+      - name: iTerm2 defaults and first launch
+        if: matrix.term == 'iTerm2'
+        run: |
+          defaults write com.googlecode.iterm2 EnableAPIServer -bool true
+          defaults write com.googlecode.iterm2 SUEnableAutomaticChecks -bool false
+          defaults write com.googlecode.iterm2 SUHasLaunchedBefore -bool true
+          defaults write com.googlecode.iterm2 SUSendProfileInfo -bool false
+          defaults write com.googlecode.iterm2 NoSyncTipsDisabled -bool true
+          defaults write com.googlecode.iterm2 NoSyncNeverRemindPrefsChangesLostForFile -bool true
+          defaults write com.googlecode.iterm2 NoSyncDoNotWarnBeforeMultilinePaste -bool true
+          open -a iTerm; sleep 8
+          "$HOME/s4venv/bin/python" "$S4/dismiss.py" 2 > "$OUT/dismiss1.txt" 2>&1 || true
+      - name: Input journeys
+        env:
+          REPLAY: ${{ github.workspace }}/tests/fixtures/replay/usgs_short.jsonl
+        run: |
+          export S4PY="$HOME/s4venv/bin/python"
+          "$S4PY" "$S4/journeys.py" ${{ matrix.term }} 2>&1 | tee "$OUT/drive.log"
+      - name: Final screen
+        if: always()
+        run: screencapture -x "$OUT/final_screen.png" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-input-${{ matrix.os }}-${{ matrix.term }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14
