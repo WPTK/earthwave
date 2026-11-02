@@ -174,6 +174,7 @@ def layout_findings(text: str, cols: int, rows: int) -> list[str]:
     return out
 
 
+@pytest.mark.timeout(1500)
 def test_l6_size_sweep_on_every_screen(tmp_path: Path) -> None:
     report = []
     cells = 0
