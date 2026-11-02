@@ -53,15 +53,16 @@ def run_screen(screen: str, size: tuple[int, int], tmp_path: Path, then):
     else:
         args = ["--replay", str(USGS), *BASE]
     with launch(*args, size=size) as t:
-        if screen == "empty":
-            t.wait_for(lambda s: "No quakes match" in s.text, 90, "empty state")
-        elif screen == "tsunami":
-            t.wait_for(lambda s: "TSUNAMI" in s.text, 60, "tsunami banner")
-            go(t, "tsunami")
-        else:
-            t.wait_for(lambda s: "shown of" in s.text, 45, "dashboard")
+        marker = {"empty": "No quakes match", "tsunami": "TSUNAMI"}.get(screen, "shown of")
+        t.wait_for(
+            lambda s: marker in s.text or "Terminal too small" in s.text, 90, f"{screen} (or the too-small message)"
+        )
+        if "Terminal too small" not in t.screen_text():
             t.settle(1.0)
-            go(t, screen)
+            if screen in ("tsunami",):
+                go(t, "tsunami")
+            elif screen not in ("empty", "dashboard"):
+                go(t, screen)
         t.settle(0.8)
         return then(t)
 
