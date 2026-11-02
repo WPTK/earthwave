@@ -28,6 +28,7 @@ jobs:
     env:
       UAT_REAL: "1"
       UAT_NETWORK: "1"
+      UAT_DISPOSABLE: "1"
       UAT_OUT: uat-out
       PYTHONUTF8: "1"
       # a scheduled run does only its own cell; a manual run does both
@@ -44,6 +45,16 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - if: env.RUN_ME == 'true'
         run: python -m pytest tests/uat/test_live.py -p no:xdist -q --tb=short
+      - name: One real capture, kept for the corpus (tests/uat/test_corpus.py replays every saved capture)
+        if: always() && env.RUN_ME == 'true'
+        run: python scripts/uat/capture.py capture/${{ matrix.os }}-capture.jsonl 60
+      - uses: actions/upload-artifact@v4
+        if: always() && env.RUN_ME == 'true'
+        with:
+          name: uat-capture-${{ matrix.os }}
+          path: capture
+          if-no-files-found: ignore
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         if: always() && env.RUN_ME == 'true'
         with:

@@ -13,10 +13,11 @@ from __future__ import annotations
 import pytest
 
 
-def unfiled(why: str):
+def unfiled(why: str, *, strict: bool = True):
     """A defect observed by this suite that has no issue yet (UAT is report-only; the report lists it with its repro).
-    ``check_xfails.py`` prints these so they are not forgotten; once an issue exists the marker becomes ``known``."""
-    return pytest.mark.xfail(strict=True, reason=f"UNFILED: {why}")
+    ``check_xfails.py`` prints these so they are not forgotten; once an issue exists the marker becomes ``known``.
+    ``strict=False`` for a check whose outcome has not been seen yet."""
+    return pytest.mark.xfail(strict=strict, reason=f"UNFILED: {why}")
 
 
 def known(issue: int, why: str, *, strict: bool = True):

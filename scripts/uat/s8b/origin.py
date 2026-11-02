@@ -7,8 +7,9 @@ earthwave's payloads are not AWC lists (USGS is a GeoJSON object) and its feeds 
 
     python origin.py --dir <work dir> [--port 443] [--control 9443]
 
-Control (plain HTTP on 127.0.0.1): POST /fault {"host": "earthquake.usgs.gov", "mode": "503" | "reset" | "ok"},
-GET /log. Writes <dir>/ca.pem and <dir>/listening.json once it is up.
+Control (plain HTTP on 127.0.0.1): POST /fault {"host": "earthquake.usgs.gov" | "*", "mode": M}, GET /log. M is "ok",
+"503", "500", "reset", "badjson" (200 with a body that is not JSON), "empty" (200, valid, nothing in it), "hang" (the
+request is read and never answered) or "delay:N" (answered normally after N seconds). Host "*" is every host. Writes <dir>/ca.pem and <dir>/listening.json once it is up.
 """
 
 from __future__ import annotations
@@ -47,7 +48,10 @@ def load_recordings() -> dict[str, dict]:
             if line.strip():
                 rec = json.loads(line)
                 if rec["status"] == 200:  # a recorded 304 or error is not a body to serve
-                    out.setdefault(rec["url"], rec)
+                    url = rec["url"]
+                    if "api.weather.gov/alerts/active" in url and "status=actual" not in url:
+                        url += "&status=actual"  # the shipped recordings predate the app asking NWS for status=actual
+                    out.setdefault(url, rec)
     return out
 
 
@@ -67,6 +71,17 @@ def freshen(body: bytes) -> bytes:
     return json.dumps(data, separators=(",", ":")).encode()
 
 
+EMPTY = {
+    "earthquake.usgs.gov": b'{"type":"FeatureCollection","metadata":{"generated":0,"status":200,"count":0},"features":[]}',
+    "www.tsunami.gov": b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><id>x</id><title>none</title>'
+    b"<updated>2025-01-01T00:00:00Z</updated></feed>",
+    "api.weather.gov": b'{"type":"FeatureCollection","features":[]}',
+    "www.jma.go.jp": b"[]",
+    "api.tidesandcurrents.noaa.gov": b'{"data":[]}',
+    "www.ndbc.noaa.gov": b"",
+}
+
+
 class Origin:
     def __init__(self) -> None:
         self.rec = load_recordings()
@@ -84,7 +99,7 @@ class Origin:
                 method, target = lines[0].split(" ")[:2]
                 headers = {k.strip().lower(): v.strip() for k, _, v in (ln.partition(":") for ln in lines[1:] if ":" in ln)}
                 host = headers.get("host", "").split(":")[0].lower()
-                mode = self.faults.get(host, "ok")
+                mode = self.faults.get(host) or self.faults.get("*", "ok")
                 entry = {"iso": datetime.now(UTC).isoformat(timespec="milliseconds"), "host": host, "target": target,
                          "mode": mode, "status": None, "ua": headers.get("user-agent", "")}
                 self.log.append(entry)
@@ -95,9 +110,19 @@ class Origin:
                         sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                     writer.transport.abort()
                     return
-                if mode == "503":
-                    status, body, ctype = 503, b'{"error":"injected"}', "application/json"
+                if mode in ("503", "500"):
+                    status, body, ctype = int(mode), b'{"error":"injected"}', "application/json"
+                elif mode == "badjson":
+                    status, body, ctype = 200, b"{not json <html>", "application/json"
+                elif mode == "empty":
+                    status, body, ctype = 200, EMPTY.get(host, b""), "application/json"
+                elif mode == "hang":
+                    entry["status"] = "hang"
+                    await asyncio.sleep(600)
+                    return
                 else:
+                    if mode.startswith("delay:"):
+                        await asyncio.sleep(float(mode.split(":")[1]))
                     rec = self.rec.get(f"https://{host}{target}")
                     if rec is None:
                         status, body, ctype = 404, b"no recording", "text/plain"

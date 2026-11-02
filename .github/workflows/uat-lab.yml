@@ -1,0 +1,94 @@
+name: UAT lab
+
+# The published v0.2.0 binary on Windows and Linux runners: feed faults through the S8b fake origin (L1, L2, L3, L4 `r`
+# measured at the origin) and the scripted look checks (L4 README, L5 contrast, L6 sizes, L7 first inputs, L8 corpus,
+# L10 gates). Edits the hosts file of the runner, which is thrown away after the job: never run this on a real machine.
+# Report-only: the lists are in the uat-lab-* artifacts and the step logs. Manual, or on a push to uat/phase3.
+on:
+  workflow_dispatch:
+  push:
+    branches: [uat/phase3]
+    paths:
+      - ".github/workflows/uat-lab.yml"
+      - "scripts/uat/**"
+      - "tests/uat/**"
+      - "tests/uat_kit/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    env:
+      S8B_DISPOSABLE: "1"
+      UAT_REAL: "1"
+      UAT_DISPOSABLE: "1"
+      UAT_OUT: uat-out
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Fetch the released exe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel" && cd "$RUNNER_TEMP/rel"
+          case "$RUNNER_OS" in
+            Windows) pat='*windows-x86_64.exe' ;;
+            Linux) pat='*linux-x86_64.tar.gz' ;;
+          esac
+          gh release download v0.2.0 -R WPTK/earthwave -p "$pat" -p SHA256SUMS
+          grep -i "${pat#\*}" SHA256SUMS | sha256sum -c -
+          if [ "$RUNNER_OS" != Windows ]; then tar xzf earthwave-*.tar.gz; chmod +x earthwave; echo "EARTHWAVE_EXE=$PWD/earthwave" >> "$GITHUB_ENV"; else echo "EARTHWAVE_EXE=$(cygpath -w "$PWD/$(ls earthwave-*.exe)")" >> "$GITHUB_ENV"; fi
+          echo "S8B_DIR=$RUNNER_TEMP/s8b-work" >> "$GITHUB_ENV"
+      - name: Start the local TLS origin on 443
+        shell: bash
+        run: |
+          mkdir -p "$S8B_DIR" uat-out
+          PY=$(python -c 'import sys;print(sys.executable)')
+          if [ "$RUNNER_OS" = Windows ]; then
+            nohup "$PY" scripts/uat/s8b/origin.py --dir "$S8B_DIR" > uat-out/origin.out 2>&1 &
+          else
+            sudo nohup "$PY" scripts/uat/s8b/origin.py --dir "$S8B_DIR" > uat-out/origin.out 2>&1 &
+          fi
+          for i in $(seq 40); do [ -f "$S8B_DIR/listening.json" ] && break; sleep 0.5; done
+          cat "$S8B_DIR/listening.json" || (cat uat-out/origin.out; exit 1)
+      - name: Point the feed names at it (hosts file of this runner)
+        shell: bash
+        run: |
+          PY=$(python -c 'import sys;print(sys.executable)')
+          if [ "$RUNNER_OS" = Windows ]; then "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; else sudo -E "$PY" scripts/uat/s8b/hosts.py add "$S8B_DIR/listening.json"; fi
+      - name: L1 L2 L3 L4(r) through the fake origin
+        shell: bash
+        run: python -m pytest tests/uat/test_lab.py -p no:xdist -p no:cacheprovider -q --tb=short -rxXs -s
+      - name: L4 README, L5 contrast, L6 sizes, L7 first inputs, L8 corpus, L10 gates
+        if: always()
+        shell: bash
+        run: python -m pytest tests/uat/test_readme_cmds.py tests/uat/test_look.py tests/uat/test_corpus.py tests/uat/test_gates.py -p no:xdist -p no:cacheprovider -q --tb=short -rxXs -s
+      - name: Origin log
+        if: always()
+        shell: bash
+        run: |
+          python - <<'EOF' > uat-out/origin-log.json || true
+          import json, os, urllib.request
+          info = json.load(open(os.environ["S8B_DIR"] + "/listening.json"))
+          print(urllib.request.urlopen(f"http://127.0.0.1:{info['control']}/log", timeout=10).read().decode())
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uat-lab-${{ matrix.os }}
+          path: uat-out
+          if-no-files-found: ignore
+          retention-days: 14
