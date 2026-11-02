@@ -18,6 +18,10 @@ FIXTURES = Path(__file__).parent / "fixtures"
 RSS_LIMIT_MB = int(os.environ.get("EARTHWAVE_TEST_RSS_MB", "2048"))
 RSS_EXIT_CODE = 70
 T0 = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+# "Now" for the map snapshots. The panel draws quake ages from it (Bonin 7d, Easter Island 3d, Kamchatka 459d) and the
+# stored SVGs hold those numbers, so moving it means regenerating them. It must fall after the 7d, 3d and 459d marks
+# and before the 8d and 460d ones.
+SNAPSHOT_NOW = datetime(2026, 11, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def load_json(rel: str) -> dict:

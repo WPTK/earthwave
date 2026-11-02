@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import load_json, make_quake
+from conftest import SNAPSHOT_NOW, load_json, make_quake
 from test_ui import week_app
 from textual.app import App
 
@@ -444,7 +444,9 @@ class Harness(App):
 
     def __init__(self, ascii_mode=False, home=NEW_YORK):
         super().__init__()
-        self.tracker = AttentionTracker(ReplayClock(datetime(2026, 10, 31, 12, tzinfo=UTC), real=lambda: 0.0))
+        # the app clock MapPanel reads for the quake ages under the map; pinned, so the ages do not move with the date
+        self.clock = ReplayClock(SNAPSHOT_NOW, real=lambda: 0.0)
+        self.tracker = AttentionTracker(self.clock)
         self.panel = MapPanel(self.tracker, ASCII if ascii_mode else UNICODE, home, ticks=False)
 
     def compose(self):
