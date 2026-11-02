@@ -41,7 +41,7 @@ async def test_map_matches_the_golden_render():
 async def test_one_wrong_pixel_row_fails_the_golden_compare(y):
     stream = await render_stream()
     want = read_ppm(GOLDEN)
-    _, width, height = decode(stream)
+    _, _, height = decode(stream)
     y = min(y, height - 1)
     rows, _, _ = decode(mutate_pixel_row(stream, y))
     diff = compare(rows, want)
