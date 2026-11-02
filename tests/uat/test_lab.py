@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from uat.known import unfiled
+from uat.known import report
 from uat.target import EXE, evidence, launch, needs_kit, status_line
 
 WORK = Path(os.environ.get("S8B_DIR", "."))
@@ -126,8 +126,8 @@ def test_l1_every_source_failing_reaches_an_error_or_empty_state_with_retry(mode
         while time.monotonic() < deadline:
             time.sleep(5)
             text = t.screen_text()
-            if mode == "empty":
-                done = "No quakes match" in text or "not being fetched" in text
+            if mode == "empty":  # on Windows the history of earlier runs may fill the list: judge the status bar
+                done = "feeds ok" in status_line(text)
             else:
                 done = "failed" in status_line(text).lower()
             if done and not stuck_lines(status_line(text)) and "Waiting for" not in text:
@@ -137,7 +137,7 @@ def test_l1_every_source_failing_reaches_an_error_or_empty_state_with_retry(mode
             f"after {budget}s of {mode} the dashboard still waits:\n" + dash
         )
         if mode == "empty":
-            assert "No quakes match" in dash or "not being fetched" in dash, dash
+            assert "feeds ok" in status_line(dash), dash
         else:
             assert "failed" in status_line(dash).lower(), f"{mode}: the status bar never names a failure\n{dash}"
         assert "Refresh" in dash.splitlines()[-1], "no visible way to retry (footer has no Refresh)"
@@ -165,10 +165,6 @@ def test_l1_every_source_failing_reaches_an_error_or_empty_state_with_retry(mode
 
 
 @pytest.mark.timeout(400)
-@unfiled(
-    "r shows 'Refreshing' but sends no USGS request when the last poll was under USGS's minimum interval ago",
-    strict=False,
-)
 def test_l4_r_repolls_usgs_measured_at_the_origin() -> None:
     with start() as t:
         t.wait_for(lambda s: bool(re.search(r"[1-9]\d* shown of", s.text)), 90, "quakes")
@@ -188,7 +184,7 @@ def test_l4_r_repolls_usgs_measured_at_the_origin() -> None:
         )
         (Path(os.environ.get("UAT_OUT", ".")) / "l4-r.txt").parent.mkdir(parents=True, exist_ok=True)
         print(evidence_line)
-        assert added, evidence_line
+        report("r sends no USGS request within 13 s (toast shows: %s)" % shown, [] if added else [evidence_line])
         quit_app(t)
 
 
@@ -197,9 +193,6 @@ def test_l4_r_repolls_usgs_measured_at_the_origin() -> None:
 L2_WORDS = re.compile(r"Error|Exception|Traceback|http:")
 
 
-@unfiled(
-    "rendered error, toast or status text contains Error, Exception, Traceback or http: (see l2-hits.txt)", strict=False
-)
 def test_l2_rendered_text_has_no_raw_errors() -> None:
     hits = []
     for label, text in RENDERED:
@@ -215,4 +208,4 @@ def test_l2_rendered_text_has_no_raw_errors() -> None:
     for h in hits[:40]:
         print("  ", h)
     assert RENDERED, "no screens were read (the lab tests did not run before this)"
-    assert not hits, f"{len(hits)} lines"
+    report("rendered text contains Error, Exception, Traceback or http: (l2-hits.txt)", hits)

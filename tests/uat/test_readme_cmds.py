@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "uat"))
 import readme_cmds as rc
 
-from uat.known import unfiled
+from uat.known import report
 from uat.target import BASE, REPO, USGS, evidence, launch, needs_kit, needs_state, program, ready
 
 TEXT = (REPO / "README.md").read_text(encoding="utf-8")
@@ -40,7 +40,6 @@ def test_l4_readme_flags_match_help() -> None:
 
 
 @needs_kit
-@unfiled("README, footer and help screen disagree about the keys (see l4-readme.txt)", strict=False)
 def test_l4_readme_keys_match_help_screen_and_footer() -> None:
     with launch("--replay", str(USGS), *BASE) as t:
         ready(t)
@@ -61,11 +60,10 @@ def test_l4_readme_keys_match_help_screen_and_footer() -> None:
     REPORT.extend(f"key mismatch: {p}" for p in problems)
     write_report()
     assert readme and helped and foot, "extraction found nothing: " + str((readme, helped, foot))
-    assert not problems, problems
+    report("README, footer and help screen disagree about keys (l4-readme.txt)", problems)
 
 
 @needs_kit
-@unfiled("a README key does nothing visible from the dashboard (see l4-readme.txt)", strict=False)
 def test_l4_each_readme_key_changes_the_screen() -> None:
     silent = []
     keys = ["j", "k", "down", "up", "enter", "f", "s", "slash", "m", "z", "t", "o", "h", "a", "r"]
@@ -82,12 +80,11 @@ def test_l4_each_readme_key_changes_the_screen() -> None:
                 silent.append(key)
     REPORT.append(f"keys with no visible change from a settled dashboard: {silent}")
     write_report()
-    assert not silent, silent
+    report("README keys with no visible effect (l4-readme.txt)", silent)
 
 
 @needs_kit
 @needs_state
-@unfiled("the README says the first run writes a config file to the user config directory; it does not", strict=False)
 def test_l4_first_run_writes_the_config_where_the_readme_says(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     from earthwave.config import default_config_path
@@ -101,5 +98,7 @@ def test_l4_first_run_writes_the_config_where_the_readme_says(tmp_path: Path, mo
         t.wait_exit(10)
     REPORT.append(f"config path {path}: exists={path.is_file()}")
     write_report()
-    assert path.is_file(), f"no config at {path}"
-    assert path.read_text(encoding="utf-8").lstrip().startswith("#"), "the file is not commented"
+    report(
+        "first run writes no commented config where the README says",
+        [] if path.is_file() and path.read_text(encoding="utf-8").lstrip().startswith("#") else [str(path)],
+    )

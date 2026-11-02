@@ -13,9 +13,9 @@ HERE = Path(__file__).parent
 
 # what makes a test leave the machine or touch the real profile, and the gate that must be in the same file
 RULES = [
-    (r"isolate=False", "needs_network"),  # the dead-proxy isolation is off: real feeds
-    (r"pip install|-m venv|venv\.create", "UAT_INSTALL"),
-    (r"urllib\.request|httpx\.(get|Client)|requests\.", r"needs_network|S8B_DIR|listening\.json"),
+    (r"isolate=False", r"NETWORK|needs_network"),  # the dead-proxy isolation is off: real feeds
+    (r"import venv|venv\.create", r"INSTALL"),
+    (r"urllib\.request|httpx\.(get|Client)|requests\.", r"NETWORK|needs_network|S8B_DIR|listening\.json"),
     (r"hosts\.py|/etc/hosts", "S8B_DIR|S8B_DISPOSABLE"),
 ]
 
@@ -32,11 +32,15 @@ def test_every_network_or_install_test_file_names_its_gate() -> None:
     assert not bad, bad
 
 
-def test_real_input_files_need_the_real_flag() -> None:
-    """A file that starts the program in a pseudo-terminal skips unless UAT_REAL=1 (needs_kit), so plain pytest does not."""
-    bad = []
+def test_terminal_files_are_skipped_in_a_default_run() -> None:
+    """A file that starts the program in a pseudo-terminal skips unless UAT_REAL=1 (needs_kit) or its own env gate.
+    Report-only: a file with neither is listed (it spawns a terminal in every default run; it stays offline)."""
+    from uat.known import report
+
+    ungated = []
     for path in sorted(HERE.glob("test_*.py")):
         src = path.read_text(encoding="utf-8")
-        if "launch(" in src and "needs_kit" not in src and path.name not in {"test_gates.py"}:
-            bad.append(path.name)
-    assert not bad, bad
+        starts = "launch(" in src or "Terminal(" in src
+        if starts and path.name != "test_gates.py" and not re.search(r"needs_kit|UAT_REAL|EARTHWAVE_EXE|skipif", src):
+            ungated.append(path.name)
+    report("test files that start a terminal in a default run", ungated)

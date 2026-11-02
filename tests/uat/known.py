@@ -20,5 +20,12 @@ def unfiled(why: str, *, strict: bool = True):
     return pytest.mark.xfail(strict=strict, reason=f"UNFILED: {why}")
 
 
+def report(why: str, findings) -> None:
+    """Report-only check: any finding ends the test as an xfail whose reason carries the count, so the run stays green and
+    the summary lists it; an exception before this line is a real failure (a marker would hide it)."""
+    if findings:
+        pytest.xfail(f"UNFILED: {why}: {len(findings)}")
+
+
 def known(issue: int, why: str, *, strict: bool = True):
     return pytest.mark.xfail(strict=strict, reason=f"#{issue}: {why}")

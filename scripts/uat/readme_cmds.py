@@ -60,9 +60,17 @@ def readme_keys(text: str) -> set[str]:
 def help_screen_keys(screen: str) -> set[str]:
     """Keys on the help screen's Keys block: the token (or tokens joined by '/') before two or more spaces."""
     keys: set[str] = set()
-    block = screen.split("Keys", 1)[-1].split("Colors", 1)[0]
-    for line in block.splitlines():
-        line = line.split("│")[0] if line.count("│") > 1 else line  # the map panel may sit to the right
+    lines = screen.splitlines()
+    start = next((i for i, ln in enumerate(lines) if "Keys" in ln), None)
+    if start is None:
+        return keys
+    x0 = max(lines[start].index("Keys") - 2, 0)  # the help box is drawn over the dashboard: cut at its left edge
+    block = []
+    for ln in lines[start + 1 :]:
+        if "Colors" in ln:
+            break
+        block.append(ln[x0 : x0 + 60].replace("│", " "))
+    for line in block:
         cells = [c for c in re.split(r"\s{2,}", line.strip()) if c]
         if len(cells) < 2 or line.startswith("Detail"):
             continue

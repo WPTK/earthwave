@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from uat.known import unfiled
+from uat.known import report as report_
 from uat.replays import all_quiet
 from uat.target import BASE, KAM, USGS, launch, needs_kit, ready
 
@@ -116,9 +116,6 @@ def decorative(chars: list[str]) -> bool:
     return all(not ch.isalnum() for ch in chars)
 
 
-@unfiled(
-    "text styles below 4.5:1 (3:1 for decorative marks) in a dark or light profile (see l5-contrast.txt)", strict=False
-)
 def test_l5_contrast_per_text_style(tmp_path: Path) -> None:
     low: dict[tuple, dict] = {}
     total = 0
@@ -143,7 +140,7 @@ def test_l5_contrast_per_text_style(tmp_path: Path) -> None:
             f"{prof}: fg {fg} on {bg} bold={bold} dim={dim} = {e['r']:.2f}:1 (need {need}) on {sorted(e['screens'])} e.g. {e['sample']!r}"
         )
     write("l5-contrast.txt", lines)
-    assert not low, f"{len(low)} styles"
+    report_("text styles below 4.5:1 (3:1 decorative) in the dark or light profile (l5-contrast.txt)", low)
 
 
 # -- L6: size sweep ------------------------------------------------------------------------------------------------
@@ -176,10 +173,6 @@ def layout_findings(text: str, cols: int, rows: int) -> list[str]:
     return out
 
 
-@unfiled(
-    "layout problems at some size on some screen: cut numbers, clipped titles, reserved empty space (see l6-sizes.txt)",
-    strict=False,
-)
 def test_l6_size_sweep_on_every_screen(tmp_path: Path) -> None:
     report = []
     cells = 0
@@ -197,7 +190,7 @@ def test_l6_size_sweep_on_every_screen(tmp_path: Path) -> None:
             for f in layout_findings(text, *size):
                 report.append(f"{screen} {size[0]}x{size[1]}: {f}")
     write("l6-sizes.txt", [f"{cells} screen/size cells, {len(report)} findings", *report])
-    assert not report, f"{len(report)} findings"
+    report_("layout findings across screens and sizes (l6-sizes.txt)", report)
 
 
 # -- L7: a fresh profile, first input -------------------------------------------------------------------------------
