@@ -19,19 +19,21 @@ class TestCA:
         self.dir.mkdir(parents=True, exist_ok=True)
         git_openssl = r"C:\Program Files\Git\usr\bin\openssl.exe"
         self.openssl = openssl or shutil.which("openssl") or (git_openssl if Path(git_openssl).is_file() else None)
-        if not self.openssl:
-            raise RuntimeError("openssl not found on PATH")
         self.hosts = list(hosts)
         self.ca_pem = self.dir / "ca.pem"
         self.ca_key = self.dir / "ca.key"
         self.leaf_pem = self.dir / "leaf.pem"  # leaf certificate followed by nothing else (the CA is the trust anchor)
         self.leaf_key = self.dir / "leaf.key"
+        if all(p.is_file() for p in (self.ca_pem, self.ca_key, self.leaf_pem, self.leaf_key)):
+            return  # made earlier (on the host, for Windows Sandbox, which has no openssl): reuse, do not regenerate
         self._make()
 
     def _run(self, *args: str) -> None:
         subprocess.run([str(self.openssl), *args], check=True, capture_output=True, text=True, cwd=self.dir)
 
     def _make(self) -> None:
+        if not self.openssl:
+            raise RuntimeError("openssl not found on PATH")
         ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"]
         self._run(
             "req",
