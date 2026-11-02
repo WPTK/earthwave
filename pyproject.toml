@@ -75,3 +75,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Long lines in tests are inline fixture payloads; wrapping them hurts readability.
 "tests/**" = ["E501"]
+# UAT tooling and spike scripts: long probe tables and one-off probes.
+"scripts/uat/**" = ["E501", "C408", "RUF059", "RUF100"]
+# Vendored unchanged from eyewall spike S4 (and the driver built on it): not reformatted.
+"scripts/uat/macos/**" = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
