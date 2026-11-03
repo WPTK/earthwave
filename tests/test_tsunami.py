@@ -1618,3 +1618,26 @@ def test_a_burst_of_quakes_names_the_largest():
     quakes = [make_quake(f"m{i}", 6.0 + i / 10, place=f"Place {i}") for i in range(3)]
     (note_,) = rules.evaluate([e for q in quakes for e in (QuakeNew(q), QuakeMajor(q))])
     assert "3 notable quakes" in note_.body and "M6.2 Place 2" in note_.body
+
+
+def test_replay_fixture_nws_polls_match_what_the_source_sends():
+    """The recording must hold the URL the source really requests, or NWS answers 404 under --replay (#223)."""
+    from earthwave.sources import nws
+
+    wanted = str(httpx.Request("GET", nws.URL, params={"event": nws.EVENTS, "status": "actual"}).url)
+    rows = [json.loads(line) for line in read(FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl").splitlines()]
+    urls = {r["url"] for r in rows if r["url"].startswith(nws.URL)}
+    assert urls == {wanted}
+
+
+@pytest.mark.parametrize("speed", [30.0, 120.0])
+async def test_replay_at_speed_shows_the_warning_and_the_quake(speed):
+    """`--replay --speed N` with the default filter: the warning is raised and the Kamchatka quake is in the store (#223)."""
+    path = FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl"
+    clock = ReplayClock(recording_start(path), speed)
+    app = EarthwaveApp(Config(), clock=clock, transport=ReplayTransport(path, clock), history=None)
+    async with app.run_test(size=(120, 40)):
+        await wait_for(
+            lambda: any(a.level == levels.WARNING for a in app.store.alerts()) and bool(app.store.all()), 30.0
+        )
+        assert max(q.mag for q in app.store.all()) >= 8.0  # the first report is M8.0, revised to 8.7 later

@@ -1,2 +1,2 @@
-flags: README ['--config', '--debug', '--glyphs', '--help', '--home', '--hours', '--log', '--min-mag', '--no-config', '--notify', '--offline', '--record', '--replay', '--selftest', '--speed', '--version']
-flags: --help ['--config', '--debug', '--glyphs', '--help', '--home', '--hours', '--log', '--min-mag', '--no-config', '--notify', '--offline', '--record', '--replay', '--selftest', '--speed', '--version']
+flags: README ['--config', '--debug', '--diagnose', '--glyphs', '--help', '--home', '--hours', '--log', '--min-mag', '--no-config', '--notify', '--offline', '--record', '--replay', '--selftest', '--speed', '--version']
+flags: --help ['--config', '--debug', '--diagnose', '--glyphs', '--help', '--home', '--hours', '--log', '--min-mag', '--no-config', '--notify', '--offline', '--record', '--replay', '--selftest', '--speed', '--version']

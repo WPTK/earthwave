@@ -12,7 +12,7 @@ from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
 from earthwave.sources import levels
 from earthwave.sources.base import ENTRY_BUDGET, ENTRY_LIMIT, SourceHealth
-from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent
+from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent, stalled
 
 log = logging.getLogger(__name__)
 
@@ -151,14 +151,11 @@ class JmaSource:
                 listed = True
                 # Oldest first, so a later report supersedes or cancels the earlier ones of the same event.
                 for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("ctt", ""))):
-                    try:
-                        async with asyncio.timeout(ENTRY_LIMIT):  # one stalled report must not use the whole budget
-                            finished = await self._report(client, entry, now, events, alerts, done)
-                    except TimeoutError:
-                        log.warning("jma: %s timed out", entry.get("json"))
-                        finished = False
-                    if not finished:
+                    if not await self._report(client, entry, now, events, alerts, done):
                         skipped = True
+                # Every list entry read: a report that left the list needs no failure count.
+                names = {e["json"] for e in entries if isinstance(e, dict) and isinstance(e.get("json"), str)}
+                self._failures = {k: v for k, v in self._failures.items() if k in names}
         except TimeoutError:
             if not listed:
                 raise  # nothing was learned: an outage, not an empty list
@@ -178,17 +175,19 @@ class JmaSource:
         except (TypeError, AttributeError, ValueError, OverflowError):  # a malformed list entry: not this one
             return True
         try:
-            detail = await client.get(f"{BASE}{name}")
+            async with asyncio.timeout(ENTRY_LIMIT):  # one stalled report must not use the whole budget
+                detail = await client.get(f"{BASE}{name}")
             detail.raise_for_status()
             payload = detail.json()
             if not isinstance(payload, dict):
                 raise ValueError("detail is not an object")
             alert = parse_detail(payload, entry)
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
+        except (httpx.HTTPError, TimeoutError, KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
             count = self._failures.get(name, 0)
-            if permanent(exc):  # outages never count: a live report must not be dropped
+            counted = permanent(exc) or stalled(exc)  # an outage never counts: a live report must not be dropped
+            if counted:
                 count = self._failures[name] = count + 1
-            if not permanent(exc) or count < MAX_ENTRY_FAILURES:
+            if not counted or count < MAX_ENTRY_FAILURES:
                 log.debug("jma: skipping %s: %r", name, exc)
                 return False
             log.warning("jma: giving up on %s after %d attempts: %r", name, count, exc)

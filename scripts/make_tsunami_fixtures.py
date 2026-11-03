@@ -22,7 +22,7 @@ NWS_URL = str(
     httpx.Request(
         "GET",
         "https://api.weather.gov/alerts/active",
-        params={"event": "Tsunami Warning,Tsunami Advisory,Tsunami Watch"},
+        params={"event": "Tsunami Warning,Tsunami Advisory,Tsunami Watch", "status": "actual"},  # what nws.py sends
     ).url
 )
 QUAKE = {"id": "us6000qw60", "lat": 52.512, "lon": 160.324, "depth": 20.7, "time": "2025-07-29T23:24:52Z"}

@@ -1,5 +1,7 @@
 """Tsunami screen: alert table, the selected alert's text, and the gauge strip."""
 
+import logging
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -13,7 +15,7 @@ from textual.widgets import DataTable, Footer, Static
 
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
-from earthwave.state.store import IN_FORCE
+from earthwave.state.store import ALERT_RETAIN, IN_FORCE
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, YELLOW
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
@@ -21,9 +23,13 @@ from earthwave.ui.widgets.status_bar import down_feeds
 from earthwave.ui.widgets.too_small import TooSmall, refresh_too_small, sync_too_small
 from earthwave.ui.widgets.tsunami_panel import OFFLINE_LINE, feed_line, fmt_until
 
+log = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
 
+HEADLINE_MAG = re.compile(r"\bM(\d+(?:\.\d+)?)\b")
+MAX_SAVED = 5
 SOURCE_NAMES = {"tsunamigov": "tsunami.gov", "nws": "NWS", "jma": "JMA"}
 STATUS_STYLE = {
     "active": GREEN,
@@ -52,7 +58,12 @@ def table_rows(alerts: list[TsunamiAlert], statuses: dict[str, str]) -> list[Tsu
 
 
 def render_alert(
-    alert: TsunamiAlert, status: str, quake_line: str, time_zone: str, expires: datetime | None = None
+    alert: TsunamiAlert,
+    status: str,
+    quake_line: str,
+    time_zone: str,
+    expires: datetime | None = None,
+    quake_mag: float | None = None,
 ) -> Text:
     """`expires` is the store's believed expiry for a product that states one (the feed's own can be impossible)."""
     expires = expires or alert.expires
@@ -73,6 +84,12 @@ def render_alert(
         text.append(f"Areas    {'; '.join(alert.areas)}\n", "grey70")
     if quake_line:
         text.append(f"Quake    {quake_line}\n", "grey70")
+        said = HEADLINE_MAG.search(alert.headline)
+        if said and quake_mag is not None and abs(float(said.group(1)) - quake_mag) >= 0.05:
+            source = SOURCE_NAMES.get(alert.source, alert.source)  # both are right: each source's own estimate
+            text.append(
+                f"Note     {source} M{said.group(1)}, USGS M{quake_mag:.1f}: each is its own estimate\n", "grey70"
+            )
     text.append("\n")
     kept = [line for line in alert.text.splitlines() if line.strip() != "ZCZC"]  # the start-of-message marker
     text.append("\n".join(kept).lstrip("\n") or "(no bulletin text)")
@@ -95,6 +112,7 @@ class TsunamiScreen(Screen):
         super().__init__()
         self._rows: list[TsunamiAlert] = []
         self._ready = False  # the table and its columns exist only once the screen has composed and mounted
+        self._saved: list[TsunamiAlert] | None = None  # the last run's bulletins, read once, offline only
         self._shown_id: str | None = None  # the alert whose text is in the bulletin pane
 
     @property
@@ -204,6 +222,32 @@ class TsunamiScreen(Screen):
         down = down_feeds(feeds)
         return feed_line(down, none_fresh)
 
+    def _saved_text(self) -> Text:
+        """The last run's bulletins, newest first, for an offline run: past products, none of them in force."""
+        app = self.earthwave
+        if self._saved is None:
+            self._saved = []
+            if app.history is not None:
+                try:
+                    self._saved = app.history.bulletins_since(app.clock.now() - ALERT_RETAIN)
+                except Exception:  # an unreadable history shows nothing, as before
+                    log.exception("saved tsunami bulletins could not be read")
+        text = Text()
+        if not self._saved:
+            return text
+        tz = app.config.view.time_zone
+        text.append("From the last run (saved, not current: none of these is known to be in force)\n\n", "bold")
+        for saved in self._saved[:MAX_SAVED]:
+            when = f"issued {fmt_time(saved.issued, tz)}" if saved.issued else "issue time unknown"
+            text.append(f"{saved.level} ", LEVEL_COLORS.get(saved.level, "bold"))  # a level this version lacks
+            text.append(f"{saved.headline}\n", "bold")
+            text.append(f"  {when}, {SOURCE_NAMES.get(saved.source, saved.source)}\n", "grey70")
+        if len(self._saved) > MAX_SAVED:
+            text.append(f"+{len(self._saved) - MAX_SAVED} older\n", "grey70")
+        kept = [line for line in self._saved[0].text.splitlines() if line.strip() != "ZCZC"]
+        text.append("\nNewest, in full:\n" + "\n".join(kept).lstrip("\n") + "\n\n")
+        return text
+
     def _show_selected(self) -> None:
         app = self.earthwave
         alert = self.selected()
@@ -216,7 +260,8 @@ class TsunamiScreen(Screen):
         if alert is None:
             self._shown_id = None
             if app.offline:
-                empty = "Nothing was requested this run, so no tsunami products are known."
+                head.append_text(self._saved_text())
+                empty = "Nothing was requested this run, so nothing here says what is happening now."
             elif note is not None:
                 empty = "No tsunami products received."
             else:
@@ -236,6 +281,7 @@ class TsunamiScreen(Screen):
                 quake_line,
                 app.config.view.time_zone,
                 app.store.expiry(alert) if alert.expires else None,
+                quake.mag if quake else None,
             )
         )
         body.update(head)

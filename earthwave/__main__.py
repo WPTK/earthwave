@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 import sqlite3
 import sys
 import xml.etree.ElementTree as ET
@@ -16,11 +17,11 @@ import httpx
 from earthwave import __version__
 from earthwave.app import EarthwaveApp
 from earthwave.clock import Clock, ReplayClock, SystemClock
-from earthwave.config import Config, ConfigError, load_config, parse_home, with_overrides
+from earthwave.config import CHOICES, Config, ConfigError, load_config, parse_home, with_overrides
 from earthwave.diagnose import report as diagnose_report
 from earthwave.logging_setup import setup_logging
 from earthwave.models import Batch, Earthquake
-from earthwave.net import RecordingTransport, ReplayTransport, recording_start
+from earthwave.net import EnvProxyTransport, RecordingTransport, ReplayTransport, recording_start
 from earthwave.notify.desktop import default_notifier
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.history import History, default_path
@@ -129,6 +130,17 @@ def selftest(root: Path = FIXTURES) -> int:
     return 0
 
 
+def map_renderer_setting(configured: str) -> str:
+    """EARTHWAVE_MAP_RENDERER (auto, braille, sixel) beats [view] map_renderer for this run; raises ConfigError."""
+    value = os.environ.get("EARTHWAVE_MAP_RENDERER", "").strip().lower()
+    if not value:
+        return configured
+    choices = CHOICES[("view", "map_renderer")]
+    if value not in choices:
+        raise ConfigError(f"EARTHWAVE_MAP_RENDERER must be one of {', '.join(choices)}, got {value!r}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="earthwave",
@@ -160,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
 PARSER_EPILOG = r"""environment:
   EARTHWAVE_CONFIG_DIR  directory holding config.toml (default: the platform user config dir)
   EARTHWAVE_DATA_DIR    directory holding history.sqlite, and logs/ for --debug (default: the platform user data dir)
+  EARTHWAVE_MAP_RENDERER  auto, braille or sixel for this run; beats [view] map_renderer in the config
+  HTTPS_PROXY, HTTP_PROXY, NO_PROXY  honoured for every feed request
 On Windows the defaults sit under %LOCALAPPDATA%\earthwave. Uninstalling earthwave never removes these directories."""
 
 
@@ -185,6 +199,7 @@ def run(args: argparse.Namespace) -> int:
         config = Config() if args.no_config else load_config(Path(args.config) if args.config else None)
         home = parse_home(args.home) if args.home else None
         config = with_overrides(config, args.min_mag, args.hours, home, args.glyphs)
+        renderer = map_renderer_setting(config.view.map_renderer)
     except ConfigError as exc:
         print(f"earthwave: {exc}", file=sys.stderr)
         return 2
@@ -201,7 +216,7 @@ def run(args: argparse.Namespace) -> int:
             clock = ReplayClock(recording_start(replay_path), args.speed)
             transport = ReplayTransport(replay_path, clock)
         elif args.record:
-            transport = RecordingTransport(httpx.AsyncHTTPTransport(), Path(args.record), clock)
+            transport = RecordingTransport(EnvProxyTransport(), Path(args.record), clock)
     except (OSError, ValueError, KeyError) as exc:
         print(f"earthwave: {exc}", file=sys.stderr)
         return 2
@@ -213,7 +228,7 @@ def run(args: argparse.Namespace) -> int:
     notifier = default_notifier() if notifying else None
     # a replayed past must not enter the real history
     history, history_error = (None, None) if args.replay else open_history(config, clock)
-    graphics = resolve_graphics(config.view.map_renderer) if config.view.map else BRAILLE  # before Textual owns stdin
+    graphics = resolve_graphics(renderer) if config.view.map else BRAILLE  # before Textual owns stdin
     app = EarthwaveApp(
         config,
         clock=clock,

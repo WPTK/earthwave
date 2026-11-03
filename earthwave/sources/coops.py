@@ -322,4 +322,6 @@ class CoopsSource:
         if failures and not ok:
             raise failures[-1]
         stations, self._unsent = self._unsent, ()  # a fetch that raised above keeps them for the next batch
-        return models.Batch(self.name, now, readings=tuple(readings), stations=stations)
+        return models.Batch(
+            self.name, now, readings=tuple(readings), stations=stations, meta={"incomplete": bool(failures)}
+        )

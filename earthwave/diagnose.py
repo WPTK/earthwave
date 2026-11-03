@@ -17,6 +17,7 @@ import httpx
 from earthwave import __version__
 from earthwave.config import default_config_path
 from earthwave.logging_setup import default_log_path
+from earthwave.net import proxy_for, redact_proxy
 from earthwave.paths import CONFIG_DIR_ENV, DATA_DIR_ENV
 from earthwave.state.history import default_path as default_history_path
 
@@ -74,7 +75,7 @@ def _path_line(label: str, path: Path, env: str | None = None) -> str:
     return f"{label:<10}{redact(str(path))}  [{state}]{note}"
 
 
-def report(offline: bool = False, client_factory: Callable[[], httpx.Client] | None = None) -> str:
+def report(offline: bool = False, client_factory: Callable[[str | None], httpx.Client] | None = None) -> str:
     lines = [
         f"earthwave  {__version__}",
         f"python    {platform.python_version()} ({'frozen binary' if getattr(sys, 'frozen', False) else 'pip/source'})",
@@ -87,10 +88,15 @@ def report(offline: bool = False, client_factory: Callable[[], httpx.Client] | N
     if offline:
         lines.append("feeds     not checked (--offline)")
     else:
-        make = client_factory or (lambda: httpx.Client(timeout=5.0, headers=HEADERS, follow_redirects=True))
-        try:
-            with make() as client:
-                lines.extend(f"feed      {name:<12}{check_feed(client, url)}" for name, url in FEEDS)
-        except (httpx.InvalidURL, httpx.HTTPError, ValueError, OSError) as exc:  # e.g. a malformed proxy variable
-            lines.append(f"feeds     not checked: {type(exc).__name__}")
+        make = client_factory or (
+            lambda proxy: httpx.Client(timeout=5.0, headers=HEADERS, follow_redirects=True, proxy=proxy)
+        )
+        for name, url in FEEDS:
+            proxy = proxy_for(httpx.URL(url))  # the same choice the app makes
+            via = f" via {redact_proxy(proxy)}" if proxy else ""
+            try:
+                with make(proxy) as client:
+                    lines.append(f"feed      {name:<12}{check_feed(client, url)}{via}")
+            except (httpx.InvalidURL, httpx.HTTPError, ValueError, OSError) as exc:
+                lines.append(f"feed      {name:<12}not checked: {type(exc).__name__}{via}")
     return "\n".join(lines)
