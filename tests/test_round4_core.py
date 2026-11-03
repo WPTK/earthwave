@@ -156,7 +156,8 @@ async def test_quake_feed_wait_says_not_answering_when_stale_or_failing_warm_or_
         health.failures = 0
         assert app.quake_feed_wait() == ""  # fresh and warm
         app.store.warm = False
-        assert app.quake_feed_wait() == "Waiting for USGS"
+        health.last_ok = None
+        assert app.quake_feed_wait() == "Waiting for USGS"  # nothing has answered yet
 
 
 async def test_an_empty_filtered_list_blames_a_stale_feed_not_the_filter():
@@ -316,3 +317,29 @@ async def test_close_observations_still_releases_the_pin(clock):
         assert app.gauge_selection.ids
         app.close_observations()
         assert app._gauge_quake is None and app.gauge_selection.ids == ()
+
+
+async def test_an_answered_startup_backfill_ends_the_wait_for_usgs():
+    """#273: the three startup backfills are answers; the screen must not say it is waiting until the steady feed."""
+    app = week_app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        health = app.scheduler.statuses["usgs"].health
+        health.last_ok, health.failures = app.clock.now(), 0
+        assert not app.store.warm  # only the steady feed warms the store
+        assert app.quake_feed_wait() == ""
+
+
+async def test_a_toast_stays_above_the_status_bar():
+    """#231: the offline toast was drawn over the status bar's words and the tsunami panel's lower border."""
+    from textual.widgets._toast import Toast
+
+    app = week_app()
+    async with app.run_test(size=(120, 30), notifications=True) as pilot:
+        await pilot.pause()
+        app.notify("Offline: showing saved history, no data is fetched", timeout=30)
+        await pilot.pause()
+        await pilot.pause(0.3)
+        toast = app.screen.query_one(Toast)
+        status = app.screen.query_one("#status")
+        assert toast.region.bottom <= status.region.y, (toast.region, status.region)
