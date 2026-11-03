@@ -93,6 +93,7 @@ Only on the maintainer's word.
 1. In a release PR, set `__version__` in `earthwave/__init__.py` (ZeroVer: `0.y.z`, minor for features, patch for
    fixes) and add a `## [0.y.z] - YYYY-MM-DD` section to `CHANGELOG.md` in
    [Common Changelog](https://common-changelog.org/) form, composed from `git log` and the merged pull requests since the last tag.
+   Update the `v0.y.z` tag in every README install command too; `tests/test_install_docs.py` fails until it matches `__version__`.
 2. Merge it, then tag the merge commit and push the tag:
 
    ```powershell

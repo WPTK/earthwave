@@ -15,19 +15,44 @@ still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
 
-Pick one.
+Pick one. The commands name release `v0.2.0`, the latest release; they do not build unreleased code.
 
-- **Release binary.** Download the file for your system from
-  [GitHub Releases](https://github.com/WPTK/earthwave/releases) (Windows `.exe`, Linux x86-64 and macOS arm64
-  `.tar.gz`). No Python needed. The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask
-  you to confirm; check the download against `SHA256SUMS` from the same release.
-- **From source**, with Python 3.13 or newer:
+**With uv** (any Python version; uv fetches Python 3.13 if you lack it):
 
-  ```
-  pipx install git+https://github.com/WPTK/earthwave.git
-  ```
+```
+uv tool install --python 3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
+```
 
-  or `pip install git+https://github.com/WPTK/earthwave.git` inside a virtual environment.
+**With pipx or pip**, which need Python 3.13 or newer. On Python 3.12 or older pip refuses with
+`requires a different Python`; use uv or the binary instead.
+
+```
+pipx install git+https://github.com/WPTK/earthwave.git@v0.2.0
+```
+
+or, inside a virtual environment, `python -m pip install git+https://github.com/WPTK/earthwave.git@v0.2.0`.
+
+**Release binary**, no Python needed. The files are named with the version, so the links below name `v0.2.0` too.
+Each release lists them under [Releases](https://github.com/WPTK/earthwave/releases).
+
+- Windows: [`earthwave-v0.2.0-windows-x86_64.exe`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-windows-x86_64.exe).
+  Save it anywhere, for example in a folder on your `PATH`, and run it.
+- Linux x86-64: [`earthwave-v0.2.0-linux-x86_64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-linux-x86_64.tar.gz).
+  Unpack it and put `earthwave` on your `PATH`:
+  `tar -xzf earthwave-v0.2.0-linux-x86_64.tar.gz && install -m 755 earthwave ~/.local/bin/`.
+  It is built for glibc 2.35 or newer (Ubuntu 22.04 and later). Alpine and other musl systems are not supported.
+- macOS arm64: [`earthwave-v0.2.0-macos-arm64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-macos-arm64.tar.gz),
+  unpacked and installed the same way.
+
+The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
+download against `SHA256SUMS` from the same release.
+
+Then check it works:
+
+```
+earthwave --version
+earthwave --selftest
+```
 
 ## Run
 
@@ -46,6 +71,30 @@ earthwave --record session.jsonl       # save every request ...
 earthwave --replay session.jsonl       # ... and play it back later
 earthwave --help                       # everything else
 ```
+
+The rest of the flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--config PATH` | read this config file instead of the default |
+| `--no-config` | ignore the config file and use defaults |
+| `--notify` | force toasts and the bell on (they are off under `--replay`) |
+| `--speed N` | replay speed multiplier, default 1 (with `--replay`) |
+| `--log PATH` | write a rotating log file to PATH (WARNING and above) |
+| `--debug` | DEBUG logging to the default log file |
+
+### Where files live
+
+| | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| Config | `%LOCALAPPDATA%\earthwave\config.toml` | `~/.config/earthwave/config.toml` | `~/Library/Application Support/earthwave/config.toml` |
+| Log (only with `--log` or `--debug`) | `%LOCALAPPDATA%\earthwave\Logs\earthwave.log` | `~/.local/state/earthwave/log/earthwave.log` | `~/Library/Logs/earthwave/earthwave.log` |
+| Saved history | `%LOCALAPPDATA%\earthwave\history.sqlite` | `~/.local/share/earthwave/history.sqlite` | `~/Library/Application Support/earthwave/history.sqlite` |
+
+These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones.
+
+To report a bug, run `earthwave --debug`, then open an issue at
+[github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues) with the version and the end of the log.
 
 Use a terminal at least 100 columns wide and 30 rows tall; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
 
