@@ -120,6 +120,7 @@ class Store:
         self._closed: dict[str, str] = {}  # alert id -> "cancelled" | "superseded" | "withdrawn"
         self._gauge_stations: dict[str, Station] = {}
         self._readings: dict[str, dict[datetime, GaugeReading]] = {}
+        self._future_warned: set[str] = set()  # stations already logged for readings stamped ahead of now
         self._residuals: dict[str, dict[datetime, ndbc.Residual | coops.Residual]] = {}
         self._predictions: dict[str, list[coops.Prediction]] = {}
         self._gauge_selected: set[str] | None = None  # None until the app first names the stations it polls
@@ -191,10 +192,12 @@ class Store:
             return []
         silent = batch.backfill or bool(batch.meta.get("silent")) or not self.warm
         events: list[Event] = []
-        ceiling = batch.generated or batch.fetched_at
+        ceiling = (batch.generated or batch.fetched_at) + CLOCK_SKEW
         for quake in batch.quakes:
-            if quake.updated and ceiling and quake.updated > ceiling:
-                quake = replace(quake, updated=ceiling)  # a revision stamp from the future would freeze the quake
+            if quake.updated and quake.updated > ceiling:
+                # A stamp from the future would freeze the quake against later revisions. Pin it to the origin time:
+                # a fixed value, so it neither creeps forward with each batch nor re-announces through `_news_since`.
+                quake = replace(quake, updated=quake.time)
             known = self._known(quake)
             if not known and (kept := self._by_alias.get(quake.id)):  # a stale copy under an id USGS has replaced
                 events.append(QuakeRenamed(quake.id, self._quakes[kept]))
@@ -334,6 +337,9 @@ class Store:
         latest = clock.now() + CLOCK_SKEW
         for reading in batch.readings:
             if reading.ts > latest:
+                if reading.station_id not in self._future_warned:
+                    self._future_warned.add(reading.station_id)
+                    log.warning("gauge %s: ignoring readings stamped after %s (bad sensor clock?)", reading.station_id, latest)
                 continue  # a bad sensor clock: it must not move the 24 h window and prune real history
             if self._gauge_selected is not None and reading.station_id not in self._gauge_selected:
                 continue  # a fetch that was in flight when the station left the selection
@@ -370,6 +376,7 @@ class Store:
         for station_id in station_ids:
             for table in (self._evaluated, self._readings, self._residuals, self._predictions):
                 table.pop(station_id, None)
+            self._future_warned.discard(station_id)
 
     def _refresh_residuals(self, station_id: str, kind: str, since: datetime) -> None:
         """Recompute residuals from `since` on; earlier ones cannot change (the fit looks backwards only)."""

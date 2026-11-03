@@ -86,3 +86,37 @@ def test_equal_key_order_does_not_depend_on_arrival_order(sort):
     a = tie_store([0, 1, 2, 3, 4, 5])
     b = tie_store([5, 3, 1, 0, 4, 2])
     assert [q.id for q in a.visible(view, clock, sort)] == [q.id for q in b.visible(view, clock, sort)]
+
+
+def test_a_genuine_revision_a_little_ahead_of_the_batch_clock_still_wins(clock):
+    store = Store()
+    q = make_quake("a", 4.0)
+    ahead = T0 + timedelta(seconds=30)  # local clock behind the server: fdsnws batches carry no `generated`
+    store.merge(Batch("usgs", T0, quakes=(replace(q, updated=ahead),), backfill=True), clock)
+    newer = ahead + timedelta(seconds=20)
+    store.merge(Batch("usgs", T0, quakes=(replace(q, mag=5.0, updated=newer),), backfill=True), clock)
+    assert store.get("a").mag == 5.0
+    store.merge(Batch("usgs", T0, quakes=(replace(q, mag=3.0, updated=ahead),), backfill=True), clock)
+    assert store.get("a").mag == 5.0  # the older revision still loses
+
+
+def test_a_bogus_future_stamp_stays_fixed_and_does_not_re_announce(clock):
+    store = Store()
+    q = make_quake("a", 4.0)
+    bogus = replace(q, updated=T0 + timedelta(days=36500))
+    store.merge(Batch("usgs", T0, quakes=(bogus,), backfill=True), clock)
+    stamp = store.get("a").updated
+    assert stamp == q.time
+    for minutes in (1, 2, 3):
+        events = store.merge(Batch("usgs", T0 + timedelta(minutes=minutes), quakes=(bogus,)), clock)
+        assert events == []
+        assert store.get("a").updated == stamp
+
+
+def test_future_gauge_readings_are_logged_once_per_station(clock, caplog):
+    store = Store()
+    far = [reading(T0 + timedelta(days=3650, minutes=i)) for i in range(5)]
+    with caplog.at_level("WARNING", logger="earthwave.state.store"):
+        store.merge(gauge_batch(far, clock), clock)
+        store.merge(gauge_batch(far, clock), clock)
+    assert len([r for r in caplog.records if "D1" in r.getMessage()]) == 1
