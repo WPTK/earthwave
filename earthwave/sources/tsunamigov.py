@@ -240,9 +240,9 @@ def permanent(exc: Exception) -> bool:
 
 
 def stalled(exc: Exception) -> bool:
-    """A request or entry that ran out of time. Unlike an error answer it says nothing about the feed being down, and
-    a product that always stalls would otherwise hold the source incomplete, and use the budget, for ever."""
-    return isinstance(exc, TimeoutError | httpx.TimeoutException)
+    """Our own ENTRY_LIMIT ran out on an entry (the builtin TimeoutError that `asyncio.timeout` raises). Not an httpx
+    timeout (connect, read, pool): that is the network failing, which is an outage and never counts."""
+    return isinstance(exc, TimeoutError)
 
 
 class TsunamiGovSource:
@@ -326,10 +326,11 @@ class TsunamiGovSource:
 
         An alert in hand is always appended: a bulletin outage shows the CAP text now and leaves the entry open, so
         a later poll adds the bulletin to the same alert (the CAP identifier is the store's first dedupe key).
-        What fails for good (4xx, unparseable), stalls past ENTRY_LIMIT, or leaves the bulletin unread is counted per
-        entry, and after MAX_ENTRY_FAILURES polls in a row the entry is finished with what is in hand: the CAP's
-        alert, else a headline built from the Atom entry. Errors that say the feed is down (connect, 5xx, rate
-        limit) never count: a live product must not be dropped for an outage.
+        Only what retrying cannot fix is counted per entry: a 4xx other than 429, an unparseable
+        answer, and our own ENTRY_LIMIT stall. After MAX_ENTRY_FAILURES polls in a row the entry is finished with what
+        is in hand: the CAP's alert, else a headline built from the Atom entry. An outage (connect error, 5xx, 429,
+        an httpx timeout) never counts, for the CAP or the bulletin: a live product must not be dropped, and a
+        bulletin that is down is retried until it answers.
         """
         mark = len(alerts)
         failure: Exception | None = None
@@ -340,10 +341,7 @@ class TsunamiGovSource:
         except Exception as exc:
             failure = exc
         held = len(alerts) > mark  # the CAP's alert is in hand and only the bulletin is missing
-        if failure is None:
-            if not held:
-                return False
-        elif not (permanent(failure) or stalled(failure)):
+        if failure is None or not (permanent(failure) or stalled(failure)):
             log.debug("tsunamigov: %s unavailable: %r", entry["cap_url"], failure)
             return False
         count = self._failures.get(entry["id"], 0) + 1

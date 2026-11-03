@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from conftest import FIXTURES, make_quake
 from test_gauge_sources import STATIONS_XML, coops_server
 from test_gauge_sources import Server as GaugeServer
@@ -54,14 +55,46 @@ async def test_a_stalled_product_does_not_starve_older_ones_for_ever(now_clock, 
     assert [a.id for a in second.alerts] == ["PAAQ-1-good"]  # after failing, they go last
 
 
-async def test_a_bulletin_outage_that_never_ends_is_given_up_on_with_the_cap_alert_standing(now_clock):
+OUTAGES = {
+    "connect": lambda request: httpx.ConnectError("down", request=request),
+    "5xx": lambda request: httpx.Response(503),
+    "429": lambda request: httpx.Response(429, headers={"Retry-After": "30"}),
+    "read-timeout": lambda request: httpx.ReadTimeout("slow", request=request),
+    "pool-timeout": lambda request: httpx.PoolTimeout("busy", request=request),
+    "connect-timeout": lambda request: httpx.ConnectTimeout("slow", request=request),
+}
+
+
+def _outage_client(server: Server, hit: str, how) -> httpx.AsyncClient:
+    """tsunami.gov as `server`, except that requests ending in `hit` ("CAP.xml" or ".txt") fail as `how` says."""
+    state = {"down": True}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if state["down"] and str(request.url).endswith(hit):
+            result = how(request)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return await server(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client.recover = lambda: state.update(down=False)  # type: ignore[attr-defined]
+    return client
+
+
+@pytest.mark.parametrize("how", OUTAGES.values(), ids=OUTAGES.keys())
+@pytest.mark.parametrize("hit", ["PAAQCAP.xml", ".txt"], ids=["cap", "bulletin"])
+async def test_an_outage_never_counts_toward_giving_a_product_up(now_clock, hit, how):
     server = Server("tnfxzn")
-    server.bulletin["tnfxzn"] = 503
     source = tsunamigov.TsunamiGovSource(now_clock)
-    async with client_for(server) as client:
-        polls = [await source.fetch(client, None) for _ in range(tsunamigov.MAX_ENTRY_FAILURES)]
-    assert all(p.meta["incomplete"] for p in polls[:-1])
-    assert not polls[-1].meta["incomplete"] and len(polls[-1].alerts) == 1
+    async with _outage_client(server, hit, how) as client:
+        for _ in range(tsunamigov.MAX_ENTRY_FAILURES + 3):
+            batch = await source.fetch(client, None)
+            assert batch.meta["incomplete"] and source._failures == {}  # retried, never counted
+        client.recover()
+        final = await source.fetch(client, None)
+    assert not final.meta["incomplete"] and len(final.alerts) == 1
+    assert "TSUNAMI INFORMATION STATEMENT" in final.alerts[0].text  # the full product, not a headline
 
 
 async def test_failure_counts_for_products_that_left_the_feed_are_dropped(now_clock, monkeypatch):
@@ -99,6 +132,30 @@ async def test_a_jma_report_that_always_stalls_is_given_up_on(monkeypatch):
         polls = [await feed.source.fetch(client, None) for _ in range(jma.MAX_ENTRY_FAILURES)]
     assert all(p.meta["incomplete"] for p in polls[:-1])
     assert not polls[-1].meta["incomplete"] and len(polls[-1].alerts) == 1
+
+
+@pytest.mark.parametrize("how", OUTAGES.values(), ids=OUTAGES.keys())
+async def test_a_jma_outage_never_counts_toward_giving_a_report_up(how):
+    feed = JmaFeed({"a.json": ("51", "2026-10-10T03:30:00+09:00")})
+    down = {"on": True}
+
+    async def handler(request):
+        if request.url.path.endswith("list.json"):
+            return httpx.Response(200, json=feed.entries)
+        if down["on"]:
+            result = how(request)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return httpx.Response(200, json=feed.details["a.json"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(jma.MAX_ENTRY_FAILURES + 3):
+            batch = await feed.source.fetch(client, None)
+            assert batch.meta["incomplete"] and feed.source._failures == {}
+        down["on"] = False
+        final = await feed.source.fetch(client, None)
+    assert not final.meta["incomplete"] and len(final.alerts) == 1
 
 
 async def test_jma_failure_counts_for_reports_that_left_the_list_are_dropped(monkeypatch):
@@ -235,3 +292,24 @@ async def test_offline_the_tsunami_screen_shows_the_last_runs_bulletin_as_histor
         assert "Tsunami Warning: Alaska" in text and "THE FULL BULLETIN TEXT" in text
         assert "last run" in text and "not current" in text
         assert app2.tracker.tsunami_unacked() == 0
+
+
+async def test_an_unknown_level_in_the_saved_history_does_not_break_the_offline_screen(tmp_path):
+    path = tmp_path / "h.sqlite"
+    clock = ReplayClock(datetime(2026, 11, 1, 12, 0, tzinfo=UTC), real=lambda: 0.0)
+    odd = replace(
+        warn_alert("w1", clock.now() - timedelta(minutes=30), clock.now() + timedelta(hours=1)),
+        level="FUTURE-LEVEL",
+        headline="A product from a newer version",
+    )
+    history = History(path, 90, clock)
+    history.open()
+    history.start()
+    history.record((), set(), (odd,), clock.now())
+    await history.close()
+    app = _app(path, ReplayClock(clock.now() + timedelta(hours=1), real=lambda: 0.0), offline=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        assert "A product from a newer version" in screen_text(app)

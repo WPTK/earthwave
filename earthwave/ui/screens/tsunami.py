@@ -239,7 +239,7 @@ class TsunamiScreen(Screen):
         text.append("From the last run (saved, not current: none of these is known to be in force)\n\n", "bold")
         for saved in self._saved[:MAX_SAVED]:
             when = f"issued {fmt_time(saved.issued, tz)}" if saved.issued else "issue time unknown"
-            text.append(f"{saved.level} ", LEVEL_COLORS[saved.level])
+            text.append(f"{saved.level} ", LEVEL_COLORS.get(saved.level, "bold"))  # a level this version lacks
             text.append(f"{saved.headline}\n", "bold")
             text.append(f"  {when}, {SOURCE_NAMES.get(saved.source, saved.source)}\n", "grey70")
         if len(self._saved) > MAX_SAVED:
