@@ -10,6 +10,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
+from earthwave.net import entry_deadline
 from earthwave.sources import levels
 from earthwave.sources.base import ENTRY_BUDGET, ENTRY_LIMIT, SourceHealth
 from earthwave.sources.tsunamigov import MAX_ENTRY_FAILURES, parse_time, permanent, stalled
@@ -175,7 +176,7 @@ class JmaSource:
         except (TypeError, AttributeError, ValueError, OverflowError):  # a malformed list entry: not this one
             return True
         try:
-            async with asyncio.timeout(ENTRY_LIMIT):  # one stalled report must not use the whole budget
+            async with entry_deadline(self._clock, ENTRY_LIMIT), asyncio.timeout(ENTRY_LIMIT):  # a stalled report
                 detail = await client.get(f"{BASE}{name}")
             detail.raise_for_status()
             payload = detail.json()

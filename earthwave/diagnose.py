@@ -10,6 +10,7 @@ import platform
 import sys
 import time
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,7 @@ import httpx
 from earthwave import __version__
 from earthwave.config import default_config_path
 from earthwave.logging_setup import default_log_path
-from earthwave.net import proxy_for, redact_proxy
+from earthwave.net import cache_path, proxy_for, redact_proxy
 from earthwave.paths import CONFIG_DIR_ENV, DATA_DIR_ENV
 from earthwave.state.history import default_path as default_history_path
 
@@ -59,6 +60,16 @@ def redact(text: str) -> str:
     return text
 
 
+def _versions(*names: str) -> str:
+    found = []
+    for name in names:
+        try:
+            found.append(f"{name} {version(name)}")
+        except PackageNotFoundError:
+            found.append(f"{name} (not found)")
+    return ", ".join(found)
+
+
 def check_feed(client: httpx.Client, url: str) -> str:
     start = time.monotonic()
     try:
@@ -84,6 +95,8 @@ def report(offline: bool = False, client_factory: Callable[[str | None], httpx.C
         _path_line("config", default_config_path(), CONFIG_DIR_ENV),
         _path_line("history", default_history_path(), DATA_DIR_ENV),
         _path_line("log", default_log_path(), DATA_DIR_ENV),
+        _path_line("cache", cache_path(), DATA_DIR_ENV),
+        "http      " + _versions("httpx", "hishel", "stamina"),
     ]
     if offline:
         lines.append("feeds     not checked (--offline)")

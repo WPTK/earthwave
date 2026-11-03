@@ -8,11 +8,13 @@ from pathlib import Path
 
 import psutil
 import pytest
+import stamina
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
 from earthwave.config import Config, with_overrides
 from earthwave.models import Batch, Earthquake
+from earthwave.net import RETRY_ATTEMPTS
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.store import Store
 from earthwave.ui.widgets.quake_list import QuakeList
@@ -87,6 +89,26 @@ def watch_rss(limit_bytes: int, interval: float = 0.25, die=os._exit) -> threadi
     thread = threading.Thread(target=loop, name="rss-watchdog", daemon=True)
     thread.start()
     return thread
+
+
+@pytest.fixture(autouse=True)
+def _private_data_dir(tmp_path_factory, monkeypatch):
+    """The HTTP cache is a file in the data dir: no test reads or writes the real one, or another test's."""
+    monkeypatch.setenv("EARTHWAVE_DATA_DIR", str(tmp_path_factory.mktemp("data")))
+
+
+@pytest.fixture
+def single_try():
+    """One try per request, for tests that count requests or script one answer per call."""
+    with stamina.set_testing(True, attempts=1):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff():
+    """stamina's pauses between tries are zero in tests; the tries themselves stay (RETRY_ATTEMPTS)."""
+    with stamina.set_testing(True, attempts=RETRY_ATTEMPTS):
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)

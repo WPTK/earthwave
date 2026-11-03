@@ -112,9 +112,10 @@ The rest of the flags:
 | --- | --- | --- | --- |
 | Config | `%LOCALAPPDATA%\earthwave\config.toml` | `~/.config/earthwave/config.toml` | `~/Library/Application Support/earthwave/config.toml` |
 | Log (only with `--log` or `--debug`) | `%LOCALAPPDATA%\earthwave\Logs\earthwave.log` | `~/.local/state/earthwave/log/earthwave.log` | `~/Library/Logs/earthwave/earthwave.log` |
+| HTTP cache | `%LOCALAPPDATA%\earthwave\cache\http.sqlite` | `~/.local/share/earthwave/cache/http.sqlite` | `~/Library/Application Support/earthwave/cache/http.sqlite` |
 | Saved history | `%LOCALAPPDATA%\earthwave\history.sqlite` | `~/.local/share/earthwave/history.sqlite` | `~/Library/Application Support/earthwave/history.sqlite` |
 
-These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
+These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, the HTTP cache under `cache/`, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
 
 To report a bug, paste the output of `earthwave --diagnose`, run `earthwave --debug`, then open an issue at
 [github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues) with the version and the end of the log.
@@ -194,3 +195,5 @@ See [`docs/development.md`](docs/development.md) for setup, checks, the release 
 ## Licence
 
 [MIT](LICENSE)
+
+The release binary bundles third-party libraries under their own licences: hishel and anysqlite (BSD-3-Clause), stamina (MIT), tenacity and msgpack (Apache-2.0), and httpx (BSD-3-Clause). The licence texts of these six libraries are kept in their `*.dist-info` directories inside the binary; the other dependencies (Textual, Rich and their requirements) are bundled as before and not covered by this note.

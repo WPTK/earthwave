@@ -7,7 +7,6 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
-from earthwave.net import retry_after
 from earthwave.sources import levels
 from earthwave.sources.base import SourceHealth
 from earthwave.sources.tsunamigov import dedupe_key, parse_time
@@ -16,7 +15,6 @@ log = logging.getLogger(__name__)
 
 URL = "https://api.weather.gov/alerts/active"
 EVENTS = "Tsunami Warning,Tsunami Advisory,Tsunami Watch"
-RETRY_ONCE_CAP = 10.0  # seconds; a 429 is retried once after the server's hint (about 5 s), capped here
 
 
 def parse_geometry(geometry: dict | None) -> tuple | None:
@@ -102,11 +100,6 @@ class NwsSource:
         params = {"event": EVENTS, "status": "actual"}
         headers = {"Accept": "application/geo+json"}
         response = await client.get(URL, params=params, headers=headers)
-        if response.status_code == 429:
-            wait = min(retry_after(response.headers.get("Retry-After"), self._clock.now()), RETRY_ONCE_CAP)
-            log.debug("nws: 429, retrying in %.0fs", wait)
-            await self._clock.sleep(wait)
-            response = await client.get(URL, params=params, headers=headers)
         response.raise_for_status()
         alerts, skipped = parse_features(response.json())
         log.debug("nws: %d alerts, %d unreadable", len(alerts), skipped)

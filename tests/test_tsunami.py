@@ -15,7 +15,7 @@ from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
 from earthwave.config import AlertsConfig, Config, with_overrides
 from earthwave.models import Batch, TsunamiAlert
-from earthwave.net import ReplayTransport, recording_start, retry_after, retry_after_of
+from earthwave.net import ReplayTransport, build_client, recording_start, retry_after, retry_after_of
 from earthwave.notify.desktop import NotifySend, Osascript, RecordingNotifier, WindowsToast, default_notifier
 from earthwave.notify.inapp import AttentionKind, AttentionTracker, PulseGate
 from earthwave.poll import Freshness, PollResult, Scheduler
@@ -279,13 +279,19 @@ async def test_nws_source_sends_event_filter_and_retries_a_429_once(clock):
             return httpx.Response(429, headers={"Retry-After": "5"})
         return httpx.Response(200, text=read(FIXTURES / "nws" / "tsunami_warning.geojson"))
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    clock.sleep = sleep
+    async with build_client(transport=httpx.MockTransport(handler), clock=clock) as client:
         batch = await nws.NwsSource(clock).fetch(client, None)
-    assert len(batch.alerts) == 1 and len(seen) == 2
+    assert len(batch.alerts) == 1 and len(seen) == 2 and sleeps == [5.0]
     assert "Tsunami+Warning" in str(seen[0].url) or "Tsunami%20Warning" in str(seen[0].url)
     assert seen[0].headers["accept"] == "application/geo+json"
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(429))) as client:
+    async with build_client(transport=httpx.MockTransport(lambda r: httpx.Response(429)), clock=clock) as client:
         with pytest.raises(httpx.HTTPStatusError):
             await nws.NwsSource(clock).fetch(client, None)
 
@@ -399,7 +405,7 @@ async def test_nws_source_waits_for_an_http_date_retry_after(clock):
             return httpx.Response(429, headers={"Retry-After": when})
         return httpx.Response(200, text=read(FIXTURES / "nws" / "tsunami_warning.geojson"))
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with build_client(transport=httpx.MockTransport(handler), clock=clock) as client:
         await nws.NwsSource(clock).fetch(client, None)
     assert sleeps == [3.0]
 

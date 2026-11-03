@@ -11,7 +11,7 @@ import httpx
 
 from earthwave.clock import Clock
 from earthwave.models import Batch, TsunamiAlert
-from earthwave.net import retry_after_of
+from earthwave.net import entry_deadline, retry_after_of
 from earthwave.sources import levels
 from earthwave.sources.base import ENTRY_BUDGET, ENTRY_LIMIT, SourceHealth
 
@@ -335,7 +335,8 @@ class TsunamiGovSource:
         mark = len(alerts)
         failure: Exception | None = None
         try:
-            async with asyncio.timeout(ENTRY_LIMIT):  # one product trickling: the next entries still get their turn
+            # one product trickling: the next entries still get their turn; both requests share the one deadline
+            async with entry_deadline(self._clock, ENTRY_LIMIT), asyncio.timeout(ENTRY_LIMIT):
                 if await self._read(client, entry, alerts):
                     return True
         except Exception as exc:

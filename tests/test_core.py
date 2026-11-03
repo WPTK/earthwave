@@ -22,8 +22,8 @@ from earthwave.config import (
 )
 from earthwave.logging_setup import setup_logging
 from earthwave.net import (
-    CACHE_ENTRIES,
     RETRY_AFTER_CAP,
+    RETRY_ATTEMPTS,
     RecordingTransport,
     ReplayTransport,
     build_client,
@@ -125,10 +125,10 @@ async def test_max_age_never_answers_from_cache_so_an_outage_is_a_failed_poll_ev
         for _ in range(30):
             with pytest.raises(httpx.ConnectError):
                 await client.get("https://example.test/a")
-    assert len(seen) == 31 and all(r.headers["if-none-match"] == '"v1"' for r in seen[1:])
+    assert len(seen) == 1 + 30 * RETRY_ATTEMPTS and all(r.headers["if-none-match"] == '"v1"' for r in seen[1:])
 
 
-async def test_urls_with_a_query_string_are_never_kept_and_the_cache_is_least_recently_used(clock):
+async def test_urls_with_a_query_string_are_never_kept(clock):
     def handler(request, n):
         return httpx.Response(200, text=f"v{n}", headers={"ETag": f'"{request.url.path}"'})
 
@@ -136,15 +136,7 @@ async def test_urls_with_a_query_string_are_never_kept_and_the_cache_is_least_re
     async with client:
         for _ in range(2):
             await client.get("https://example.test/data?begin=1")
-        assert all("if-none-match" not in r.headers for r in seen)
-        await client.get("https://example.test/keep")
-        for i in range(CACHE_ENTRIES):
-            await client.get(f"https://example.test/f{i}")
-            await client.get("https://example.test/keep")  # used each round, so never the oldest
-        seen.clear()
-        await client.get("https://example.test/keep")
-        await client.get("https://example.test/f0")
-    assert seen[0].headers["if-none-match"] == '"/keep"' and "if-none-match" not in seen[1].headers
+    assert all("if-none-match" not in r.headers for r in seen)
 
 
 async def test_no_store_and_unvalidated_responses_are_never_kept(clock):
@@ -205,7 +197,9 @@ async def test_a_429_without_a_wait_backs_off_a_minute_and_a_bare_503_does_not_b
         await client.get("https://b.test/")
         await client.get("https://b.test/")
         held = await client.get("https://a.test/")
-    assert held.headers["retry-after"] == "60" and len(seen) == 3
+    assert (
+        held.headers["retry-after"] == "60" and len(seen) == 2 + 3 + 3
+    )  # a: a bare 429 is retried once; b: both calls, 3 tries each
 
 
 def test_retry_after_of_reads_only_rate_limit_answers(clock):
@@ -248,10 +242,12 @@ async def test_record_then_replay_round_trip(tmp_path):
     async with build_client(transport=ReplayTransport(path, play_clock)) as client:
         a = await client.get("https://example.test/feed")
         assert play_clock.now() == T0 + timedelta(seconds=60)
-        b = await client.get("https://example.test/feed")
+        b = await client.get("https://example.test/feed", headers={"If-Modified-Since": "x"})
         assert play_clock.now() == T0 + timedelta(seconds=120)
         c = await client.get("https://example.test/bin")
-        d = await client.get("https://example.test/feed")  # exhausted: the last record repeats
+        d = await client.get(
+            "https://example.test/feed", headers={"If-Modified-Since": "x"}
+        )  # exhausted: the last record repeats
         missing = await client.get("https://example.test/nope")
     assert (a.text, b.status_code, c.content, d.status_code, missing.status_code) == (
         "one",

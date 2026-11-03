@@ -662,6 +662,7 @@ async def test_a_failed_backfill_is_tried_again_on_the_next_good_poll():
         app._coverage_checked = True
         app._backfill_if_needed(force=True)
         await asyncio.wait({app._backfill})
+        await pilot.pause()  # the failure reaches the app as a message; it is handled once the queue is drained
         assert app._coverage_checked is False
 
 
