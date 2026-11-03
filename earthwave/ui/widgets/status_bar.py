@@ -14,6 +14,13 @@ ALERT_STATES = ("info", "active", "alarm")
 FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
 
 
+def feed_word(freshness: Freshness, incomplete: bool = False) -> str:
+    """One word for a source's state, shared by the status bar and Help so they cannot disagree."""
+    if freshness is Freshness.FRESH and not incomplete:
+        return "ok"
+    return FRESHNESS_WORDS.get(freshness, "incomplete")
+
+
 def down_feeds(feeds: list[tuple[str, Freshness]]) -> tuple[str, ...]:
     """Feeds in trouble as "name word", the one wording of the dashboard panel and the tsunami screen."""
     return tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
@@ -54,7 +61,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     groups: dict[tuple[Freshness, str], list[SourceLine]] = {}  # one phrase per state: six loading feeds fit the bar
     for line in unhealthy:
-        groups.setdefault((line.freshness, FRESHNESS_WORDS.get(line.freshness, "incomplete")), []).append(line)
+        groups.setdefault((line.freshness, feed_word(line.freshness, line.incomplete)), []).append(line)
     for index, ((freshness, word), lines) in enumerate(groups.items()):
         text.append(f" {glyphs.bar} " if index == 0 else "  ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[freshness])
@@ -76,7 +83,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.sources and not unhealthy:
         text.append(f" {glyphs.bar} ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
-        text.append(" feeds ok", "grey70")
+        text.append(f" {len(info.sources)} feeds ok", "grey70")
     return on_warning_ground(text) if info.alert_level == "WARNING" else text
 
 

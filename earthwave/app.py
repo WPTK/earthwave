@@ -45,7 +45,7 @@ from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.graphics.probe import BRAILLE, GraphicsChoice, ReplyFilter
-from earthwave.ui.labels import fmt_age, fmt_time
+from earthwave.ui.labels import filter_summary, fmt_age, fmt_time
 from earthwave.ui.screens.dashboard import DashboardScreen
 from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen
@@ -606,8 +606,14 @@ class EarthwaveApp(App):
 
     def open_filters(self) -> None:
         def done(result: tuple[float, float] | None) -> None:
-            if result is not None:
-                self.apply_filters(*result)
+            if result is None:
+                self.notify("Filters unchanged", timeout=3)
+                return
+            if result == (self.view.min_magnitude, self.view.hours):
+                self.notify("Filters unchanged", timeout=3)
+                return
+            self.apply_filters(*result)
+            self.notify(f"Showing {filter_summary(self.view)}", timeout=3)
 
         self.push_screen(FiltersScreen(self.view), done)
 
