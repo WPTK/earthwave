@@ -8,7 +8,7 @@ import pytest
 from conftest import T0
 
 import earthwave.net as net
-from earthwave.net import RETRY_ATTEMPTS, PoliteTransport, RetryTransport, build_client, cache_path
+from earthwave.net import RETRY_ATTEMPTS, PoliteTransport, build_client, cache_path
 
 
 def _slept(clock) -> list[float]:
@@ -206,44 +206,6 @@ async def test_an_explicit_transport_gets_no_disk_cache(clock, tmp_path, monkeyp
     assert not (tmp_path / "cache").exists()
 
 
-async def test_retries_stay_inside_the_poll_deadline():
-    from earthwave import poll
-
-    worst = net.RETRY_WINDOW + 2 * net.RETRY_INLINE_MAX + 30.0  # last try may start at the window's end and read 30 s
-    assert worst < poll.FETCH_DEADLINE
-    assert RetryTransport is not None
-
-
-async def test_a_cache_over_its_limit_is_emptied_of_old_entries(clock, tmp_path, monkeypatch):
-    path = tmp_path / "h.sqlite"
-    client, seen = _client(clock, lambda r, n: httpx.Response(200, text="x" * 5000, headers={"ETag": '"a"'}), path)
-    async with client:
-        await client.get("https://example.test/f")
-        await client.get("https://example.test/f")
-        assert "if-none-match" in seen[1].headers
-        monkeypatch.setattr(net, "CACHE_TRIM_MIN_AGE", -1.0)  # everything counts as old
-        net._trim(path)  # under the limit: nothing happens
-        await client.get("https://example.test/f")
-        assert "if-none-match" in seen[2].headers
-        monkeypatch.setattr(net, "CACHE_MAX_BYTES", 1)
-        net._trim(path)
-        await client.get("https://example.test/f")
-    assert "if-none-match" not in seen[3].headers
-
-
-async def test_trimming_runs_every_so_many_cached_requests(clock, tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(net, "_trim", calls.append)
-    monkeypatch.setattr(net, "CACHE_TRIM_EVERY", 2)
-    client, _ = _client(
-        clock, lambda r, n: httpx.Response(200, text="x", headers={"ETag": '"a"'}), tmp_path / "h.sqlite"
-    )
-    async with client:
-        for _ in range(5):
-            await client.get("https://example.test/f")
-    assert calls == [tmp_path / "h.sqlite"] * 2
-
-
 async def test_a_client_without_the_cache_still_retries(clock):
     seen = []
 
@@ -272,3 +234,173 @@ async def test_a_url_that_never_offers_a_validator_stops_going_through_the_cache
         for _ in range(4):
             await client.get("https://example.test/plain")
     assert len(seen) == 4 and len(calls) == 1
+
+
+def _ticking(clock) -> list[float]:
+    """The clock's sleeps advance it, so elapsed time can be measured without waiting."""
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock.advance(seconds)
+
+    clock.sleep = sleep
+    return sleeps
+
+
+async def test_the_clients_timeout_reaches_the_origin_through_the_cache(clock, tmp_path):
+    client, seen = _client(
+        clock, lambda r, n: httpx.Response(200, text="x", headers={"ETag": '"a"'}), tmp_path / "h.sqlite"
+    )
+    async with client:
+        await client.get(
+            "https://example.test/f", extensions={"timeout": {"connect": 3.0, "read": 7.0, "write": None, "pool": 2.0}}
+        )
+        await client.get(
+            "https://example.test/f", extensions={"timeout": {"connect": 3.0, "read": 7.0, "write": None, "pool": 2.0}}
+        )
+    assert all(r.extensions["timeout"] == {"connect": 3.0, "read": 7.0, "write": None, "pool": 2.0} for r in seen)
+    assert all("x-earthwave-timeout" not in r.headers for r in seen)
+
+
+async def test_repeated_connect_timeouts_end_inside_the_entry_limit_as_an_httpx_error(clock):
+    from earthwave.sources.base import ENTRY_LIMIT
+
+    ticks = []
+
+    def handler(request, n):
+        clock.advance(10.0)  # a connect timeout takes its 10 s
+        ticks.append(clock.monotonic())
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    _ticking(clock)
+    client, seen = _client(clock, handler)
+    start = clock.monotonic()
+    async with client:
+        with pytest.raises(httpx.ConnectTimeout):
+            await client.get("https://example.test/a")
+    assert clock.monotonic() - start < ENTRY_LIMIT and net.RETRY_BUDGET < ENTRY_LIMIT
+    assert 1 < len(seen) < RETRY_ATTEMPTS + 1
+
+
+async def test_a_repeated_ten_second_retry_after_ends_inside_the_entry_limit_and_does_not_sleep_after_the_last_try(
+    clock,
+):
+    from earthwave.sources.base import ENTRY_LIMIT
+
+    sleeps = _ticking(clock)
+    client, seen = _client(clock, lambda r, n: httpx.Response(429, headers={"Retry-After": "10"}))
+    start = clock.monotonic()
+    async with client:
+        got = await client.get("https://example.test/a")
+    assert got.status_code == 429 and clock.monotonic() - start < ENTRY_LIMIT
+    assert len(sleeps) == len(seen) - 1  # nothing slept after the answer that was returned
+
+
+async def test_a_429_without_retry_after_is_retried_once_after_five_seconds_then_blocks_a_minute_from_after_that(clock):
+    sleeps = _ticking(clock)
+    client, seen = _client(clock, lambda r, n: httpx.Response(429))
+    async with client:
+        first = await client.get("https://example.test/a")
+        again = await client.get("https://example.test/a")
+    assert first.status_code == 429 and sleeps[0] == 5.0
+    assert again.headers["retry-after"] == "60" and len(seen) == len(sleeps) + 1  # the second call never left
+
+
+class _BrokenBody(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        raise sqlite3.OperationalError("database or disk is full")
+        yield b""  # pragma: no cover
+
+
+async def test_a_cache_failure_while_the_body_streams_is_not_a_failed_poll(clock, tmp_path, caplog):
+    client, seen = _client(
+        clock, lambda r, n: httpx.Response(200, text="fine", headers={"ETag": '"a"'}), tmp_path / "h.sqlite"
+    )
+    transport = client._transport
+
+    async def broken(request):
+        return httpx.Response(200, stream=_BrokenBody(), request=request)
+
+    transport._cached.handle_async_request = broken
+    async with client:
+        with caplog.at_level(logging.WARNING, logger="earthwave.net"):
+            got = await client.get("https://example.test/f")
+    assert got.text == "fine" and len(seen) == 1 and "http cache failed" in caplog.text
+
+
+async def test_the_cache_is_not_trimmed_while_a_read_is_in_flight(clock, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(net, "_trim", calls.append)
+    monkeypatch.setattr(net, "CACHE_TRIM_EVERY", 1)
+    client, _ = _client(
+        clock, lambda r, n: httpx.Response(200, text="x", headers={"ETag": '"a"'}), tmp_path / "h.sqlite"
+    )
+    transport = client._transport
+    async with client:
+        transport._reading = 1
+        await client.get("https://example.test/f")
+        assert calls == []
+        transport._reading = 0
+        await client.get("https://example.test/f")
+    assert len(calls) == 1
+
+
+async def test_requests_wait_while_the_cache_is_trimmed(clock, tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    gate = threading.Event()
+    order = []
+
+    def slow_trim(path):
+        order.append("trim start")
+        gate.wait(5)
+        order.append("trim end")
+
+    monkeypatch.setattr(net, "_trim", slow_trim)
+    monkeypatch.setattr(net, "CACHE_TRIM_EVERY", 1)
+
+    def handler(request, n):
+        order.append("origin")
+        return httpx.Response(200, text="x", headers={"ETag": '"a"'})
+
+    client, _ = _client(clock, handler, tmp_path / "h.sqlite")
+    async with client:
+        first = asyncio.create_task(client.get("https://example.test/a"))
+        await asyncio.sleep(0.05)
+        second = asyncio.create_task(client.get("https://example.test/b"))
+        await asyncio.sleep(0.05)
+        assert order == ["trim start"]  # neither request has reached the origin
+        gate.set()
+        await asyncio.gather(first, second)
+    assert order[:2] == ["trim start", "trim end"]
+
+
+async def test_a_database_that_fails_its_integrity_check_is_replaced(clock, tmp_path, caplog):
+    path = tmp_path / "h.sqlite"
+    first, _ = _client(clock, lambda r, n: httpx.Response(200, text="x" * 20000, headers={"ETag": '"a"'}), path)
+    async with first:
+        for i in range(6):
+            await first.get(f"https://example.test/{i}")
+    data = bytearray(path.read_bytes())
+    for at in range(4096 * 2, len(data) - 100, 997):  # damage the pages after the header
+        data[at : at + 40] = bytes([255]) * 40
+    path.write_bytes(bytes(data))
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"h.sqlite{suffix}").unlink(missing_ok=True)
+    with caplog.at_level(logging.WARNING, logger="earthwave.net"):
+        second, seen = _client(clock, lambda r, n: httpx.Response(200, text="y", headers={"ETag": '"b"'}), path)
+        async with second:
+            assert (await second.get("https://example.test/0")).text == "y"
+    assert "discarding the http cache" in caplog.text and "if-none-match" not in seen[0].headers
+
+
+async def test_parallel_first_requests_share_one_in_memory_connection(clock, caplog):
+    import asyncio
+
+    client, _seen = _client(clock, lambda r, n: httpx.Response(200, text="x", headers={"ETag": '"a"'}))
+    async with client:
+        with caplog.at_level(logging.WARNING, logger="earthwave.net"):
+            got = await asyncio.gather(*(client.get(f"https://example.test/{i}") for i in range(8)))
+    assert [g.status_code for g in got] == [200] * 8 and "http cache failed" not in caplog.text

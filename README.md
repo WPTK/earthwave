@@ -182,3 +182,5 @@ See [`docs/development.md`](docs/development.md) for setup, checks, the release 
 ## Licence
 
 [MIT](LICENSE)
+
+The release binary bundles third-party libraries under their own licences: hishel and anysqlite (BSD-3-Clause), stamina (MIT), tenacity and msgpack (Apache-2.0), alongside httpx, Textual and the rest. Each library's licence text is kept in its `*.dist-info` directory inside the binary.

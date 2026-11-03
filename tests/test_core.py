@@ -197,7 +197,9 @@ async def test_a_429_without_a_wait_backs_off_a_minute_and_a_bare_503_does_not_b
         await client.get("https://b.test/")
         await client.get("https://b.test/")
         held = await client.get("https://a.test/")
-    assert held.headers["retry-after"] == "60" and len(seen) == 1 + 3 + 3  # a: one try; b: both calls, 3 tries each
+    assert (
+        held.headers["retry-after"] == "60" and len(seen) == 2 + 3 + 3
+    )  # a: a bare 429 is retried once; b: both calls, 3 tries each
 
 
 def test_retry_after_of_reads_only_rate_limit_answers(clock):

@@ -39,6 +39,12 @@ class Rig:
 
     def __init__(self, clock: ReplayClock, seed: int = 1):
         self.clock = clock
+
+        async def sleep(seconds: float) -> None:  # a retry's wait passes on the simulated clock, not on the wall clock
+            clock.advance(seconds)
+            await asyncio.sleep(0)
+
+        clock.sleep = sleep  # type: ignore[method-assign]
         self.respond = lambda request: httpx.Response(200, content=HOUR)
         self.requests: list[httpx.Request] = []
         self.results: list[pollmod.PollResult] = []
