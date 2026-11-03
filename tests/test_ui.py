@@ -12,7 +12,7 @@ import httpx
 import pytest
 from conftest import FIXTURES, T0, WEEK_NOW, footer_keys, make_quake, week_app
 from rich.text import Text
-from test_observations import drive
+from test_observations import drive_settled
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
@@ -296,13 +296,14 @@ async def test_scheduler_exception_is_logged_not_swallowed(caplog):
     assert "scheduler stopped unexpectedly" in caplog.text
 
 
-async def test_live_replay_session_runs_through_the_app():
+async def test_live_replay_session_runs_through_the_app(monkeypatch):
+    monkeypatch.setattr("earthwave.poll.TICK", 0.05)  # the scheduler notices a due poll at once
     path = FIXTURES / "replay" / "usgs_short.jsonl"
-    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive` and the recording
+    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive_settled` and the recording
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock))
     async with app.run_test(size=(120, 40)) as pilot:
-        await drive(clock, lambda: app.store.get("replay_new1") is not None)
+        await drive_settled(app, pilot, lambda: app.store.get("replay_new1") is not None)
         await pilot.pause()
         assert app.tracker.kind_of("replay_new1") == "major"
         assert app.scheduler.freshness("usgs") is Freshness.FRESH
