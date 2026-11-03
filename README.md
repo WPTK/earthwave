@@ -78,7 +78,8 @@ earthwave --help                       # everything else
 ```
 
 `--home` applies to that run only. `earthwave --home 40.7,-74.0 --home-name "New York" --save-home` writes it to the
-config file and exits, leaving the rest of the file as it was. Or edit the file by hand (its path is under "Where
+config file and exits, leaving the rest of the file as it was. In the app, `Ctrl+P` then "Set home location" does the
+same (restart earthwave to use it). Or edit the file by hand (its path is under "Where
 files live"):
 
 ```toml
@@ -142,6 +143,7 @@ answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE
 | `h` | history by day |
 | `a` | acknowledge alerts |
 | `r` | refresh now |
+| `Ctrl+P` | command palette: every action by name, and Set home location |
 | `q` | quit |
 
 ### Aftershock groups

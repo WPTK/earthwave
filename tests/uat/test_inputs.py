@@ -175,6 +175,8 @@ key(T, "a", Case(lambda b, a: a.notes > b.notes, "acknowledges tsunami alerts an
 key("DashboardScreen", "on_key:escape", Case(lambda b, a: b.search_open and not a.search_open, "closes the search box", open=("slash",), press="escape"))
 key("DashboardScreen", "submit", Case(lambda b, a: b.search_open and not a.search_open, "applies the search", open=("slash", "z", "z"), press="enter"))
 key("FiltersScreen", "submit", Case(back_to_dashboard, "Enter in a filter box applies and closes", open=("f",), press="enter"))
+SET_HOME = ("ctrl+p", "s", "e", "t", "space", "h", "o", "m", "e", "enter")  # the palette's Set home location
+key("SetHomeScreen", "submit", Case(back_to_dashboard, "Enter on a valid home applies and closes", open=SET_HOME, press="enter"))
 
 # help text promises
 HELP_TAB = Case(lambda b, a: a.focused == "MapPanel#map", "Tab focuses the map so the arrows pan", press="tab")
@@ -199,6 +201,7 @@ KEY_ID_ALIASES = {
     "onkey:DashboardScreen:escape": "key:DashboardScreen:on_key:escape",
     "submit:DashboardScreen": "key:DashboardScreen:submit",
     "submit:FiltersScreen": "key:FiltersScreen:submit",
+    "submit:SetHomeScreen": "key:SetHomeScreen:submit",
     "key:DashboardScreen:slash ": "",
 }
 

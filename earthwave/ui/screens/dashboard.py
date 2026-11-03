@@ -241,9 +241,7 @@ class DashboardScreen(Screen):
 
     def action_sort(self) -> None:
         app = self.earthwave
-        app.sort = app.sort.next(app.config.home.enabled)
-        self.refresh_view()
-        self.query_one(QuakeList).go_top()  # the head of the new order, not the old quake's row in it (#247)
+        app.set_sort(app.sort.next(app.config.home.enabled))
 
     def action_group(self) -> None:
         """Nest aftershocks under their mainshock (Space opens or closes a group), or list every quake again."""
