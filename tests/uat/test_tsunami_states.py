@@ -170,6 +170,7 @@ async def test_many_gauge_rows_scroll_and_leave_the_bulletin_its_rows(monkeypatc
         text = screen.query_one("#alert_text_scroll")
         gauges = screen.query_one("#gauges")
         body = screen.query_one("#tsunami_body")
+        await wait_until(pilot, lambda: gauges.virtual_size.height >= 18, what="the gauge rows laid out")
         assert text.size.height >= 3
         assert gauges.size.height <= body.size.height * 0.4 + 1
         assert gauges.virtual_size.height >= 18 and gauges.max_scroll_y > 0  # the rest is reachable by scrolling

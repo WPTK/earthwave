@@ -29,8 +29,8 @@ FALLBACK_CELL = (8, 16)  # pixels, used only by a forced `sixel` when the termin
 SANE_CELL = ((4, 64), (8, 128))  # (width, height) bounds; anything else is a misread reply, not a cell size
 
 _DA1 = re.compile(r"\x1b\[\?([\d;]*)c")
-_CELL = re.compile(r"\x1b\[6;(\d+);(\d+)t")
-_AREA = re.compile(r"\x1b\[4;(\d+);(\d+)t")
+_CELL = re.compile(r"\x1b\[6;(\d{1,5});(\d{1,5})t")  # bounded: int() of a huge digit run raises
+_AREA = re.compile(r"\x1b\[4;(\d{1,5});(\d{1,5})t")
 
 
 @dataclass(frozen=True, slots=True)
