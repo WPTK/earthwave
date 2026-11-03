@@ -43,9 +43,7 @@ dev = [
     "build>=1,<2",
     "pyshp",
     "tui-test==0.1.1",
-    "hypothesis>=6",
     "obspy>=1.4",  # oracle for earthwave/iasp91_table.py: tests/test_seismo_oracle.py, scripts/gen_iasp91_table.py
-    "geographiclib>=2",
 ]
 
 [project.scripts]
