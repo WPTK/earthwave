@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from rich.text import Text
 from textual.widgets import Static
 
-from earthwave.poll import Freshness
+from earthwave.poll import DataState, Freshness
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_countdown
 from earthwave.ui.theme import CYAN, FRESHNESS_COLORS, mark_level
@@ -19,6 +19,22 @@ def feed_word(freshness: Freshness, incomplete: bool = False) -> str:
     if freshness is Freshness.FRESH and not incomplete:
         return "ok"
     return FRESHNESS_WORDS.get(freshness, "incomplete")
+
+
+# The data-state chip: the level word is always printed, the CVD palette's freshness colours only add to it.
+DATA_STATE_COLORS = {
+    DataState.LOADING: Freshness.LOADING,
+    DataState.LIVE: Freshness.FRESH,
+    DataState.STALE: Freshness.STALE,
+    DataState.OFFLINE: Freshness.ERROR,
+}
+
+
+def data_chip(state: DataState, age: float | None) -> str:
+    """` LIVE 8s `, ` STALE 3m `, ` OFFLINE 12m `: the word, then the age of its data (none if unknown)."""
+    return (
+        f" {state.value} {fmt_age(age)} " if age is not None and state is not DataState.LOADING else f" {state.value} "
+    )
 
 
 def down_feeds(feeds: list[tuple[str, Freshness]]) -> tuple[str, ...]:
@@ -47,16 +63,27 @@ class StatusInfo:
     alert_level: str | None = None  # the highest actionable level in force, which colours the bar
     replay: bool = False  # the data is a recording being played back
     offline: bool = False  # nothing is fetched, so the feeds have no health to report
+    data_state: DataState | None = None  # None: no live feeds to judge (a replay, or no source enabled)
+    data_age: float | None = None  # seconds since the data the state speaks for was good
 
 
 def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     """One line that is clipped on the right, so what must not be missed comes first: the alert chip, the replay marker,
     the count, then any feed that is not healthy (#228), then the optional fields."""
     text = Text(no_wrap=True, overflow="ellipsis")
+    chips: tuple[tuple[int, int], ...] = ()
     if info.alert_state in ("active", "alarm"):  # an acknowledged alert is still in force
         text.append(" TSUNAMI ", "bold reverse")
     if info.replay:
         text.append(" REPLAY ", "bold black on #ffd700")  # a recording, not live data (#249)
+    state = DataState.OFFLINE if info.offline else info.data_state
+    if state is not None and not info.replay:  # a recording says REPLAY; its feeds' health means nothing
+        start = len(text.plain)
+        text.append(
+            data_chip(state, None if info.offline else info.data_age),
+            f"bold black on {FRESHNESS_COLORS[DATA_STATE_COLORS[state]]}",
+        )
+        chips = ((start, len(text.plain)),)
     text.append(f" {info.shown} shown of {info.total}", "white")
     unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     groups: dict[tuple[Freshness, str], list[SourceLine]] = {}  # one phrase per state: six loading feeds fit the bar
@@ -84,10 +111,10 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
         text.append(f" {glyphs.bar} ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
         text.append(f" {len(info.sources)} feeds ok", "grey70")
-    return on_warning_ground(text) if info.alert_level == "WARNING" else text
+    return on_warning_ground(text, chips) if info.alert_level == "WARNING" else text
 
 
-def on_warning_ground(text: Text) -> Text:
+def on_warning_ground(text: Text, chips: tuple[tuple[int, int], ...] = ()) -> Text:
     """A Warning's status ground is the loudest red on screen (theme.LEVEL_SURFACES), which no light grey or cyan reads
     on (1.3 to 2:1): the words go black and the TSUNAMI chip white on black. Colour meaning in the bar (filter, feed
     dots) gives way to the alert; the words still carry it."""
@@ -96,6 +123,8 @@ def on_warning_ground(text: Text) -> Text:
         plain.stylize("bold #ffffff on #000000", 0, len(" TSUNAMI "))
     if (at := text.plain.find(" REPLAY ")) >= 0:
         plain.stylize("bold #ffffff on #000000", at, at + len(" REPLAY "))
+    for at, end in chips:  # the data chip keeps a ground of its own, so a Warning cannot hide an outage
+        plain.stylize("bold #ffffff on #000000", at, end)
     return plain
 
 
