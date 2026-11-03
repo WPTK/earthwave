@@ -453,6 +453,24 @@ def test_reply_filter_drops_the_front_of_a_stalled_reply_and_its_tail(front):
     assert run(reply, "x")[0] == [("x", "x")]  # anything else ends the tail
 
 
+def test_reply_filter_hands_back_a_bare_escape_bracket():
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    run(reply, "[")
+    assert [char for _, char in reply.flush()] == ["", "["]
+
+
+def test_reply_filter_tail_drop_only_applies_during_startup():
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    reply.startup = False
+    run(reply, "[?2026;2")
+    assert reply.flush() == []  # the front is still dropped
+    assert run(reply, "t")[0] == [("t", "t")]  # but the tail is typed: no window to guess in
+
+
 def test_reply_filter_hands_a_lone_escape_back():
     from earthwave.ui.graphics.probe import ReplyFilter
 

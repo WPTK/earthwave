@@ -34,6 +34,8 @@ from earthwave.app import EarthwaveApp  # noqa: E402
 from earthwave.clock import ReplayClock  # noqa: E402
 from earthwave.config import Config, with_overrides  # noqa: E402
 from earthwave.net import ReplayTransport, recording_start  # noqa: E402
+from earthwave.ui.screens.tsunami import TsunamiScreen  # noqa: E402
+from earthwave.ui.widgets.gauge_strip import GaugeRow  # noqa: E402
 
 # Feeds the recording has no copy of answer as a quiet feed with nothing in it, not as a failure, so no frame shows a
 # red "failed" status. Anything else unrecorded still answers 404.
@@ -76,7 +78,12 @@ async def sample() -> tuple[list[str], dict[str, str]]:
                 frames.append(app.export_screenshot(title=title))
                 if "tsunami" not in stills and app.dashboard.query_one("#banner").has_class("level-warning"):
                     await pilot.press("t")  # the bulletin while the Warning is current, then back to the dashboard
-                    await pilot.pause(0.5)
+                    for _ in range(100):  # until the screen is up and its gauge rows have composed
+                        await pilot.pause()
+                        screen = app.screen
+                        if isinstance(screen, TsunamiScreen) and screen.query(GaugeRow):
+                            break
+                    assert isinstance(app.screen, TsunamiScreen), "the Tsunami screen did not open for the still"
                     stills["tsunami"] = app.export_screenshot(title=title)
                     await pilot.press("escape")
                     await pilot.pause()

@@ -278,6 +278,7 @@ class EarthwaveApp(App):
 
     def _end_startup_replies(self) -> None:
         self._startup_replies = False
+        self._replies.startup = False
 
     def _restore_history(self) -> None:
         """Refill the store from saved quakes, silently (no events, so no flash storm and no stale alert: only quakes

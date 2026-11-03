@@ -78,13 +78,15 @@ class ReplyFilter:
     decides on each key: a complete reply is consumed; anything that stops looking like one is handed back to be typed,
     in order, so a plain `[`, `^` or digit the user types is never lost. A run of keys that never finishes is handed
     back by `flush` (a lone Escape is a real Escape), except a run that is plainly the front of a reply (`ESC [ ?`,
-    `[ 6 ;`): a terminal or host that stalls mid-reply must not type its `?` (Help) or its `t` (Tsunami), so the front
-    is dropped and the tail that follows within `TAIL_SECONDS` is dropped with it (#270).
+    `[ 6 ;`; a bare `ESC [` is still typed): a terminal or host that stalls mid-reply must not type its `?` (Help) or
+    its `t` (Tsunami), so the front is dropped, and during startup (`startup`) the tail that follows within
+    `TAIL_SECONDS` is dropped with it (#270). The tail window is a heuristic: some of the queries are Textual's, not
+    ours, so there is no terminator we could consume up to.
 
     Tokens are `(key, character)` pairs. `push` returns (released tokens, cell size when the reply gave one).
     """
 
-    __slots__ = ("held", "hold_escape", "tail_until")
+    __slots__ = ("held", "hold_escape", "startup", "tail_until")
 
     TAIL_SECONDS = 2.0
 
@@ -100,6 +102,7 @@ class ReplyFilter:
         the rest of a sequence) is still caught from its `[`."""
         self.held: list[tuple[str, str]] = []
         self.hold_escape = hold_escape
+        self.startup = True  # the window in which late replies may arrive; the tail drop only applies in it
         self.tail_until = 0.0
 
     @staticmethod
@@ -133,8 +136,9 @@ class ReplyFilter:
     def flush(self) -> list[tuple[str, str]]:
         released, self.held = self.held, []
         text = "".join(self._char(t) for t in released)
-        if self._FRONT.fullmatch(text) and ("?" in text or ";" in text or text[0] == chr(27)):
-            self.tail_until = time.monotonic() + self.TAIL_SECONDS
+        if self._FRONT.fullmatch(text) and ("?" in text or ";" in text):
+            if self.startup:
+                self.tail_until = time.monotonic() + self.TAIL_SECONDS
             return []
         return released
 
