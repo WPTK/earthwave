@@ -23,13 +23,7 @@ from uat import states
 from uat.harness import screen_text, week_app
 
 SIZE = (130, 32)
-TARGETS = {
-    "t": "TsunamiScreen",
-    "o": "ObservationsScreen",
-    "h": "HistoryScreen",
-    "f": "FiltersScreen",
-    "question_mark": "HelpScreen",
-}
+TARGETS = {"t": "TsunamiScreen", "o": "ObservationsScreen", "h": "HistoryScreen", "f": "FiltersScreen", "question_mark": "HelpScreen"}
 
 
 def app_with_history():
@@ -71,13 +65,7 @@ async def test_w2_every_screen_by_mouse_only():
             await wait_until(pilot, lambda: app.screen is not before, what=f"{name} after clicking {key}")
             await wait_until(pilot, lambda: type(app.screen).__name__ == name, what=name)
 
-        for key, name in {
-            "t": "TsunamiScreen",
-            "o": "ObservationsScreen",
-            "h": "HistoryScreen",
-            "f": "FiltersScreen",
-            "question_mark": "HelpScreen",
-        }.items():
+        for key, name in {"t": "TsunamiScreen", "o": "ObservationsScreen", "h": "HistoryScreen", "f": "FiltersScreen", "question_mark": "HelpScreen"}.items():
             if name in ("FiltersScreen", "HelpScreen"):
                 await click_footer(key, name)
                 # the dialogs have no footer: Cancel button for filters; help closes with Esc or ? only
@@ -120,7 +108,7 @@ async def test_w3_use_every_control_once():
         await pilot.pause(0.3)
         rows = app.dashboard.query_one(QuakeList).rows
         assert rows and all("jap" in q.place.lower() for q in rows)
-        assert "Jap" in screen_text(app)  # the status bar names the search
+        assert 'Jap' in screen_text(app)  # the status bar names the search
         await pilot.press("slash", "escape")
         await pilot.press("z")
         assert app.dashboard.query_one("#map").model.mode.value != "world"
@@ -165,7 +153,6 @@ async def test_w4_offline_and_back_says_so_both_ways():
     config = with_overrides(Config(), 0.0, 24, None, "unicode")
     app = EarthwaveApp(config, run_scheduler=True, ticks=True, transport=httpx.MockTransport(net))
     async with app.run_test(size=SIZE) as pilot:
-
         async def status() -> str:
             await pilot.pause(0.6)
             return next((ln for ln in screen_text(app).splitlines() if " shown of " in ln), "")

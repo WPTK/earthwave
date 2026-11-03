@@ -5,15 +5,18 @@ import contextlib
 import math
 from datetime import UTC, datetime
 
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from earthwave.sources import ndbc
 from earthwave.sources.jma import fallback_alert, parse_coordinate, parse_detail
 from earthwave.sources.levels import RANK
-from earthwave.sources.usgs import parse_collection, parse_feature
+from earthwave.sources.usgs import PAGER_LEVELS, parse_collection, parse_feature, parse_nearby_cities
+from earthwave.sources.usgs import parse_detail as parse_usgs_detail
 
-FAST = settings(max_examples=60, deadline=None)
+FAST = settings(
+    max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much]
+)
 
 # JSON-shaped junk: what a hostile or broken feed could hold anywhere in a document.
 scalars = st.none() | st.booleans() | st.integers() | st.floats() | st.text(max_size=20)
@@ -23,23 +26,29 @@ json_values = st.recursive(
     max_leaves=12,
 )
 
-finite = st.floats(allow_nan=False, allow_infinity=False)
+# numbers a feed can send: finite, non-finite, out of range, numeric strings
+numbers = (
+    st.floats(allow_nan=True, allow_infinity=True)
+    | st.integers(-1000, 1000)
+    | st.sampled_from(["1.5", "x", "nan", "inf"])
+)
+alerts = st.none() | st.sampled_from(["green", "Orange ", " RED", "Yellow", "purple", "", "none"]) | json_values
 millis = st.integers(min_value=0, max_value=4_000_000_000_000)
 
 
 @st.composite
 def usgs_features(draw):
     props = {
-        "mag": draw(st.none() | st.floats(min_value=-2, max_value=10) | json_values),
+        "mag": draw(st.none() | st.floats(min_value=-2, max_value=10) | numbers | json_values),
         "time": draw(millis | json_values),
         "updated": draw(millis | st.none()),
         "type": draw(st.sampled_from(["earthquake", "quarry blast", "explosion"])),
         "place": draw(st.none() | st.text(max_size=30)),
         "ids": draw(st.none() | st.text(max_size=30)),
-        "alert": draw(st.none() | st.sampled_from(["green", "yellow", "orange", "red", "purple"])),
+        "alert": draw(alerts),
         "tsunami": draw(st.sampled_from([0, 1])),
     }
-    coords = draw(st.lists(st.floats(allow_nan=True, allow_infinity=True) | st.none(), max_size=4))
+    coords = draw(st.lists(numbers | st.none(), max_size=4))
     return {"id": draw(st.text(min_size=1, max_size=12)), "properties": props, "geometry": {"coordinates": coords}}
 
 
@@ -52,6 +61,7 @@ def test_usgs_collection_keeps_only_sane_quakes(features):
         assert -90 <= q.lat <= 90 and -180 <= q.lon <= 180
         assert q.time.tzinfo is not None
         assert q.id not in q.also_ids
+        assert q.pager_alert is None or q.pager_alert in PAGER_LEVELS
 
 
 @FAST
@@ -174,3 +184,32 @@ def test_dart_readings_are_sorted_in_range_and_utc(lines):
 @given(st.text(max_size=400))
 def test_dart_never_raises_on_arbitrary_text(text):
     ndbc.parse_dart(text, "x")
+
+
+@FAST
+@given(alerts, st.lists(numbers | st.none(), min_size=2, max_size=3))
+def test_usgs_non_finite_or_out_of_range_position_never_becomes_a_quake(alert, coords):
+    feature = {
+        "id": "us1",
+        "properties": {"mag": 5.0, "time": 1_700_000_000_000, "type": "earthquake", "alert": alert},
+        "geometry": {"coordinates": coords},
+    }
+    (quake,) = parse_collection({"features": [feature]}) or (None,)
+    if quake is not None:
+        assert math.isfinite(quake.depth_km) and abs(quake.lat) <= 90 and abs(quake.lon) <= 180
+
+
+@FAST
+@given(json_values)
+def test_usgs_detail_pager_alert_is_normalised_or_it_raises_what_the_caller_absorbs(alert):
+    data = {"id": "us1", "properties": {"products": {"losspager": [{"properties": {"alertlevel": alert}}]}}}
+    with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError, IndexError):
+        detail = parse_usgs_detail(data)
+        assert detail.pager_alert is None or detail.pager_alert in PAGER_LEVELS
+
+
+@FAST
+@given(json_values)
+def test_usgs_nearby_cities_is_a_tuple_of_strings_for_any_input(rows):
+    cities = parse_nearby_cities(rows)
+    assert isinstance(cities, tuple) and all(isinstance(c, str) for c in cities)

@@ -332,6 +332,8 @@ class EarthwaveApp(App):
 
     def _tick(self) -> None:
         """Half-second heartbeat: attention decay, seen tracking, blink phases and the status bar countdown."""
+        if not self.is_running:  # shutting down: the dashboard's children leave one by one, the Banner before the list
+            return
         self.tracker.prune()
         if self.history is not None:
             self.history.mark_seen(self.tracker.take_seen())
@@ -340,8 +342,8 @@ class EarthwaveApp(App):
         self._ticks += 1
         if self._ticks % GAUGE_REFRESH_TICKS == 0:
             self.refresh_gauges()
-        if not self.is_running or not self.screen_stack or not self.dashboard.query(QuakeList):
-            return  # shutting down (children leave one by one, the Banner before the list), or not composed
+        if not self.screen_stack or not self.dashboard.query(QuakeList):  # not yet composed
+            return
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
             visible = quake_list.visible_ids() if self.dashboard.list_shown else set()  # a hidden list is not seen
@@ -359,6 +361,8 @@ class EarthwaveApp(App):
         self.post_message(PollDone(result))
 
     def on_poll_done(self, message: PollDone) -> None:
+        if not self.is_running:  # a poll that lands while the app is shutting down
+            return
         result = message.result
         self.tracker.observe(list(result.events))
         notes = self._notify_desktop(list(result.events))
@@ -404,7 +408,7 @@ class EarthwaveApp(App):
                 self._backfill_if_needed(force=False)
         self.sync_tsunami()
         self.sync_gauges()
-        if not self.is_running or not self.screen_stack:  # a poll that lands while the app is shutting down
+        if not self.screen_stack:
             return
         if self.dashboard.is_mounted and self.dashboard.query(
             QuakeList
@@ -619,6 +623,8 @@ class EarthwaveApp(App):
             self.push_screen(TsunamiScreen())
 
     def refresh_tsunami(self) -> None:
+        if not self.is_running:
+            return
         self.sync_tsunami()
         self.dashboard.refresh_tsunami()
         self.dashboard.refresh_status()
