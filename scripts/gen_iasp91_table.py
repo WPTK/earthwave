@@ -2,7 +2,9 @@
 
     python scripts/gen_iasp91_table.py
 
-P is the earliest arrival of any phase. S is the earliest S-type arrival: S, s, Sn, Sg, Sdiff, SKS, SKIKS
+P is the earliest arrival of any phase. That includes Pdiff, which IASP91 carries to 156-158.5 degrees (depth
+dependent) before the first arrival jumps ~115 s to PKIKP; the extra nodes around 154-160 keep the jump to one cell.
+S is the earliest S-type arrival: S, s, Sn, Sg, Sdiff, SKS, SKIKS
 (the S-wave through the outer core, past the S shadow beyond ~104 degrees). Core-converted PKS and PKIKS are left
 out: they are P in the mantle, arrive earlier than SKS from ~110 degrees, and are not what a seismometer calls S.
 A cell with no S arrival at all is filled with P * VP_VS, the crustal Vp/Vs ratio.
@@ -14,7 +16,7 @@ from obspy.taup import TauPyModel
 
 DISTANCES_DEG = (
     0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 23, 26, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100,
-    105, 110, 120, 130, 140, 150, 160, 170, 180,
+    105, 110, 120, 130, 140, 150, 154, 156, 157, 158, 158.5, 159, 160, 165, 170, 180,
 )  # fmt: skip
 DEPTHS_KM = (0, 5, 10, 20, 35, 50, 70, 100, 150, 200, 300, 400, 500, 600, 700)
 S_PHASES = ["s", "S", "Sn", "Sg", "Sdiff", "SKS", "SKIKS"]

@@ -94,7 +94,7 @@ def test_arrival_is_origin_plus_travel_time():
 def test_p_comes_before_s_and_both_are_finite_and_not_negative(km, depth):
     p, s = travel_times(km, depth)
     assert math.isfinite(p) and math.isfinite(s) and 0 <= p <= s
-    assert p < s or (km == 0 and depth == 0)
+    assert p < s or (km < 1e-6 and depth < 1e-6)  # at the station with no depth both round to the origin time
 
 
 @given(distances, distances, depths)
