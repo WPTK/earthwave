@@ -16,7 +16,7 @@ from earthwave.models import Earthquake, QuakeDetail
 from earthwave.seismo import ENERGY_PER_MAGNITUDE_STEP, arrivals, energy_joules, fmt_tnt, tnt_tons
 from earthwave.sources.geo import haversine_km
 from earthwave.ui.labels import fmt_age, fmt_countdown, fmt_distance, fmt_time, pager_badge, tsunami_badge
-from earthwave.ui.theme import PAGER_COLORS, TSUNAMI_BADGE_COLOR, YELLOW, mag_color
+from earthwave.ui.theme import PAGER_COLORS, TEXT, TSUNAMI_BADGE_COLOR, YELLOW, mag_color
 from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ def is_console_browser() -> bool:
     return isinstance(browser, webbrowser.GenericBrowser) or getattr(browser, "background", True) is False
 
 
-def _row(text: Text, label: str, value: str, style: str = "white") -> None:
+def _row(text: Text, label: str, value: str, style: str = TEXT) -> None:
     text.append(f"{label:<16}", "grey62")
     text.append(f"{value}\n", style)
 
@@ -92,7 +92,7 @@ def render_detail(
     if quake.tsunami_flag:
         _row(text, "Tsunami", "USGS links a tsunami product", TSUNAMI_BADGE_COLOR)
     if alert:
-        _row(text, "PAGER alert", alert, PAGER_COLORS.get(alert, "white"))
+        _row(text, "PAGER alert", alert, PAGER_COLORS.get(alert, TEXT))
     if detail:
         if detail.pager_max_mmi is not None:
             _row(text, "PAGER max MMI", f"{detail.pager_max_mmi:g}")

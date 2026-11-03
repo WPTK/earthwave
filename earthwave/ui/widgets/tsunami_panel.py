@@ -9,7 +9,7 @@ from textual.widgets import Static
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.ui.labels import fmt_age, fmt_time
-from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, YELLOW, mark_level
+from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, TEXT, YELLOW, mark_level
 
 CANCELLED_SHOWN = timedelta(hours=6)  # how long the panel keeps saying an alert was cancelled
 
@@ -72,7 +72,7 @@ def build_panel(
             text.append(" OVERDUE, awaiting follow-up", f"bold {RED}")
         else:
             text.append(f" {fmt_until(expiry(alert), now)}", "grey62")
-        text.append(f"  {alert.headline}\n", "white")
+        text.append(f"  {alert.headline}\n", TEXT)
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
     if not alerts and not unknown:

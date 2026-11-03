@@ -103,7 +103,7 @@ Screen {
     display: none;
     height: 1;
     background: $level-warning;
-    color: black;
+    color: $black;
     text-style: bold;
 }
 
