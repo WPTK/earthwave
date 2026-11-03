@@ -12,7 +12,7 @@ from test_sources_state import FakeSource
 from earthwave.__main__ import main
 from earthwave.config import ConfigError, load_config, parse_config
 from earthwave.models import Batch
-from earthwave.net import build_client, proxy_for
+from earthwave.net import build_client, proxy_for, redact_proxy
 from earthwave.poll import Scheduler
 from earthwave.state.store import Store
 
@@ -95,7 +95,8 @@ async def test_the_refresh_toast_names_the_wait(clock):
 
     assert refresh_message({}) == "Refreshing"
     assert refresh_message({"usgs": 42.2}) == "Refreshing; USGS can be asked again in 43 s"
-    assert refresh_message({"usgs": 42.2, "nws": 5}) == "Refreshing; USGS, NWS can be asked again in 43 s"
+    assert refresh_message({"usgs": 42.2, "nws": 5}, 4) == "Refreshing; USGS, NWS can be asked again in 43 s"
+    assert refresh_message({"usgs": 42.2, "nws": 5}, 2) == "Too soon to refresh: USGS, NWS can be asked again in 43 s"
 
 
 # --- #272 ------------------------------------------------------------------------------------------------------
@@ -150,3 +151,25 @@ def test_help_lists_the_renderer_variable(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])
     assert "EARTHWAVE_MAP_RENDERER" in capsys.readouterr().out
+
+
+def test_all_proxy_is_honoured(monkeypatch, no_proxy_env):
+    monkeypatch.setenv("ALL_PROXY", "http://allproxy.example:8080")
+    assert proxy_for(httpx.URL("https://a.example/")) == "http://allproxy.example:8080"
+    monkeypatch.setenv("HTTPS_PROXY", "http://specific.example:1")
+    assert proxy_for(httpx.URL("https://a.example/")) == "http://specific.example:1"
+
+
+@pytest.mark.parametrize("bad", ["proxy:3128", "::bad", "ftp://p.example:1"])
+def test_a_malformed_proxy_is_ignored_with_one_clear_warning(monkeypatch, no_proxy_env, caplog, bad):
+    monkeypatch.setenv("HTTPS_PROXY", bad)
+    with caplog.at_level("WARNING", logger="earthwave.net"):
+        assert proxy_for(httpx.URL("https://a.example/")) is None
+        assert proxy_for(httpx.URL("https://b.example/")) is None
+    warnings = [r for r in caplog.records if "ignoring the proxy setting" in r.getMessage()]
+    assert len(warnings) <= 1  # logged once per distinct value
+
+
+def test_redact_proxy_hides_the_password():
+    assert "secret" not in redact_proxy("http://u:secret@h:3128")
+    assert redact_proxy("http://h:3128").startswith("http://h")

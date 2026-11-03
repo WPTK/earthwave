@@ -142,14 +142,41 @@ class PoliteTransport(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
+_SEEN_PROXIES: dict[str, bool] = {}  # setting -> usable; each bad one is logged once
+
+
+def redact_proxy(value: str) -> str:
+    """A proxy URL with any password replaced, safe to log or print."""
+    try:
+        url = httpx.URL(value)
+    except (httpx.InvalidURL, ValueError):
+        return "<unparseable>"
+    if url.password:
+        return str(url.copy_with(userinfo=f"{url.username}:***".encode()))
+    return str(url)
+
+
+def _usable(value: str) -> bool:
+    if value not in _SEEN_PROXIES:
+        try:
+            httpx.Proxy(value)
+            _SEEN_PROXIES[value] = True
+        except (httpx.InvalidURL, ValueError) as exc:
+            _SEEN_PROXIES[value] = False
+            log.warning("ignoring the proxy setting %s (%s); using a direct connection", redact_proxy(value), exc)
+    return _SEEN_PROXIES[value]
+
+
 def proxy_for(url: httpx.URL) -> str | None:
     """The proxy the environment names for this URL (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, NO_PROXY, and on Windows the
     system setting), or None. httpx only reads these when it builds the transport itself, and the polite transport
-    below is passed in, so the choice is made here."""
-    host = url.host
-    if urllib.request.proxy_bypass(host):  # type: ignore[attr-defined]
+    below is passed in, so the choice is made here. A setting httpx cannot use is logged once and skipped, so a typo in
+    a proxy variable costs the proxy, not every feed."""
+    if urllib.request.proxy_bypass(url.host):  # type: ignore[attr-defined]
         return None
-    return urllib.request.getproxies().get(url.scheme)
+    proxies = urllib.request.getproxies()
+    value = proxies.get(url.scheme) or proxies.get("all")
+    return value if value and _usable(value) else None
 
 
 class EnvProxyTransport(httpx.AsyncBaseTransport):

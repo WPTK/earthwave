@@ -45,9 +45,9 @@ Each release lists them under [Releases](https://github.com/WPTK/earthwave/relea
   unpacked and installed the same way (`~/.local/bin` is not on the macOS `PATH` by default; add it, or use
   `/usr/local/bin`). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
 
-Windows: CI runs the tests on GitHub's `windows-2025` runner (Windows Server 2025), and
-the app is used by hand on Windows 11 in Windows Terminal. Older Windows versions and the legacy console host are not
-tested.
+Windows: CI runs the tests on GitHub's `windows-2022` and `windows-2025` runners (Windows Server images, used as
+stand-ins for the console), and the release exe is built on `windows-2025`. Separately from CI, the app is used by hand
+on Windows 11 in Windows Terminal. Older Windows versions and the legacy console host are not tested.
 
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
 download against `SHA256SUMS` from the same release.
