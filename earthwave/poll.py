@@ -122,9 +122,11 @@ class Scheduler:
     def data_state(self) -> tuple[DataState, float | None]:
         """(state, age in seconds of the data it speaks for) over every enabled feed, from the per-source health above.
 
-        LIVE only when each feed is fresh and complete. OFFLINE when each one has failed its last poll; the age is then
-        that of the newest good data anywhere. STALE is anything between, and its age is that of the oldest feed that
-        is not fine (None if one never answered), so a half-working set can never read as current.
+        LIVE only when each feed is fresh and complete, and LOADING until every feed has answered or failed once, so a
+        normal cold start is never STALE. OFFLINE when every feed that has answered or failed is down: failed twice in
+        a row, or failed with its last good data past the stale threshold (one failed poll after a good one is not an
+        outage); the age is then that of the newest good data anywhere. STALE is anything between, aged by the oldest
+        feed that is not fine (None if one never answered), so a half-working set can never read as current.
         """
         names = list(self.statuses)
         if not names:
@@ -132,9 +134,11 @@ class Scheduler:
         fresh = {n: self.freshness(n) for n in names}
         ages = {n: self.age(n) for n in names}
         newest = min((a for a in ages.values() if a is not None), default=None)
-        if all(self.statuses[n].health.failures for n in names):
+        known = [n for n in names if ages[n] is not None or self.statuses[n].health.failures]
+        pending = [n for n in names if n not in known]  # not asked yet, or the first answer is still on its way
+        if known and all(self._down(n, fresh[n]) for n in known):
             return DataState.OFFLINE, newest
-        if all(f is Freshness.LOADING for f in fresh.values()):
+        if pending:
             return DataState.LOADING, None
         bad = [n for n in names if fresh[n] is not Freshness.FRESH or self.statuses[n].health.incomplete]
         if not bad:
@@ -142,6 +146,10 @@ class Scheduler:
         if any(ages[n] is None for n in bad):
             return DataState.STALE, None
         return DataState.STALE, max(ages[n] for n in bad)  # type: ignore[type-var]
+
+    def _down(self, name: str, fresh: Freshness) -> bool:
+        failures = self.statuses[name].health.failures
+        return failures >= 2 or (failures >= 1 and fresh is Freshness.STALE)
 
     def answered_since(self, name: str, when: datetime) -> bool:
         """True when a poll that skipped nothing began at or after `when`; an unknown source is never in doubt."""

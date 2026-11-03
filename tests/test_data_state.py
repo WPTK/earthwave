@@ -76,6 +76,9 @@ def test_a_partly_failing_set_is_stale_and_all_failing_is_offline(clock):
     fail(sched, "nws")
     assert sched.data_state() == (DataState.STALE, 30.0)
     fail(sched, "usgs")
+    assert sched.data_state() == (DataState.STALE, 30.0)  # one failed poll after a good one is not an outage yet
+    fail(sched, "usgs")
+    fail(sched, "nws")
     assert sched.data_state() == (DataState.OFFLINE, 30.0)  # the newest good data anywhere
     good(sched, "usgs", clock)
     assert sched.data_state()[0] is DataState.STALE
@@ -86,7 +89,48 @@ def test_a_partly_failing_set_is_stale_and_all_failing_is_offline(clock):
 def test_never_answered_and_failing_is_offline_with_no_age(clock):
     sched = scheduler(clock, "usgs")
     fail(sched, "usgs")
+    assert sched.data_state() == (DataState.STALE, None)  # a first failed poll is not yet an outage
+    fail(sched, "usgs")
     assert sched.data_state() == (DataState.OFFLINE, None)
+
+
+def test_a_cold_start_stays_loading_until_every_feed_has_answered(clock):
+    sched = scheduler(clock, "usgs", "nws", "jma")
+    good(sched, "usgs", clock)
+    assert sched.data_state()[0] is DataState.LOADING  # never a yellow STALE for feeds that are just not back yet
+    good(sched, "nws", clock)
+    assert sched.data_state()[0] is DataState.LOADING
+    good(sched, "jma", clock)
+    assert sched.data_state()[0] is DataState.LIVE
+
+
+def test_offline_ignores_feeds_that_are_still_pending(clock):
+    sched = scheduler(clock, "usgs", "nws", "jma")
+    for _ in range(2):
+        fail(sched, "usgs")
+        fail(sched, "nws")
+    assert sched.data_state() == (DataState.OFFLINE, None)  # jma has not answered or failed: unknown, not a reprieve
+
+
+def test_one_failure_holds_until_the_last_good_data_is_past_the_threshold(clock):
+    sched = scheduler(clock, "usgs")
+    good(sched, "usgs", clock)
+    clock.advance(10)
+    fail(sched, "usgs")
+    assert sched.data_state()[0] is DataState.STALE
+    clock.advance(STALE_AFTER)
+    assert sched.data_state() == (DataState.OFFLINE, 10 + STALE_AFTER)
+
+
+def test_stale_never_shortens_the_overdue_limit_or_the_tsunami_grace(clock):
+    from earthwave.state.store import LATE_GRACE, OVERDUE_MAX
+
+    assert STALE_AFTER < LATE_GRACE.total_seconds() < OVERDUE_MAX.total_seconds()  # an outage never counts toward them
+    sched = scheduler(clock, "usgs")
+    good(sched, "usgs", clock)
+    clock.advance(OVERDUE_MAX.total_seconds() / 2)
+    assert sched.data_state()[0] is DataState.STALE
+    assert sched.answered_since("usgs", T0 + timedelta(seconds=1)) is False  # being late is not an answer
 
 
 def test_an_incomplete_feed_is_not_live(clock):
@@ -134,12 +178,13 @@ def test_no_chip_for_a_replay_and_offline_is_the_same_word():
 
 
 def test_failing_feed_names_stay_visible_at_100_columns_after_the_chip():
-    sources = (line("usgs", Freshness.ERROR, 700.0), line("nws", Freshness.ERROR, None), line("jma", Freshness.ERROR))
+    names = ("usgs", "nws", "jma")
+    sources = tuple(line(n, Freshness.ERROR, None) for n in names)
     info = StatusInfo(
         sources, 50, 90, 30, "M4.5+ 72h", 0, alert_state="active", data_state=DataState.OFFLINE, data_age=700
     )
-    text = build_status(info, UNICODE)
-    assert text.plain[:100].count("failed") >= 1 and "usgs" in text.plain[:100] and "OFFLINE 11m" in text.plain[:100]
+    head = build_status(info, UNICODE).plain[:100]
+    assert "OFFLINE 11m" in head and all(n in head for n in names), head
 
 
 def test_a_warning_ground_keeps_the_chip_legible_and_the_word_printed():
@@ -162,16 +207,17 @@ def test_a_warning_ground_keeps_the_chip_legible_and_the_word_printed():
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
-async def test_the_dashboard_shows_the_state_and_never_live_during_an_outage(size):
-    app = week_app(transport=mock_transport([]), run_scheduler=True)  # every feed answers 404: a real outage
+async def test_the_dashboard_shows_offline_and_the_failing_feeds(size):
+    app = week_app(transport=mock_transport([]))
     async with app.run_test(size=size) as pilot:
-        await wait_until(
-            pilot, lambda: app.scheduler.data_state()[0] in (DataState.STALE, DataState.OFFLINE), what="an outage"
-        )
+        app.scheduler_running = True  # judge the feeds without polling: the test sets their health
+        for status in app.scheduler.statuses.values():
+            status.health.failures = 2
         app.dashboard.refresh_status()
-        await pilot.pause()
-        bar = str(app.dashboard.query_one("#status").render())
-        assert bar.startswith((" STALE", " OFFLINE")) and "LIVE" not in bar, bar
+        bar = lambda: str(app.dashboard.query_one("#status").render())  # noqa: E731
+        await wait_until(pilot, lambda: "OFFLINE" in bar(), what="the OFFLINE chip")
+        assert bar().startswith(" OFFLINE") and "LIVE" not in bar()
+        assert all(name in bar() for name in app.scheduler.statuses), bar()
 
 
 def test_poll_timeline_with_the_replay_clock_never_reads_live_after_a_failure(clock):
