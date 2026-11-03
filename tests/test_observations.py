@@ -59,8 +59,9 @@ def merge_dart(store: Store, clock, rows, stations=(STATION,)) -> list:
 
 @pytest.fixture
 def dclock() -> ReplayClock:
-    """A clock at the newest row of the 46402 fixture."""
-    return ReplayClock(dart_rows()[-1].ts + timedelta(minutes=2), real=lambda: 0.0)
+    """A clock just after the newest row of the 46402 fixture plus the longest pulse the tests append (readings later
+    than the clock are ignored)."""
+    return ReplayClock(dart_rows()[-1].ts + timedelta(minutes=40), real=lambda: 0.0)
 
 
 # --- store: readings, residuals, bounded history ----------------------------------------------------------------
@@ -141,7 +142,8 @@ def test_history_on_first_sight_raises_no_anomaly_but_a_fresh_pulse_does(dclock)
         dclock.now() + timedelta(hours=3), real=lambda: 0.0
     )  # the whole pulse is hours old when first seen
     assert merge_dart(Store(ALERTS), old, [*rows, *pulse]) == []
-    assert [type(e) for e in merge_dart(Store(ALERTS), dclock, [*rows, *pulse])] == [GaugeAnomaly]
+    seen = ReplayClock(rows[-1].ts + timedelta(minutes=25), real=lambda: 0.0)  # readings after `now` are not trusted
+    assert [type(e) for e in merge_dart(Store(ALERTS), seen, [*rows, *pulse])] == [GaugeAnomaly]
 
 
 def test_one_event_per_anomaly_episode(dclock):
@@ -158,8 +160,10 @@ def test_one_event_per_anomaly_episode(dclock):
     more = [replace(r, value_m=last.value_m + 0.15) for r in more]
     assert merge_dart(store, dclock, more) == []
     # two quiet hours, then another pulse: a new episode
+    dclock.advance(120 * 60)  # readings stamped after the clock are ignored
     calm = pulse_rows(last, range(40, 160), 0.0)  # the detrend takes a while to let go of the step
     assert merge_dart(store, dclock, calm) == []
+    dclock.advance(25 * 60)
     again = pulse_rows(last, range(160, 184), 0.15)
     assert [type(e) for e in merge_dart(store, dclock, again)] == [GaugeAnomaly]
 
