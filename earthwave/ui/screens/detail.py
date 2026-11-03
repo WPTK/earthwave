@@ -13,7 +13,9 @@ from textual.screen import Screen
 from textual.widgets import Footer, Static
 
 from earthwave.models import Earthquake, QuakeDetail
-from earthwave.ui.labels import fmt_age, fmt_distance, fmt_time
+from earthwave.seismo import ENERGY_PER_MAGNITUDE_STEP, arrivals, energy_joules, fmt_tnt, tnt_tons
+from earthwave.sources.geo import haversine_km
+from earthwave.ui.labels import fmt_age, fmt_countdown, fmt_distance, fmt_time
 from earthwave.ui.theme import PAGER_COLORS, YELLOW, mag_color
 from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
@@ -24,6 +26,12 @@ if TYPE_CHECKING:
 def _row(text: Text, label: str, value: str, style: str = "white") -> None:
     text.append(f"{label:<16}", "grey62")
     text.append(f"{value}\n", style)
+
+
+def _wave_arrival(arrival, now, time_zone: str) -> str:
+    seconds = (arrival - now).total_seconds()
+    when = "arrived" if seconds <= 0 else f"in {fmt_countdown(seconds)}"
+    return f"{fmt_time(arrival, time_zone)} ({when})"
 
 
 GONE_NOTE = "USGS no longer lists this quake; these are the last values received."
@@ -47,9 +55,14 @@ def render_detail(
         _row(text, "Updated", fmt_time(quake.updated, time_zone))
     _row(text, "Magnitude", f"{quake.mag:.1f} {quake.mag_type}".strip())
     _row(text, "Depth", f"{quake.depth_km:.1f} km")
+    _row(text, "Energy", f"{energy_joules(quake.mag):.1e} J (~{fmt_tnt(tnt_tons(quake.mag))} TNT)")
+    _row(text, "", f"each +1.0 magnitude = {ENERGY_PER_MAGNITUDE_STEP:.1f}x energy", "grey70")
     _row(text, "Location", f"{quake.lat:.3f}, {quake.lon:.3f}")
     if home is not None:
         _row(text, "From home", fmt_distance(quake, *home))
+        p_arrival, s_arrival = arrivals(haversine_km(*home, quake.lat, quake.lon), quake.depth_km, quake.time)
+        _row(text, "P wave", _wave_arrival(p_arrival, now, time_zone))
+        _row(text, "S wave", _wave_arrival(s_arrival, now, time_zone))
     _row(text, "Status", quake.status)
     _row(text, "Significance", str(quake.sig))
     if quake.felt:
