@@ -169,12 +169,15 @@ class EarthwaveApp(App):
         if (
             isinstance(event, events.Key)
             and not event.is_forwarded
+            and not self._startup_replies
             and len(event.key) == 5
             and event.key.startswith("alt+")
             and event.key[4].isalnum()
         ):
             # Esc then a letter typed quickly arrives as one Alt-letter ( q); nothing here uses Alt, so it is two
-            # keys, the way the person pressed them (#256)
+            # keys, the way the person pressed them (#256). The rule is global (whatever has focus, a search box or the
+            # filter dialog included), except while startup replies may still arrive: a late `ESC P ...` reply must not
+            # be taken for Esc and a letter.
             await self.on_event(events.Key("escape", None))
             await self.on_event(events.Key(event.key[4], event.key[4]))
             return

@@ -1,7 +1,6 @@
 """Small behaviour fixes found by the cold-start UAT: sort, replay marker, quit keys, double-click, hidden map, hints."""
 
 import pytest
-from test_observations import gauge_app  # noqa: F401  (kept for parity with the other UI suites)
 from test_ui import week_app
 from textual import events
 from textual.widgets import Static
@@ -31,6 +30,7 @@ def test_failed_feeds_come_before_the_optional_fields():
     plain = build_status(info(sources=sources, unseen=12, next_poll=50), UNICODE).plain
     assert plain.index("failed:") < plain.index("next") < len(plain)
     assert plain[:60].count("failed") == 1
+    assert "usgs" in plain[:60] and "jma" in plain[:60]
 
 
 async def test_sort_starts_at_the_head_of_the_new_order():
@@ -69,7 +69,7 @@ async def test_q_quits_from_the_tsunami_and_gauges_screens(opener):
         assert isinstance(app.screen, (TsunamiScreen, ObservationsScreen))
         await pilot.press("q")
         await pilot.pause(0.3)
-        assert not app.is_running or app._exit
+        assert app._exit
 
 
 async def test_escape_then_q_typed_fast_is_back_then_quit():
@@ -78,10 +78,35 @@ async def test_escape_then_q_typed_fast_is_back_then_quit():
         await pilot.pause()
         await pilot.press("t")
         await pilot.pause(0.3)
+        assert isinstance(app.screen, TsunamiScreen)
+        app._startup_replies = False
+        screens = []
+        original = app.on_event
+
+        async def spy(event):
+            await original(event)
+            if isinstance(event, events.Key):
+                screens.append((event.key, type(app.screen).__name__, app._exit))
+
+        app.on_event = spy
         app.post_message(events.Key("alt+q", "q"))  # what a terminal sends for Esc q in one burst
-        await pilot.pause(0.3)
+        await pilot.pause(0.5)
         assert app._exit
-        assert not isinstance(app.screen, TsunamiScreen) or app._exit
+        assert ("escape", "DashboardScreen", False) in screens  # Esc went back first
+        assert screens[-1][2] is True  # then q quit
+
+
+async def test_alt_letter_during_the_startup_reply_window_is_not_split():
+    app = week_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause(0.3)
+        app._startup_replies = True  # a late `ESC P ...` / `ESC q` fragment may still be in flight
+        for key, char in (("alt+P", "P"), ("alt+q", "q")):
+            app.post_message(events.Key(key, char))
+        await pilot.pause(0.5)
+        assert not app._exit and isinstance(app.screen, TsunamiScreen)
 
 
 async def test_hiding_the_map_keeps_the_tsunami_panel_on_screen():
