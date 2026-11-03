@@ -762,13 +762,20 @@ class MapPanel(Widget, can_focus=True):
         self.model.pan(dx, dy)
         self.refresh()
 
+    def watch_has_focus(self, has_focus: bool) -> None:
+        self._update_title()
+
     def _update_title(self) -> None:
         sep = "·" if self._glyphs.unicode else "-"
         self.border_title = f"Map {sep} {self.model.shown}"
+        # the keys that pan are only live while the map has focus: say so on the border, where Tab shows its effect
+        self.border_subtitle = ("Arrows pan" if not self._glyphs.unicode else "←↑↓→ pan") if self.has_focus else ""
         if self._sixel and self.is_attached:
-            # setting the title calls refresh(), which in sixel mode leaves the cells alone: repaint the title row
-            offset = self.content_offset  # regions are content-relative: the border row is at minus the offset
-            super().refresh(Region(-offset.x, -offset.y, self.outer_size.width, 1))
+            # setting the title calls refresh(), which in sixel mode leaves the cells alone: repaint the border rows
+            offset = self.content_offset  # regions are content-relative: the border rows are at minus the offset
+            width = self.outer_size.width
+            super().refresh(Region(-offset.x, -offset.y, width, 1))
+            super().refresh(Region(-offset.x, self.outer_size.height - offset.y - 1, width, 1))
 
     # --- pixel image ----------------------------------------------------------------------------------------------
 
@@ -815,17 +822,31 @@ class MapPanel(Widget, can_focus=True):
 
     def _build(self, scene: Scene) -> None:
         """Worker thread: rasterise and encode `scene`, then hand it back to the event loop."""
-        pixels, palette = render_smooth(scene)
-        if scene.holes:
-            pixels = punch_holes(pixels, scene)
-        data = encode(pixels, scene.width, scene.height, palette)
+        try:
+            pixels, palette = render_smooth(scene)
+            if scene.holes:
+                pixels = punch_holes(pixels, scene)
+            data = encode(pixels, scene.width, scene.height, palette)
+        except Exception as exc:  # the worker does not exit the app (`exit_on_error=False`), so say so here
+            log.warning("sixel build failed (%r); falling back to braille", exc)
+            self.app.call_from_thread(self._build_failed)
+            return
         self.app.call_from_thread(self._built, scene, data)
+
+    def _build_failed(self) -> None:
+        """A picture that cannot be built would leave the last one up looking current: draw the braille map instead."""
+        self._building = None
+        self._sixel = False
+        self._on_terminal = None
+        self.refresh()
 
     def _built(self, scene: Scene, data: str) -> None:
         self._images[scene] = data
         while len(self._images) > IMAGE_CACHE:
             self._images.popitem(last=False)
         self._building = None
+        if not self.app.is_running:  # stopping: the terminal is the shell's again, nothing may be drawn on it
+            return
         self._start_build()  # the cursor moved on while this one was being drawn: build what is wanted now
         if scene == self._scene:
             if self._overwrite():
@@ -838,11 +859,13 @@ class MapPanel(Widget, can_focus=True):
         empty frame between the two pictures (a pan, a zoom, a marker pulse). False, and nothing written, when there is
         no untouched picture on the terminal to go over."""
         driver = getattr(self.app, "_driver", None)
-        if driver is None or self._on_terminal is None or self._stale:
+        if driver is None or not self.app.is_running or self._on_terminal is None or self._stale:
             return False
         driver.write("[?2026h")
-        self.emit_image(driver.write)
-        driver.write("[?2026l")
+        try:
+            self.emit_image(driver.write)
+        finally:  # an unclosed synchronized update freezes the terminal's display
+            driver.write("[?2026l")
         return self._on_terminal == self._scene and not self._stale
 
     def invalidate_image(self) -> None:
@@ -873,7 +896,7 @@ class MapPanel(Widget, can_focus=True):
         top (the modal's repaint has erased it and it must not draw over the dialog), nothing while the map is hidden,
         and nothing when the picture on the terminal is the wanted one and untouched.
         """
-        if not self._sixel:
+        if not self._sixel or not self.app.is_running:
             return
         try:
             on_top = self.app.screen is self.screen
@@ -896,18 +919,11 @@ class MapPanel(Widget, can_focus=True):
             return
         if (region.width, region.height) != (self.model.cols, self.model.rows):
             return  # the model has not seen the new size yet; the resize that follows repaints
-        try:
-            self._images.move_to_end(scene)
-            write(f"\x1b7\x1b[{region.y + 1};{region.x + 1}H")
-            for start in range(0, len(data), WRITE_CHUNK):
-                write(data[start : start + WRITE_CHUNK])
-            write("\x1b8")
-        except Exception as exc:  # a terminal that takes the image badly gets the braille map instead
-            log.warning("sixel output failed (%r); falling back to braille", exc)
-            self._sixel = False
-            self._on_terminal = None
-            self.refresh()
-            return
+        self._images.move_to_end(scene)
+        write(f"\x1b7\x1b[{region.y + 1};{region.x + 1}H")
+        for start in range(0, len(data), WRITE_CHUNK):
+            write(data[start : start + WRITE_CHUNK])
+        write("\x1b8")
         self._on_terminal = scene
         self._stale = False
 
@@ -927,9 +943,10 @@ class MapPanel(Widget, can_focus=True):
             # the panel's own background (what the sea is drawn on), not the screen's, so the text and its padding match
             base = Style(color=self.rich_style.color, bgcolor=self.background_colors[1].rich_color)
             legend: list[Segment] = []
-            for mag, label in LEGEND:
+            # single spaces between entries: 47 cells, not 52, so `7+` clears the border of a 52-wide panel
+            for i, (mag, label) in enumerate(LEGEND):
                 legend.append(Segment(marks[marker_band(mag)] + " ", base + Style.parse(mag_color(mag))))
-                legend.append(Segment(label + "  ", base))
+                legend.append(Segment(label + (" " if i < len(LEGEND) - 1 else ""), base))
             lines = [legend]
             for quake in sorted(self.model.quakes, key=lambda q: -q.mag)[: spare - 1]:
                 age = fmt_age((now - quake.time).total_seconds())

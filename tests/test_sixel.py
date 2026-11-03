@@ -109,6 +109,13 @@ def test_parse_rejects_absurd_cell_sizes():
     assert reply is not None and reply.cell is None
 
 
+def test_parse_oversized_numbers_are_a_bad_reply_not_a_crash():
+    huge = "9" * 5000  # int() of this raises ValueError past 4300 digits
+    for reply in (f"\x1b[6;{huge};{huge}t\x1b[?4c", f"\x1b[4;{huge};{huge}t\x1b[?4c"):
+        parsed = parse_reply(reply, 120, 30)
+        assert parsed is not None and parsed.sixel and parsed.cell is None
+
+
 # --- the auto decision table ------------------------------------------------------------------------------------
 
 
@@ -257,11 +264,19 @@ async def test_toast_over_the_image_gets_a_hole_in_the_picture():
         app.notify("hello", title="toast", timeout=30)
         await wait_for(lambda: app.screen.query("Toast"))
         writes: list[str] = []
-        panel._stale = True
-        panel.emit_image(
-            writes.append
-        )  # the overlay hook of the real app: it sees the toast and holds the picture back
-        assert writes == [] and panel._holes
+        # the overlay is not driven in a headless run, so call it as the app would; the toast may not have been laid
+        # out yet, so ask again until it has a region over the image. The picture with the hole cannot be encoded
+        # before the first call that sees the toast, so nothing is written
+        wrote: list[int] = []
+
+        def overlay() -> tuple[int, ...]:
+            before = len(writes)
+            panel.emit_image(writes.append)
+            wrote.append(len(writes) - before)
+            return panel._holes
+
+        await wait_for(overlay)
+        assert wrote[-1] == 0  # the call that saw the toast wrote nothing: the holed picture is still being built
         await wait_for(lambda: panel._scene.holes == panel._holes)
         await wait_for(lambda: panel._scene in panel._images)
         data = panel._images[panel._scene]
@@ -284,21 +299,93 @@ async def test_toast_over_the_image_gets_a_hole_in_the_picture():
         assert panel._on_terminal == panel._scene
 
 
-async def test_write_failure_falls_back_to_braille():
+async def test_failed_build_is_logged_and_falls_back_to_braille(monkeypatch, caplog):
+    from earthwave.ui.widgets import map_panel
+
+    def broken(_scene):
+        raise MemoryError("too big")
+
+    monkeypatch.setattr(map_panel, "render_smooth", broken)
     app = week_app(graphics=SIXEL)
     async with app.run_test(size=(160, 40)) as pilot:
         panel = app.screen.query_one(MapPanel)
-        await wait_for(lambda: panel._images)
+        await wait_for(lambda: panel.renderer == "braille")
         await pilot.pause()
+        assert panel._building is None
+        assert "sixel build failed" in caplog.text
 
-        def broken(_data: str) -> None:
-            raise OSError("pipe closed")
 
+async def test_no_picture_is_written_once_the_app_is_stopping():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await pilot.pause()
         panel._stale = True
-        panel.emit_image(broken)
-        assert panel.renderer == "braille"
+        writes: list[str] = []
+        app._running = False  # what App._shutdown does before the driver leaves application mode
+        try:
+            panel.emit_image(writes.append)
+            panel._on_terminal, panel._stale = panel._scene, False
+            driver_writes: list[str] = []
+            app._driver.write = driver_writes.append
+            panel._built(panel._scene, "x")
+            assert panel._overwrite() is False
+            assert writes == [] and driver_writes == []
+        finally:
+            app._running = True
+
+
+async def test_sync_bracket_is_closed_when_an_overlay_raises():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert panel.model is not None
+        ended = []
+        app._overlays.append(lambda _write: (_ for _ in ()).throw(RuntimeError("overlay")))
+        real = type(app).__mro__[1]._end_update
+        type(app).__mro__[1]._end_update = lambda self: ended.append(1)
+        try:
+            with pytest.raises(RuntimeError):
+                app._end_update()
+        finally:
+            type(app).__mro__[1]._end_update = real
+            app._overlays.pop()
+        assert ended
+
+
+async def test_overwrite_closes_its_sync_bracket_when_the_write_raises():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await wait_for(lambda: panel._scene is not None and panel._scene in panel._images)
+        await settle(app, panel)
+        await pilot.pause()
+        panel._on_terminal, panel._stale = "an older picture", False  # something untouched to go over
+        writes: list[str] = []
+
+        def record(text: str) -> None:
+            writes.append(text)
+            if len(writes) == 3:  # inside the picture
+                raise OSError("pipe closed")
+
+        app._driver.write = record
+        with pytest.raises(OSError):
+            panel._overwrite()
+        assert writes[0] == "\x1b[?2026h" and writes[-1] == "\x1b[?2026l"
+
+
+async def test_focusing_the_map_says_the_arrows_pan():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(160, 40)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await pilot.pause()
+        assert not panel.border_subtitle
+        panel.focus()
+        await pilot.pause()
+        assert "pan" in str(panel.border_subtitle)
+        app.screen.query_one("#quakes").focus()
+        await pilot.pause()
+        assert not panel.border_subtitle
 
 
 async def test_sixel_overlay_registered_with_the_app():
@@ -591,3 +678,13 @@ async def test_switching_between_cached_pictures_does_not_repaint_the_cells_unde
         assert panel._scene != wanted and panel._on_terminal == panel._scene
         assert any("\x1bP" in w for w in writes)  # the new picture went out
         assert not any(a == () for a in calls)  # and no repaint of the whole panel came with it
+
+
+async def test_legend_clears_the_right_border_at_120x30():
+    app = week_app(graphics=SIXEL)
+    async with app.run_test(size=(120, 30)) as pilot:
+        panel = app.screen.query_one(MapPanel)
+        await pilot.pause()
+        legend = panel._spare_strips()[0].text
+        assert legend.rstrip().endswith("7+")
+        assert len(legend.rstrip()) <= panel.size.width - 2  # a cell of air before the border
