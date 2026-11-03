@@ -63,14 +63,15 @@ LEVEL_COLORS = {
 # Surfaces that carry a level (banner, status bar, panel border) take their colour from the same constants, as these
 # variables for app.tcss (EarthwaveApp.get_css_variables adds them): the bare name is the pulsing border and the banner
 # (black text), -dim the calm border and status-bar ground (white text). Each level darkens by its own amount, chosen so
-# all five dim colours stay tellable apart under protanopia and deuteranopia (tests/test_cvd_palette.py): a uniform step
-# merges Warning with Advisory, and Threat with Information.
+# all five dim colours stay tellable apart under protanopia and deuteranopia (tests/test_cvd_palette.py) while Warning
+# stays the loudest ground (issues #152, #192): the brightest and most saturated, the others deep enough for white text.
+# A uniform step merges Warning with Advisory, and Threat with Information.
 LEVEL_SURFACES = {
-    "warning": (RED, 0.65),
-    "advisory": (ORANGE, 0.4),
-    "watch": (YELLOW, 0.4),
-    "threat": (THREAT_BLUE, 0.65),
-    "info": (INFO_VIOLET, 0.5),
+    "warning": (RED, 0.05),
+    "advisory": (ORANGE, 0.6),
+    "watch": (YELLOW, 0.6),
+    "threat": (THREAT_BLUE, 0.35),
+    "info": (INFO_VIOLET, 0.25),
 }
 
 

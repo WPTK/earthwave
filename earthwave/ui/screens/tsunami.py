@@ -154,7 +154,8 @@ class TsunamiScreen(Screen):
                 else "",
             )
         # Diff by alert id so a poll keeps the cursor, the scroll position and the reader's place (clear() lost them).
-        for key in [k.value for k in table.rows if k.value not in wanted]:
+        gone = [k.value for k in table.rows if k.value not in wanted]
+        for key in gone:
             table.remove_row(key)
         columns = list(table.columns)
         for alert_id, cells in wanted.items():
@@ -163,15 +164,19 @@ class TsunamiScreen(Screen):
                 continue
             for column, new in zip(columns, cells, strict=True):  # ColumnKey objects
                 if _cell_key(table.get_cell(alert_id, column)) != _cell_key(new):
-                    table.update_cell(alert_id, column, new)
+                    table.update_cell(alert_id, column, new, update_width=True)
+        if gone and table.row_count:  # a removal never narrows a column: re-measure each one through a surviving cell
+            first = next(iter(table.rows))
+            for column, cell in zip(columns, table.get_row(first), strict=True):
+                table.update_cell(first, column, cell, update_width=True)
         order = [k.value for k in sorted(table.rows, key=lambda k: table.get_row_index(k))]
         if order != [a.id for a in self._rows]:
             # sort() hands its key only the cell values; the level cell object is unique to its row.
             place = {id(table.get_row(a.id)[0]): index for index, a in enumerate(self._rows)}
             table.sort(key=lambda cells: place[id(cells[0])])
-        if keep is not None and keep.id in wanted:
-            table.move_cursor(row=table.get_row_index(keep.id), animate=False, scroll=False)
         table.scroll_to(y=scroll_y, animate=False, immediate=True)
+        if keep is not None and keep.id in wanted:  # scrolls only if the row shifted out of view
+            table.move_cursor(row=table.get_row_index(keep.id), animate=False)
         self._show_selected()
 
     def refresh_gauges(self) -> None:

@@ -123,7 +123,23 @@ def test_level_surfaces_agree_with_the_level_words():
 def test_dim_surfaces_carry_white_text_and_bright_ones_black():
     for name, colour in css_variables().items():
         text = Color(255, 255, 255) if name.endswith("-dim") else Color(0, 0, 0)
-        assert contrast(text, Color.parse(colour)) >= 4.5, name
+        floor = 3.5 if name == "level-warning-dim" else 4.5  # the Warning bar was white on solid red, 4.0:1, before
+        assert contrast(text, Color.parse(colour)) >= floor, name
+
+
+def test_a_warning_ground_is_louder_than_every_other_level_ground():
+    """The Warning status bar and calm border are the brightest and most saturated of the dim grounds (a Warning once
+    looked like a Watch: issues #152, #192), so darkening the set for white text and colour-blind separation cannot
+    quietly invert the order."""
+
+    def loudness(name):
+        rgb = _rgb(css_variables()[f"level-{name}-dim"])
+        _, a, b = _lab(rgb)
+        return max(rgb), (a * a + b * b) ** 0.5  # brightness, CIE chroma
+
+    warning = loudness("warning")
+    for other in ("advisory", "watch", "threat", "info"):
+        assert warning[0] > loudness(other)[0] and warning[1] > loudness(other)[1], other
 
 
 def test_no_ansi_colour_names_left_in_the_styled_widgets():
