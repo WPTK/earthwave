@@ -47,7 +47,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2025
             name: windows-x86_64
             exe: earthwave.exe
           - os: ubuntu-22.04  # the oldest glibc we can build on: the binary runs on glibc 2.35 and newer

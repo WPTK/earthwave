@@ -45,6 +45,10 @@ Each release lists them under [Releases](https://github.com/WPTK/earthwave/relea
   unpacked and installed the same way (`~/.local/bin` is not on the macOS `PATH` by default; add it, or use
   `/usr/local/bin`). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
 
+Windows: CI runs the tests on GitHub's `windows-2022` and `windows-2025` runners (Windows Server images, used as
+stand-ins for the console), and the release exe is built on `windows-2025`. Separately from CI, the app is used by hand
+on Windows 11 in Windows Terminal. Older Windows versions and the legacy console host are not tested.
+
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
 download against `SHA256SUMS` from the same release.
 
@@ -72,6 +76,18 @@ earthwave --record session.jsonl       # save every request ...
 earthwave --replay session.jsonl       # ... and play it back later
 earthwave --help                       # everything else
 ```
+
+`--home` applies to that run only. To keep a home, put it in the config file (its path is under "Where files live"):
+
+```toml
+[home]
+name = "New York"
+lat = 40.7
+lon = -74.0
+```
+
+Setting the home from inside the app is not supported yet. A mistake in the config file is reported with the section
+and key it is in, and every mistake is listed at once.
 
 The rest of the flags:
 
@@ -103,7 +119,8 @@ Use a terminal at least 100 columns wide and 30 rows tall; below that the app as
 On a terminal that supports sixel graphics (Windows Terminal 1.22 or later, foot, WezTerm, xterm with sixel) the map is
 drawn at pixel resolution. `map_renderer` under `[view]` in the config file is `auto` by default: sixel when the terminal
 reports it, braille otherwise (also under `NO_COLOR`, `TERM=dumb`, tmux or screen, a pipe, or a terminal that does not
-answer). `braille` or `sixel` forces either.
+answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE_MAP_RENDERER` (`auto`, `braille` or
+`sixel`) does the same for one run and wins over the config file.
 
 ## Keys
 
@@ -134,6 +151,9 @@ quakes and new alerts can also raise a desktop notification and a terminal bell.
   tide gauges
 - [Japan Meteorological Agency](https://www.jma.go.jp/) tsunami information, used with attribution
 - [Natural Earth](https://www.naturalearthdata.com/) coastlines and land polygons, public domain
+
+Requests honour the standard proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) and, on Windows, the system proxy
+setting.
 
 earthwave identifies itself to every feed, asks whether a copy has changed instead of downloading it again, and backs
 off when a feed says to.

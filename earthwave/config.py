@@ -3,6 +3,7 @@
 import dataclasses
 import logging
 import math
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -198,25 +199,70 @@ def _coerce(section: str, key: str, value: Any, default: Any) -> Any:
 
 
 def parse_config(data: dict[str, Any]) -> Config:
-    """Build a Config from parsed TOML; unknown keys and bad values raise ConfigError (a typo must not pass quietly)."""
+    """Build a Config from parsed TOML; unknown keys and bad values raise ConfigError (a typo must not pass quietly).
+    Every problem is collected, so one run shows them all, each naming its [section] key."""
     sections: dict[str, Any] = {}
+    problems: list[str] = []
     for fld in dataclasses.fields(Config):
         cls = type(getattr(Config(), fld.name))
         raw = data.get(fld.name, {})
         if not isinstance(raw, dict):
-            raise ConfigError(f"[{fld.name}] must be a table")
+            problems.append(f"[{fld.name}] must be a table")
+            continue
         defaults = cls()
         known = {f.name for f in dataclasses.fields(cls)}
         values = {}
         for key, value in raw.items():
             if key not in known:
-                raise ConfigError(f"unknown key [{fld.name}] {key}")
-            values[key] = _coerce(fld.name, key, value, getattr(defaults, key))
+                problems.append(f"unknown key [{fld.name}] {key}")
+                continue
+            try:
+                values[key] = _coerce(fld.name, key, value, getattr(defaults, key))
+            except ConfigError as exc:
+                problems.append(str(exc))
         sections[fld.name] = cls(**values)
-    for key in data:
-        if key not in sections:
-            raise ConfigError(f"unknown section [{key}]")
+    problems += [f"unknown section [{key}]" for key in data if key not in _SECTION_NAMES]
+    if problems:
+        raise ConfigError(_join(problems))
     return Config(**sections)
+
+
+_SECTION_NAMES = {f.name for f in dataclasses.fields(Config)}
+_SYNTAX_AT = re.compile(r"\(at line (\d+), column \d+\)")
+_KEY_LINE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$")
+_HEADER = re.compile(r"^\s*\[([^\[\]]+)\]\s*(#.*)?$")
+_MULTILINE_OPENERS = ("[", "{", '"""', "'''")
+
+
+def _join(problems: list[str]) -> str:
+    return problems[0] if len(problems) == 1 else f"{len(problems)} problems:\n  " + "\n  ".join(problems)
+
+
+def _syntax_problems(text: str, exc: tomllib.TOMLDecodeError) -> list[str]:
+    """TOML parsing stops at the first error. Each `key = value` line is therefore tried on its own, which finds the
+    other bad values and names their keys; failing that, the parser's own position and the line it points at."""
+    lines = text.splitlines()
+    section, found = "", []
+    for number, line in enumerate(lines, start=1):
+        if header := _HEADER.match(line):
+            section = header.group(1)
+            continue
+        match = _KEY_LINE.match(line)
+        if not match or match.group(2).startswith(_MULTILINE_OPENERS):
+            continue  # multi-line values cannot be judged one line at a time
+        try:
+            tomllib.loads(line)
+        except tomllib.TOMLDecodeError as inner:
+            where = f"[{section}] {match.group(1)}" if section else match.group(1)
+            found.append(f"line {number}: {where}: {str(inner).split(' (at')[0].lower()}: {match.group(2)!r}")
+    if found:
+        return found
+    at = _SYNTAX_AT.search(str(exc))
+    if not at:
+        return [str(exc)]
+    number = int(at.group(1))
+    shown = f": {lines[number - 1].strip()!r}" if 0 < number <= len(lines) else ""
+    return [f"line {number}: {str(exc).split(' (at')[0].lower()}{shown}"]
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -233,8 +279,11 @@ def load_config(path: Path | None = None) -> Config:
             raise ConfigError(f"{path}: cannot write the first-run template: {exc}") from exc
         log.info("config: wrote first-run template to %s", path)
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        text = path.read_text(encoding="utf-8-sig")
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path}: {_join(_syntax_problems(text, exc))}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     try:
         return parse_config(data)

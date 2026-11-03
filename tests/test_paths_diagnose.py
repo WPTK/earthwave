@@ -70,7 +70,7 @@ def test_diagnose_reports_paths_and_feeds_without_secrets(tmp_path, monkeypatch)
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503 if "jma.go.jp" in request.url.host else 200)
 
-    text = report(client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    text = report(client_factory=lambda proxy: httpx.Client(transport=httpx.MockTransport(handler)))
     assert "earthwave  " in text and "TERM=xterm-256color" in text
     assert "from EARTHWAVE_DATA_DIR" in text
     assert "hunter2" not in text and "SECRET_TOKEN" not in text
@@ -82,7 +82,7 @@ def test_diagnose_reports_a_feed_failure_as_text(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route", request=request)
 
-    text = report(client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    text = report(client_factory=lambda proxy: httpx.Client(transport=httpx.MockTransport(handler)))
     assert text.count("FAILED: ConnectError") == len(FEEDS)
 
 
@@ -173,7 +173,34 @@ def test_the_terminal_line_is_redacted(monkeypatch):
 
 
 def test_diagnose_reports_instead_of_crashing_on_a_bad_proxy(monkeypatch):
-    def broken():
+    def broken(proxy):
         raise ValueError("Unknown scheme for proxy URL")
 
     assert "not checked: ValueError" in report(client_factory=broken)
+
+
+def test_diagnose_shows_the_proxy_it_uses_without_the_password(monkeypatch, caplog):
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:secret@proxy.example:3128")
+    used = []
+
+    def factory(proxy):
+        used.append(proxy)
+        return httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+
+    with caplog.at_level("DEBUG"):
+        text = report(client_factory=factory)
+    assert "secret" not in text and "secret" not in caplog.text
+    assert "via http://user:***@proxy.example:3128" in text
+    assert used and all(p == "http://user:secret@proxy.example:3128" for p in used)
+
+
+def test_diagnose_ignores_a_malformed_proxy_like_the_app_does(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "proxy:3128")
+    seen = []
+
+    def factory(proxy):
+        seen.append(proxy)
+        return httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+
+    text = report(client_factory=factory)
+    assert set(seen) == {None} and " via " not in text
