@@ -54,7 +54,14 @@ def _simulate(rgb, kind):
 
 def _worst_pair(colours, kind):
     return min(
-        (sum((p - q) ** 2 for p, q in zip(_lab(_simulate(colours[a], kind)), _lab(_simulate(colours[b], kind)), strict=True)) ** 0.5, f"{a} vs {b}")
+        (
+            sum(
+                (p - q) ** 2
+                for p, q in zip(_lab(_simulate(colours[a], kind)), _lab(_simulate(colours[b], kind)), strict=True)
+            )
+            ** 0.5,
+            f"{a} vs {b}",
+        )
         for a, b in combinations(colours, 2)
     )
 
@@ -72,8 +79,11 @@ def test_green_and_yellow_survive_red_green_colour_blindness(kind):
         assert delta >= 20, (name, pair, delta)
 
 
-def test_threat_and_information_have_distinct_colours():
-    assert LEVEL_COLORS["THREAT"] != LEVEL_COLORS["INFORMATION"]
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_every_tsunami_level_is_told_apart_by_colour_blind_readers(kind):
+    levels = {name: _truecolor(style) for name, style in LEVEL_COLORS.items()}
+    delta, pair = _worst_pair(levels, kind)
+    assert delta >= 20, (pair, delta)
 
 
 def test_status_colours_read_on_the_dark_ground():

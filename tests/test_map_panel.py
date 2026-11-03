@@ -14,9 +14,9 @@ from earthwave.clock import ReplayClock
 from earthwave.config import HomeConfig
 from earthwave.notify.inapp import FLASH_NEW, AttentionTracker
 from earthwave.sources.usgs import parse_collection
-from earthwave.ui.theme import ORANGE
 from earthwave.state.events import QuakeNew
 from earthwave.ui.glyphs import ASCII, UNICODE
+from earthwave.ui.theme import ORANGE
 from earthwave.ui.widgets.braille import WORLD, Viewport, coastline_canvas, project_cell, warm_coastline
 from earthwave.ui.widgets.map_panel import (
     ASCII_MARKERS,
