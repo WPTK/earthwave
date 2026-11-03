@@ -77,15 +77,21 @@ class ReplyFilter:
     holds a run of keys that could be the start of a reply (`ESC [ ? 61 ; 4 c`, `ESC [ 6 ; h ; w t`) and
     decides on each key: a complete reply is consumed; anything that stops looking like one is handed back to be typed,
     in order, so a plain `[`, `^` or digit the user types is never lost. A run of keys that never finishes is handed
-    back by `flush` (a lone Escape is a real Escape).
+    back by `flush` (a lone Escape is a real Escape), except a run that is plainly the front of a reply (`ESC [ ?`,
+    `[ 6 ;`): a terminal or host that stalls mid-reply must not type its `?` (Help) or its `t` (Tsunami), so the front
+    is dropped and the tail that follows within `TAIL_SECONDS` is dropped with it (#270).
 
     Tokens are `(key, character)` pairs. `push` returns (released tokens, cell size when the reply gave one).
     """
 
-    __slots__ = ("held", "hold_escape")
+    __slots__ = ("held", "hold_escape", "tail_until")
+
+    TAIL_SECONDS = 2.0
 
     # also the mode reports Textual asks for itself at startup (`CSI ? 2026 $ p` -> `CSI ? 2026 ; 2 $ y`)
     _PARTIAL = re.compile(r"(?:\x1b|\^)?(?:\[\??[\d;]{0,48}\$?)?")
+    _FRONT = re.compile(r"(?:\x1b|\^)?\[\??[\d;]*\$?")
+    _TAIL = re.compile(r"[\d;$ytcu]")
     _DONE = re.compile(r"(?:\x1b|\^)?\[\??((?:\d{1,5})(?:;\d{1,5}){0,15}|)([tc]|\$y)")
 
     def __init__(self, hold_escape: bool = True) -> None:
@@ -94,6 +100,7 @@ class ReplyFilter:
         the rest of a sequence) is still caught from its `[`."""
         self.held: list[tuple[str, str]] = []
         self.hold_escape = hold_escape
+        self.tail_until = 0.0
 
     @staticmethod
     def _char(token: tuple[str, str]) -> str:
@@ -103,6 +110,10 @@ class ReplyFilter:
     def push(self, token: tuple[str, str]) -> tuple[list[tuple[str, str]], tuple[int, int] | None]:
         if not self.hold_escape and not self.held and token[0] == "escape":
             return [token], None
+        if time.monotonic() < self.tail_until:  # the rest of a reply whose front was dropped
+            if token[1] and self._TAIL.fullmatch(token[1]):
+                return [], None
+            self.tail_until = 0.0
         self.held.append(token)
         if any(not self._char(t) for t in self.held):  # arrows, F-keys: a key with no character is never a reply
             released, self.held = self.held, []
@@ -121,6 +132,10 @@ class ReplyFilter:
 
     def flush(self) -> list[tuple[str, str]]:
         released, self.held = self.held, []
+        text = "".join(self._char(t) for t in released)
+        if self._FRONT.fullmatch(text) and ("?" in text or ";" in text or text[0] == chr(27)):
+            self.tail_until = time.monotonic() + self.TAIL_SECONDS
+            return []
         return released
 
 

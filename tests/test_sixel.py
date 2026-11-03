@@ -432,7 +432,7 @@ def test_reply_filter_swallows_every_answer_we_ask_for(text):
     assert released == [] and cell is None
 
 
-@pytest.mark.parametrize("typed", ["[", "^", "[5", "[5;", "^[", "[5x", "[?", "5", "t", "?", "^5t", "[99999999999t"])
+@pytest.mark.parametrize("typed", ["[", "^", "[5", "^[", "[5x", "5", "t", "?", "^5t", "[99999999999t"])
 def test_reply_filter_gives_plain_keys_back_in_order(typed):
     from earthwave.ui.graphics.probe import ReplyFilter
 
@@ -440,6 +440,17 @@ def test_reply_filter_gives_plain_keys_back_in_order(typed):
     released, cell = run(reply, typed)
     released += reply.flush()  # the user stopped typing: whatever is still held is theirs
     assert [char for _, char in released] == list(typed) and cell is None
+
+
+@pytest.mark.parametrize("front", ["[?2026;2", "[6;24;12", "[?"])
+def test_reply_filter_drops_the_front_of_a_stalled_reply_and_its_tail(front):
+    from earthwave.ui.graphics.probe import ReplyFilter
+
+    reply = ReplyFilter()
+    run(reply, front)
+    assert reply.flush() == []  # nobody types `[ ?` or `[ 6 ;`: it is a reply that stalled
+    assert run(reply, "$yt")[0] == []  # and the tail that follows is dropped with it
+    assert run(reply, "x")[0] == [("x", "x")]  # anything else ends the tail
 
 
 def test_reply_filter_hands_a_lone_escape_back():
@@ -688,3 +699,16 @@ async def test_legend_clears_the_right_border_at_120x30():
         legend = panel._spare_strips()[0].text
         assert legend.rstrip().endswith("7+")
         assert len(legend.rstrip()) <= panel.size.width - 2  # a cell of air before the border
+
+
+@pytest.mark.parametrize("graphics", [None, SIXEL])
+async def test_reply_that_stalls_mid_sequence_still_never_opens_help(graphics):
+    """A slow terminal or a busy host (kitty under Xvfb in CI) can hold the tail of a reply back longer than the hold:
+    `ESC [ ? 2026 ; 2` is released as keys, and its `?` is Help (#270). During startup that fragment is dropped."""
+    app = week_app(graphics=graphics) if graphics else week_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        depth = len(app.screen_stack)
+        await late_reply(pilot, app, "\x1b[?2026;2", wait=0.4)  # longer than REPLY_HOLD
+        await late_reply(pilot, app, "$y")
+        assert len(app.screen_stack) == depth
