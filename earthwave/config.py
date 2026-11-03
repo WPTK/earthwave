@@ -1,9 +1,14 @@
 """TOML configuration: defaults, validation, platformdirs paths and the commented first-run template."""
 
+import contextlib
 import dataclasses
+import json
 import logging
 import math
+import os
 import re
+import shutil
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -296,9 +301,9 @@ def parse_home(text: str) -> tuple[float, float]:
         lat_s, lon_s = text.split(",")
         lat, lon = float(lat_s), float(lon_s)
     except ValueError as exc:
-        raise ConfigError(f"--home expects LAT,LON, got {text!r}") from exc
+        raise ConfigError(f"--home expects LAT,LON (the config's [home] lat and lon), got {text!r}") from exc
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        raise ConfigError(f"--home out of range: {text!r}")
+        raise ConfigError(f"--home out of range (the config's [home] lat is -90 to 90, lon -180 to 180): {text!r}")
     return lat, lon
 
 
@@ -308,6 +313,7 @@ def with_overrides(
     hours: float | None = None,
     home: tuple[float, float] | None = None,
     glyphs: str | None = None,
+    home_name: str | None = None,
 ) -> Config:
     """Apply command-line overrides; --home sets a coordinate pair and names it "home" if the config has no name."""
     view = config.view
@@ -323,5 +329,98 @@ def with_overrides(
         view = dataclasses.replace(view, glyphs=glyphs)
     home_cfg = config.home
     if home is not None:
-        home_cfg = dataclasses.replace(home_cfg, name=home_cfg.name or "home", lat=home[0], lon=home[1])
+        home_cfg = dataclasses.replace(home_cfg, name=home_name or home_cfg.name or "home", lat=home[0], lon=home[1])
     return dataclasses.replace(config, view=view, home=home_cfg)
+
+
+_HOME_HEADER = re.compile(r"^\s*\[\s*home\s*\]\s*(#.*)?$")
+_TABLE_START = re.compile(r"^\s*\[")
+_HOME_KEY = re.compile(r"^(\s*)(name|lat|lon)(\s*=\s*)(.*)$")
+
+
+def _value_end(rest: str) -> int:
+    """Where the value at the start of `rest` ends: after its closing quote for a string (a `#` inside is text), else
+    before the whitespace that leads a comment, else at the end."""
+    if rest[:1] in ('"', "'"):
+        quote, i = rest[0], 1
+        while i < len(rest):
+            if quote == '"' and rest[i] == "\\":
+                i += 2
+            elif rest[i] == quote:
+                return i + 1
+            else:
+                i += 1
+        return len(rest)
+    comment = re.search(r"\s*#", rest)
+    return comment.start() if comment else len(rest.rstrip())
+
+
+def save_home(path: Path, name: str, lat: float, lon: float) -> None:
+    """Write name, lat and lon into the [home] table of the config file, changing nothing else (comments, other keys,
+    other sections, the newline style and a BOM stay as they are). A missing table or key is added. The new text is
+    built and parsed in memory first and then swapped in with a temp file and os.replace, so on any failure the
+    original is untouched. A [home] written as an inline table, dotted keys or a quoted header is refused."""
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+    bom = text.startswith("﻿")
+    text = text.removeprefix("﻿")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    try:
+        before = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+    lines = re.split(r"\r?\n", text)
+    start = next((i for i, line in enumerate(lines) if _HOME_HEADER.match(line)), None)
+    if start is None and "home" in before:
+        raise ConfigError(
+            f"{path}: [home] is written as an inline table, dotted keys or a quoted header, which --save-home does "
+            "not edit; change name, lat and lon there by hand"
+        )
+    values = {"name": json.dumps(name, ensure_ascii=False), "lat": repr(float(lat)), "lon": repr(float(lon))}
+    if start is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += (["", "[home]"] if lines else ["[home]"]) + [f"{key} = {value}" for key, value in values.items()]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if _TABLE_START.match(lines[i])), len(lines))
+        pending = dict(values)
+        for i in range(start + 1, end):
+            match = _HOME_KEY.match(lines[i])
+            if not match or match.group(2) not in pending:
+                continue
+            rest = match.group(4)
+            key = match.group(2)
+            if rest.startswith(('"""', "'''")):
+                raise ConfigError(f"{path}: [home] {key} is a multi-line string; change it by hand")
+            lines[i] = f"{match.group(1)}{key}{match.group(3)}{pending.pop(key)}{rest[_value_end(rest) :]}"
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1  # before the blank lines that separate the next table
+        lines[insert:insert] = [f"{key} = {value}" for key, value in pending.items()]
+    if lines[-1].strip():
+        lines.append("")
+    new_text = newline.join(lines)
+    try:
+        after = tomllib.loads(new_text).get("home", {})
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(
+            f"{path}: saving the home would leave an invalid file ({exc}); change [home] by hand"
+        ) from exc
+    if (after.get("name"), after.get("lat"), after.get("lon")) != (name, float(lat), float(lon)):
+        raise ConfigError(f"{path}: could not set [home] cleanly; change it by hand")
+    payload = (("﻿" if bom else "") + new_text).encode("utf-8")
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+        with contextlib.suppress(OSError):
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except OSError as exc:
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise ConfigError(f"{path}: cannot save the home: {exc}") from exc
