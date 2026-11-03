@@ -920,7 +920,8 @@ def kam_app(**kwargs) -> EarthwaveApp:
     store = Store(config.alerts, config.home)
     store.merge(Batch("usgs", NOW, quakes=(kam_quake(),), backfill=True), clock)
     store.merge(Batch("tsunamigov", NOW, alerts=(kam(0), kam(1))), clock)
-    return EarthwaveApp(config, store=store, clock=clock, run_scheduler=False, ticks=False, **kwargs)
+    kwargs = {"run_scheduler": False, "ticks": False, **kwargs}
+    return EarthwaveApp(config, store=store, clock=clock, **kwargs)
 
 
 async def test_banner_panel_and_status_follow_the_alert():
