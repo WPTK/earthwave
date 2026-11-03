@@ -81,6 +81,8 @@ class QuakeList(ScrollView, can_focus=True):
         self._groups: dict[str, tuple[Earthquake, ...]] = {}  # mainshock id -> its aftershocks, while grouping
         self._children: dict[str, str] = {}  # aftershock id -> its mainshock id
         self._expanded: set[str] = set()  # mainshock ids whose aftershocks are listed
+        self._source: list[Earthquake] = []  # the rows as last set, before grouping
+        self._cache: tuple[frozenset, dict[str, tuple[Earthquake, ...]]] | None = None
 
     # --- data ---------------------------------------------------------------------------------------------------
 
@@ -88,6 +90,7 @@ class QuakeList(ScrollView, can_focus=True):
         """Replace the rows. The cursor stays on its quake and, if it was on screen, on the same screen line (kept
         visible after a reorder); a list scrolled to the top stays at the top. A cursor scrolled out of sight leaves
         the view anchored on its top row."""
+        self._source = rows
         rows = self._arrange(rows)
         selected, height, scroll = self.selected, max(self.size.height, 1), self.scroll_offset.y
         line = self.cursor - scroll if selected is not None and 0 <= self.cursor - scroll < height else None
@@ -111,20 +114,29 @@ class QuakeList(ScrollView, can_focus=True):
     def _arrange(self, rows: list[Earthquake]) -> list[Earthquake]:
         """With grouping on, the rows in their sort order minus the aftershocks, each mainshock followed by its
         aftershocks when expanded. A row never moves for being grouped except to sit under its mainshock."""
-        self._groups = group_by_mainshock(rows) if self.group else {}
+        self._groups = self._cluster(rows) if self.group else {}
         self._children = {q.id: main for main, quakes in self._groups.items() for q in quakes}
         self._expanded &= self._groups.keys()
         if not self._groups:
             return rows
-        by_main = {main: {q.id for q in quakes} for main, quakes in self._groups.items()}
+        kids: dict[str, list[Earthquake]] = {main: [] for main in self._expanded}
+        for q in rows:  # one pass; the children keep the sort order of `rows`
+            if (main := self._children.get(q.id)) in kids:
+                kids[main].append(q)
         out: list[Earthquake] = []
         for q in rows:
             if q.id in self._children:
                 continue
             out.append(q)
-            if q.id in self._expanded:
-                out += [r for r in rows if r.id in by_main[q.id]]
+            out += kids.get(q.id, ())
         return out
+
+    def _cluster(self, rows: list[Earthquake]) -> dict[str, tuple[Earthquake, ...]]:
+        """The clusters of `rows`, recomputed only when a quake that matters to them is new or has changed."""
+        key = frozenset((q.id, q.updated, q.mag, q.time, q.lat, q.lon) for q in rows)
+        if self._cache is None or self._cache[0] != key:
+            self._cache = (key, dict(group_by_mainshock(rows)))
+        return self._cache[1]
 
     def set_group(self, group: bool, rows: list[Earthquake]) -> None:
         self.group = group
@@ -140,27 +152,24 @@ class QuakeList(ScrollView, can_focus=True):
         if main not in self._groups:
             return
         self._expanded ^= {main}
-        self.set_rows(self._all_rows())
+        self.set_rows(self._source)
         index = next(i for i, q in enumerate(self.rows) if q.id == main) if quake.id in self._children else self.cursor
         self._move(index)
 
-    def _all_rows(self) -> list[Earthquake]:
-        """The rows before grouping, in their sort order: the shown rows plus every collapsed aftershock."""
-        shown = {q.id for q in self.rows}
-        hidden = [q for quakes in self._groups.values() for q in quakes if q.id not in shown]
-        return [*self.rows, *hidden] if hidden else list(self.rows)
+    @property
+    def total(self) -> int:
+        """How many quakes the view holds, folded aftershocks included."""
+        return len(self._source)
 
     @property
     def selected(self) -> Earthquake | None:
         return self.rows[self.cursor] if 0 <= self.cursor < len(self.rows) else None
 
     def visible_ids(self) -> set[str]:
+        """The quakes in sight. A folded aftershock is not: a new one stays unseen (and counted) until its group is
+        opened or acknowledged."""
         top = self.scroll_offset.y
-        shown = self.rows[top : top + self.size.height]
-        # a collapsed group's aftershocks are in sight under its mainshock's count, so they count as seen
-        return {q.id for q in shown} | {
-            a.id for q in shown if q.id not in self._expanded for a in self._groups.get(q.id, ())
-        }
+        return {q.id for q in self.rows[top : top + self.size.height]}
 
     def on_resize(self) -> None:
         self.virtual_size = Size(max(self.size.width, 1), len(self.rows))

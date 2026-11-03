@@ -201,7 +201,7 @@ class DashboardScreen(Screen):
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave
         if shown is None:
-            shown = len(self.query_one(QuakeList).rows)
+            shown = self.query_one(QuakeList).total
         _, actionable, _, state = self.tsunami_state()
         sched = app.scheduler
         lines = (
