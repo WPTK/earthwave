@@ -59,7 +59,7 @@ async def test_a_late_mode_report_does_not_open_help():
         assert isinstance(app.screen, HelpScreen)
 
 
-@pytest.mark.parametrize("key", ["enter", "up", "f1", "tab"])
+@pytest.mark.parametrize("key", ["up", "f1", "tab"])
 def test_keys_without_a_character_are_never_held(key):
     """They have no character, so they read as an empty string, which matches 'could still become a reply'."""
     assert ReplyFilter().push((key, "")) == ([(key, "")], None)

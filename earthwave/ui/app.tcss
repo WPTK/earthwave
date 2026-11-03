@@ -288,7 +288,7 @@ FiltersScreen, HelpScreen {
     background: $button-primary;
 }
 
-/* focus must not rest on colour alone (issue #253): reverse video and a marker on the label as well */
+/* focus must not rest on colour alone (issue #253): reverse video on the label as well */
 #buttons Button:focus {
     text-style: bold reverse;
 }

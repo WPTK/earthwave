@@ -24,7 +24,10 @@ if TYPE_CHECKING:
 
 
 def is_console_browser() -> bool:
-    """True when `webbrowser` would start a program that draws on this terminal and holds it until it exits."""
+    """True when `webbrowser` would start a program that draws on this terminal and holds it until it exits.
+
+    A custom GenericBrowser that launches a GUI (wslview, say) looks the same, so the app briefly suspends for it.
+    """
     try:
         browser = webbrowser.get()
     except webbrowser.Error:

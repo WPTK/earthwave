@@ -139,7 +139,7 @@ class QuakeList(ScrollView, can_focus=True):
             if not color:
                 return Segment(text, base)
             style = Style.parse(color)
-            if selected:  # a status colour tuned for the ground (ANSI red at 2.8:1 on the navy bar) is tinted to read
+            if selected and style.color is not None:  # a status colour tuned for the ground (ANSI red at 2.8:1 on the navy bar) is tinted to read
                 fg = style.color.get_truecolor(self.app.ansi_theme)
                 style += Style(color=lift(Color(fg.red, fg.green, fg.blue), ground_bg).rich_color)
             return Segment(text, base + style)

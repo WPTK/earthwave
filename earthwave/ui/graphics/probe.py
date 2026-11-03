@@ -104,7 +104,7 @@ class ReplyFilter:
         if not self.hold_escape and not self.held and token[0] == "escape":
             return [token], None
         self.held.append(token)
-        if any(not self._char(t) for t in self.held):  # Enter, an arrow, F1: a key with no character is never a reply
+        if any(not self._char(t) for t in self.held):  # arrows, F-keys: a key with no character is never a reply
             released, self.held = self.held, []
             return released, None
         text = "".join(self._char(t) for t in self.held)
