@@ -23,7 +23,8 @@ BACKOFF_CAP = 600.0
 BACKOFF_FLOOR = 30.0  # base delay for sources whose own interval is 0 (startup chain)
 FETCH_DEADLINE = 120.0  # one poll's fetch and merge, end to end: a server that trickles bytes cannot stall a source
 JITTER = 0.1
-STALE_FACTOR = 2.5
+STALE_FACTOR = 2.0  # a source is late after this many of its own intervals without a good poll ...
+STALE_AFTER = 120.0  # ... but never sooner than this many seconds (#321)
 TICK = 0.5  # longest the loop sleeps, so refresh requests and countdowns stay responsive
 
 
@@ -32,6 +33,15 @@ class Freshness(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
     ERROR = "error"
+
+
+class DataState(StrEnum):
+    """The one answer to "can I trust what is on screen": every feed fresh and complete, or not."""
+
+    LOADING = "LOADING"  # nothing has answered yet, and nothing has failed
+    LIVE = "LIVE"
+    STALE = "STALE"  # some feed is late, failing, or answering in part
+    OFFLINE = "OFFLINE"  # every feed is failing
 
 
 @dataclass(slots=True)
@@ -74,7 +84,7 @@ def backoff_delay(interval: float, failures: int, rng: random.Random) -> float:
 def freshness_of(health: SourceHealth, now: datetime, interval: float) -> Freshness:
     if health.last_ok is None:
         return Freshness.ERROR if health.failures else Freshness.LOADING
-    if (now - health.last_ok).total_seconds() > STALE_FACTOR * interval:
+    if (now - health.last_ok).total_seconds() > max(STALE_AFTER, STALE_FACTOR * interval):
         return Freshness.STALE
     return Freshness.ERROR if health.failures else Freshness.FRESH
 
@@ -108,6 +118,30 @@ class Scheduler:
     def age(self, name: str) -> float | None:
         last_ok = self.statuses[name].health.last_ok
         return None if last_ok is None else (self._clock.now() - last_ok).total_seconds()
+
+    def data_state(self) -> tuple[DataState, float | None]:
+        """(state, age in seconds of the data it speaks for) over every enabled feed, from the per-source health above.
+
+        LIVE only when each feed is fresh and complete. OFFLINE when each one has failed its last poll; the age is then
+        that of the newest good data anywhere. STALE is anything between, and its age is that of the oldest feed that
+        is not fine (None if one never answered), so a half-working set can never read as current.
+        """
+        names = list(self.statuses)
+        if not names:
+            return DataState.LOADING, None
+        fresh = {n: self.freshness(n) for n in names}
+        ages = {n: self.age(n) for n in names}
+        newest = min((a for a in ages.values() if a is not None), default=None)
+        if all(self.statuses[n].health.failures for n in names):
+            return DataState.OFFLINE, newest
+        if all(f is Freshness.LOADING for f in fresh.values()):
+            return DataState.LOADING, None
+        bad = [n for n in names if fresh[n] is not Freshness.FRESH or self.statuses[n].health.incomplete]
+        if not bad:
+            return DataState.LIVE, newest
+        if any(ages[n] is None for n in bad):
+            return DataState.STALE, None
+        return DataState.STALE, max(ages[n] for n in bad)  # type: ignore[type-var]
 
     def answered_since(self, name: str, when: datetime) -> bool:
         """True when a poll that skipped nothing began at or after `when`; an unknown source is never in doubt."""
