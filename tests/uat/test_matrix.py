@@ -131,8 +131,12 @@ def r_offline_vs_live(c: Ctx) -> str | None:
         return "offline but the screen talks about live feeds"
     if app.offline and c.screen == "dashboard" and "offline" not in c.status.lower():
         return "offline but the status bar does not say so"
-    if not app.offline and c.screen == "dashboard" and "offline" in c.status.lower():
-        return "status bar says offline in an online run"
+    if c.screen == "dashboard" and "offline" in c.status.lower().split("shown of")[0]:  # the chip, before the count
+        reported = app.scheduler_running and app.scheduler.data_state()[0].value == "OFFLINE"
+        if not (app.offline or reported):
+            return "OFFLINE chip with neither --offline nor a scheduler that reports it"
+    if not app.offline and c.screen == "dashboard" and "saved history" in c.status.lower():
+        return "status bar says it shows saved history in an online run"  # an OFFLINE chip is a real outage (#321)
     return None
 
 

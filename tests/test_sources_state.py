@@ -613,11 +613,11 @@ def test_freshness_states(clock):
     health.failures = 1
     assert freshness_of(health, clock.now(), 60) is Freshness.ERROR
     health.failures, health.last_ok = 0, T0
-    assert freshness_of(health, T0 + timedelta(seconds=149), 60) is Freshness.FRESH
-    assert freshness_of(health, T0 + timedelta(seconds=151), 60) is Freshness.STALE
+    assert freshness_of(health, T0 + timedelta(seconds=119), 60) is Freshness.FRESH
+    assert freshness_of(health, T0 + timedelta(seconds=121), 60) is Freshness.STALE
     health.failures = 2
     assert freshness_of(health, T0 + timedelta(seconds=100), 60) is Freshness.ERROR
-    assert freshness_of(health, T0 + timedelta(seconds=151), 60) is Freshness.STALE
+    assert freshness_of(health, T0 + timedelta(seconds=121), 60) is Freshness.STALE
 
 
 async def test_failure_backoff_recovery_and_isolation(clock):
@@ -680,7 +680,7 @@ async def test_stale_after_missed_polls(clock):
     sched = Scheduler([FakeSource([Batch("fake", T0)])], Store(), clock, lambda r: None)
     async with build_client() as client:
         await sched.poll_source("fake", client)
-    clock.advance(149)
+    clock.advance(119)
     assert sched.freshness("fake") is Freshness.FRESH
     clock.advance(2)
     assert sched.freshness("fake") is Freshness.STALE
