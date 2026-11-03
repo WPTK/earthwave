@@ -47,7 +47,7 @@ def encode(pixels: bytes, width: int, height: int, palette: Sequence[RGB]) -> st
 
     Every pixel is written (colour 0 included), so the image is opaque and the terminal background never shows
     through, except pixels equal to `HOLE`, which are left unpainted so what is under them (a toast) stays.
-    `height` need not be a multiple of 6; the last band is padded with blank rows.
+    `height` need not be a multiple of 6; the last band is padded with rows of palette index 0.
     """
     if len(pixels) != width * height:
         raise ValueError("pixel buffer does not match width x height")

@@ -202,10 +202,12 @@ class EarthwaveApp(App):
     def _end_update(self) -> None:
         """Textual brackets each screen update in a synchronized update; overlays draw inside it, so the cells and the
         image they sit on appear together."""
-        if self._driver is not None:
-            for emit in tuple(self._overlays):
-                emit(self._driver.write)
-        super()._end_update()
+        try:
+            if self._driver is not None:
+                for emit in tuple(self._overlays):
+                    emit(self._driver.write)
+        finally:  # the bracket Textual opened must be closed whatever an overlay did
+            super()._end_update()
 
     def _enabled_sources(self, config: Config) -> list[Source]:
         poll, enabled = config.poll, config.sources
