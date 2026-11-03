@@ -263,9 +263,6 @@ def worst_status() -> StatusInfo:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="#228 with an alert and a search active the status bar is cut before feed health"
-)
 def test_status_bar_keeps_feed_health_visible_at_100_columns():
     """The bar is one no_wrap line with an ellipsis, so whatever is past column 100 is invisible."""
     visible = build_status(worst_status(), UNICODE).plain[:99]
@@ -665,7 +662,6 @@ async def test_focus_returns_to_the_list_after_a_too_small_resize_round_trip():
         assert app.dashboard.query_one(QuakeList).cursor == 1
 
 
-@pytest.mark.xfail(strict=True, reason="#277 Escape does nothing in the full-screen map; only M leaves it")
 async def test_escape_leaves_the_fullscreen_map():
     from earthwave.ui.widgets.map_panel import MapPanel
 

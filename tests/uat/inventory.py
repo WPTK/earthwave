@@ -135,7 +135,7 @@ def shown_footer_bindings() -> set[str]:
                 if binding.show:
                     found.add(f"footer:{screen.__name__}:{norm(binding.key.split(',')[0])}")
     # the app's q is shown wherever no screen binding for q hides it
-    for screen in (DashboardScreen, DetailScreen, HistoryScreen):
+    for screen in (DashboardScreen, DetailScreen, HistoryScreen, ObservationsScreen, TsunamiScreen):
         found.add(f"footer:{screen.__name__}:q")
     return found
 

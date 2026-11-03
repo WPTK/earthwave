@@ -208,6 +208,6 @@ async def test_w5_quit_cleanly_from_every_screen(opener):
         screen = type(app.screen).__name__
         await pilot.press("q")
         await pilot.pause(0.5)
-        # q quits on the dashboard and detail; on tsunami, observations it is Back; in the dialogs it is typed or ignored.
-        quits = opener in ("", "enter", "h")
+        # q quits everywhere but the dialogs, where it is typed or ignored.
+        quits = opener in ("", "enter", "h", "t", "o")
         assert (app._exit or not app.is_running) is quits, f"q on {screen}: exited={app._exit}"
