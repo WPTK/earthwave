@@ -211,6 +211,7 @@ class DashboardScreen(Screen):
                 for name in sched.statuses
             )
         )
+        data_state, data_age = (None, None) if app.offline or not app.scheduler_running else sched.data_state()
         next_poll = (
             min((sched.next_poll_in(n) for n in sched.statuses), default=None) if app.scheduler_running else None
         )
@@ -227,6 +228,8 @@ class DashboardScreen(Screen):
                 alert_level=actionable[0].level if actionable else None,  # highest first
                 replay=app.replay,
                 offline=app.offline,
+                data_state=data_state,
+                data_age=data_age,
             )
         )
 
