@@ -216,8 +216,8 @@ async def test_detail_adds_nearby_cities(clock):
 # --- store ------------------------------------------------------------------------------------------------------
 
 
-def batch(*quakes, backfill=False, coverage=None, not_modified=False) -> Batch:
-    return Batch("usgs", T0, quakes=tuple(quakes), backfill=backfill, coverage=coverage, not_modified=not_modified)
+def batch(*quakes, backfill=False, coverage=None, not_modified=False, at=T0) -> Batch:
+    return Batch("usgs", at, quakes=tuple(quakes), backfill=backfill, coverage=coverage, not_modified=not_modified)
 
 
 def test_material_update_rules():
@@ -248,12 +248,12 @@ def test_cold_store_is_silent_then_warm_diffs_raise_events(clock):
 def test_update_events_and_stale_updates_ignored(clock):
     store = Store()
     store.merge(batch(make_quake("a", mag=4.0)), clock)
-    events = store.merge(batch(make_quake("a", mag=4.5, updated=T0 + timedelta(minutes=1))), clock)
+    events = store.merge(batch(make_quake("a", mag=4.5, updated=T0 + timedelta(minutes=1)), at=T0 + timedelta(minutes=1)), clock)
     assert len(events) == 1 and isinstance(events[0], QuakeUpdated) and events[0].changed == ("mag",)
     assert store.merge(batch(make_quake("a", mag=3.0, updated=T0)), clock) == []  # older revision
     assert store.get("a").mag == 4.5
     store.merge(
-        batch(make_quake("a", mag=4.55, updated=T0 + timedelta(minutes=2))), clock
+        batch(make_quake("a", mag=4.55, updated=T0 + timedelta(minutes=2)), at=T0 + timedelta(minutes=2)), clock
     )  # not material, still stored
     assert store.get("a").mag == 4.55
 

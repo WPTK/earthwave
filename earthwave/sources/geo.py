@@ -34,7 +34,8 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlmb = math.radians(lon_delta(lon1, lon2))
     y = math.sin(dlmb) * math.cos(p2)
     x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dlmb)
-    return math.degrees(math.atan2(y, x)) % 360.0
+    bearing = math.degrees(math.atan2(y, x)) % 360.0
+    return 0.0 if bearing >= 360.0 else bearing  # a tiny negative angle rounds up to 360.0 in the modulo
 
 
 def compass(bearing: float) -> str:

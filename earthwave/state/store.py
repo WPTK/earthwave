@@ -41,6 +41,7 @@ DEFAULT_TTL = timedelta(hours=12)  # an alert that states no expiry lapses this 
 
 
 GAUGE_SOURCES = frozenset({"dart", "coops"})  # their batches carry no quakes and never warm the quake store
+CLOCK_SKEW = timedelta(minutes=5)  # how far past now a gauge reading may be stamped
 GAUGE_KEEP = timedelta(hours=24)  # readings kept per station, measured back from the newest one
 GAUGE_MAX_ROWS = 4000  # 15-second event-mode data for 12 hours is 2880 rows
 GAUGE_FRESH = timedelta(minutes=30)  # the first look at a station only reports exceedances this recent
@@ -190,7 +191,10 @@ class Store:
             return []
         silent = batch.backfill or bool(batch.meta.get("silent")) or not self.warm
         events: list[Event] = []
+        ceiling = batch.generated or batch.fetched_at
         for quake in batch.quakes:
+            if quake.updated and ceiling and quake.updated > ceiling:
+                quake = replace(quake, updated=ceiling)  # a revision stamp from the future would freeze the quake
             known = self._known(quake)
             if not known and (kept := self._by_alias.get(quake.id)):  # a stale copy under an id USGS has replaced
                 events.append(QuakeRenamed(quake.id, self._quakes[kept]))
@@ -327,7 +331,10 @@ class Store:
         for station in batch.stations:
             self._gauge_stations[station.id] = station
         by_station: dict[str, list[GaugeReading]] = {}
+        latest = clock.now() + CLOCK_SKEW
         for reading in batch.readings:
+            if reading.ts > latest:
+                continue  # a bad sensor clock: it must not move the 24 h window and prune real history
             if self._gauge_selected is not None and reading.station_id not in self._gauge_selected:
                 continue  # a fetch that was in flight when the station left the selection
             by_station.setdefault(reading.station_id, []).append(reading)
@@ -749,9 +756,9 @@ class Store:
             if q.mag >= view.min_magnitude and q.time >= since and (not query or query in q.place.lower())
         ]
         if sort is SortKey.MAG:
-            rows.sort(key=lambda q: (-q.mag, -q.time.timestamp()))
+            rows.sort(key=lambda q: (-q.mag, -q.time.timestamp(), q.id))
         elif sort is SortKey.DIST and self._home.enabled:
-            rows.sort(key=lambda q: haversine_km(self._home.lat, self._home.lon, q.lat, q.lon))
+            rows.sort(key=lambda q: (haversine_km(self._home.lat, self._home.lon, q.lat, q.lon), q.id))
         else:
-            rows.sort(key=lambda q: -q.time.timestamp())
+            rows.sort(key=lambda q: (-q.time.timestamp(), q.id))
         return rows
