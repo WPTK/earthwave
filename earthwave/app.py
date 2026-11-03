@@ -98,6 +98,7 @@ class EarthwaveApp(App):
         offline: bool = False,
         history_error: str | None = None,
         graphics: GraphicsChoice | None = None,
+        replay: bool = False,
     ):
         super().__init__()
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
@@ -135,6 +136,7 @@ class EarthwaveApp(App):
         self._ticks = 0
         self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
         self.offline = offline
+        self.replay = replay  # the clock and feeds come from a recording: marked on screen, ages are not live
         self.history = history
         self.history_error = history_error  # why there is no history, when it was wanted
         self.scheduler_running = run_scheduler and not offline
@@ -164,6 +166,21 @@ class EarthwaveApp(App):
         self._driver.write("[16t")
 
     async def on_event(self, event: events.Event) -> None:
+        if (
+            isinstance(event, events.Key)
+            and not event.is_forwarded
+            and not self._startup_replies
+            and len(event.key) == 5
+            and event.key.startswith("alt+")
+            and event.key[4].isalnum()
+        ):
+            # Esc then a letter typed quickly arrives as one Alt-letter ( q); nothing here uses Alt, so it is two
+            # keys, the way the person pressed them (#256). The rule is global (whatever has focus, a search box or the
+            # filter dialog included), except while startup replies may still arrive: a late `ESC P ...` reply must not
+            # be taken for Esc and a letter.
+            await self.on_event(events.Key("escape", None))
+            await self.on_event(events.Key(event.key[4], event.key[4]))
+            return
         if (
             isinstance(event, events.Key)
             and not event.is_forwarded

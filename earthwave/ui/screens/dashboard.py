@@ -225,6 +225,7 @@ class DashboardScreen(Screen):
                 sort=app.sort.value,
                 alert_state=state,
                 alert_level=actionable[0].level if actionable else None,  # highest first
+                replay=app.replay,
                 offline=app.offline,
             )
         )
@@ -238,6 +239,7 @@ class DashboardScreen(Screen):
         app = self.earthwave
         app.sort = app.sort.next(app.config.home.enabled)
         self.refresh_view()
+        self.query_one(QuakeList).go_top()  # the head of the new order, not the old quake's row in it (#247)
 
     def action_search(self) -> None:
         box = self.query_one("#search", Input)
@@ -314,6 +316,9 @@ class DashboardScreen(Screen):
         if event.key == "escape" and box.display:
             event.stop()
             self._close_search("")
+        elif event.key == "escape" and self.has_class("map-full"):  # Help says Esc goes back (#277)
+            event.stop()
+            self.action_fullscreen_map()
 
     def _close_search(self, query: str) -> None:
         box = self.query_one("#search", Input)

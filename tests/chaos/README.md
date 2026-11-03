@@ -48,5 +48,5 @@ Reduced from the audit run (about 110 s) to keep CI fast: soak 40 days at a 10 m
 | `test_palettes_are_distinguishable_with_normal_vision`, `test_every_colour_coded_field_has_a_non_colour_cue_*`, `test_tsunami_flag_*`, `test_no_color_*` | colour is never the only cue | #293 (palette itself: `tests/test_cvd_palette.py`) |
 | `test_cursor_*`, `test_scrolled_away_view_*`, `test_idempotent_poll_*`, `test_selected_quake_dropping_out_*` | selection and scroll survive polls | #295 |
 | `test_dashboard_tab_*`, `test_open_search_box_*`, `test_escape_leaves_every_pushed_screen`, `test_tab_reaches_every_focusable_*`, `test_escape_inside_a_filter_input_*`, `test_focus_returns_*`, `test_hidden_map_*`, `test_detail_scroll_area_*` | Tab order and Esc on every screen | - |
-| `test_status_bar_keeps_feed_health_visible_at_100_columns` | **xfail**: with an alert and a search active the bar is cut before feed health | #228 |
-| `test_escape_leaves_the_fullscreen_map` | **xfail**: Esc does nothing in the full-screen map; only `M` leaves it | #277 |
+| `test_status_bar_keeps_feed_health_visible_at_100_columns` | with an alert and a search active the bar still shows feed health | #228 |
+| `test_escape_leaves_the_fullscreen_map` | Esc leaves the full-screen map | #277 |

@@ -370,7 +370,7 @@ async def test_refresh_inserting_above_keeps_cursor_and_scroll_on_the_same_quake
             assert quake_list.scroll_offset.y <= quake_list.cursor < quake_list.scroll_offset.y + quake_list.size.height
 
 
-async def test_sort_change_keeps_the_cursor_quake_on_screen():
+async def test_sort_change_starts_at_the_head_of_the_new_order():
     clock = ReplayClock(T0, real=lambda: 0.0)
     config = with_overrides(Config(), 0.0, 24, None, "unicode")
     store = Store(config.alerts, config.home)
@@ -384,11 +384,9 @@ async def test_sort_change_keeps_the_cursor_quake_on_screen():
         for _ in range(5):
             quake_list.action_cursor_down()
         assert quake_list.selected.id == "low" and quake_list.scroll_offset.y == 0
-        app.dashboard.action_sort()  # by magnitude: the cursor quake moves to the very bottom
+        app.dashboard.action_sort()  # by magnitude: the strongest is the point of sorting, so the view goes to it (#247)
         await pilot.pause()
-        top = quake_list.scroll_offset.y
-        assert quake_list.selected.id == "low" and quake_list.cursor == 39
-        assert top <= quake_list.cursor < top + quake_list.size.height
+        assert quake_list.selected.id == "q00" and quake_list.cursor == 0 and quake_list.scroll_offset.y == 0
 
 
 # --- quake list: clicks ---------------------------------------------------------------------

@@ -122,6 +122,8 @@ key(D, "r", Case(lambda b, a: a.notes > b.notes, "refresh now says what it did")
 key(D, "?", Case(screen_is("HelpScreen"), "opens help", press="question_mark"))
 key("EarthwaveApp", "q", Case(lambda b, a: a.exited, "quits from the dashboard"))
 key("EarthwaveApp", "q:history", Case(lambda b, a: a.exited, "quits from the history screen", open=("h",), press="q"))
+key("EarthwaveApp", "q:gauges", Case(lambda b, a: a.exited, "quits from the gauges screen", open=("o",), press="q"))
+key("EarthwaveApp", "q:tsunami", Case(lambda b, a: a.exited, "quits from the tsunami screen", open=("t",), press="q", app="kam"))
 key("EarthwaveApp", "q:detail", Case(lambda b, a: a.exited, "quits from the detail screen", open=("enter",), press="q"))
 
 L = "QuakeList"
@@ -157,11 +159,11 @@ key(HL, "left", Case(lambda b, a: a.day == b.day - timedelta(days=1), "shows the
 key(HL, "right", Case(lambda b, a: a.day == b.day + timedelta(days=1), "shows the next day", open=("h",), pre=("left",)))
 
 OBS = "ObservationsScreen"
-for k in ("escape", "o", "q"):
+for k in ("escape", "o"):
     key(OBS, k, Case(back_to_dashboard, "goes back to the dashboard", open=("o",)))
 
 T = "TsunamiScreen"
-for k in ("escape", "t", "q"):
+for k in ("escape", "t"):
     key(T, k, Case(back_to_dashboard, "goes back to the dashboard", open=("t",), app="kam"))
 key(T, "j", Case(lambda b, a: a.table_row == b.table_row + 1, "moves down the alert table", open=("t",), app="kam"))
 key(T, "k", Case(lambda b, a: a.table_row == b.table_row - 1, "moves up the alert table", open=("t",), pre=("j",), app="kam"))
@@ -292,7 +294,9 @@ FOOTER_CASE = {  # footer id -> key case id
     "footer:HistoryScreen:left": "key:HistoryList:left",
     "footer:HistoryScreen:right": "key:HistoryList:right",
     "footer:ObservationsScreen:escape": "key:ObservationsScreen:escape",
+    "footer:ObservationsScreen:q": "key:EarthwaveApp:q:gauges",
     "footer:TsunamiScreen:escape": "key:TsunamiScreen:escape",
+    "footer:TsunamiScreen:q": "key:EarthwaveApp:q:tsunami",
     "footer:TsunamiScreen:a": "key:TsunamiScreen:a",
 }
 
@@ -446,7 +450,6 @@ async def test_click_the_other_scroll_areas_focus_them(opener, area):
         assert app.focused is not None and app.focused.id == area
 
 
-@pytest.mark.xfail(strict=True, reason="#229: double-clicking a quake row does not open its detail")
 async def test_double_click_a_row_opens_detail():
     app = week_app(ticks=False, transport=mock_transport([]))
     async with app.run_test(size=SIZE) as pilot:

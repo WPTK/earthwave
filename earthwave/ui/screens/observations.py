@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class ObservationsScreen(Screen):
-    BINDINGS = [Binding("escape,o,q", "back", "Back")]
+    BINDINGS = [Binding("escape,o", "back", "Back")]
 
     def __init__(self, quake: Earthquake):
         super().__init__()
@@ -65,8 +65,15 @@ class ObservationsScreen(Screen):
             head.append("USGS has not flagged this quake for a tsunami; showing the stations already chosen.", "grey62")
         if gone:
             head.append(f"\n{GONE_NOTE}", YELLOW)
+        rows = app.gauge_rows()
+        if not rows:  # nothing to read: say how to get something (#278)
+            head.append(
+                "\nGauges are chosen for quakes USGS flags for a tsunami (marked in the FL column). "
+                "Press Esc and pick one of those, then o; t lists the tsunami alerts.",
+                "grey62",
+            )
         self.query_one("#observations_header", Static).update(head)
-        self.query_one(GaugeStrip).show(app.gauge_rows(), app.clock.now())
+        self.query_one(GaugeStrip).show(rows, app.clock.now())
 
     def action_back(self) -> None:
         self.earthwave.close_observations()

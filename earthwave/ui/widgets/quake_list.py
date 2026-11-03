@@ -186,6 +186,15 @@ class QuakeList(ScrollView, can_focus=True):
         self.post_message(self.Highlighted(quake))
         self.refresh()
 
+    def go_top(self) -> None:
+        """Cursor and view to the first row, without marking its quake seen (a new sort starts at its head, #247)."""
+        if not self.rows:
+            return
+        self.cursor = 0
+        self.scroll_to(y=0, animate=False, immediate=True)
+        self.post_message(self.Highlighted(self.rows[0]))
+        self.refresh()
+
     def action_cursor_down(self) -> None:
         self._move(self.cursor + 1)
 
@@ -211,3 +220,5 @@ class QuakeList(ScrollView, can_focus=True):
     def on_click(self, event: Click) -> None:
         if (index := self.scroll_offset.y + event.y) < len(self.rows):  # the empty area below the rows is not a row
             self._move(index)
+            if event.chain >= 2:  # a double-click opens the detail, as Enter does (#229)
+                self.action_select()
