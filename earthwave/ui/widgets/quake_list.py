@@ -17,7 +17,7 @@ from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_distance
-from earthwave.ui.theme import PAGER_COLORS, mag_color
+from earthwave.ui.theme import CYAN, PAGER_COLORS, mag_color
 
 AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 12, 2  # DIST_W fits "20015 km NNE", the longest distance on Earth
 CURSOR_BG = "#1e3a5f"
@@ -145,7 +145,7 @@ class QuakeList(ScrollView, can_focus=True):
         mag = max(-9.9, min(quake.mag, 99.9))  # the MAG column is four cells wide
         pager = quake.pager_alert[0].upper() if quake.pager_alert in PAGER_COLORS else " "  # G/Y/O/R: not colour alone
         segments = [
-            field(marker, "cyan"),
+            field(marker, CYAN),
             field(age, "grey62"),
             field(" "),
             field(f"{mag:{MAG_W}.1f}", mag_color(quake.mag)),

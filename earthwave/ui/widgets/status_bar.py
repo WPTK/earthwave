@@ -8,7 +8,7 @@ from textual.widgets import Static
 from earthwave.poll import Freshness
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_countdown
-from earthwave.ui.theme import FRESHNESS_COLORS, mark_level
+from earthwave.ui.theme import CYAN, FRESHNESS_COLORS, mark_level
 
 ALERT_STATES = ("info", "active", "alarm")
 FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
@@ -42,14 +42,14 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
         text.append(" TSUNAMI ", "bold reverse")
     text.append(f" {info.shown} shown of {info.total}", "white")
     text.append(f" {glyphs.bar} ", "grey42")
-    text.append(info.filter_text, "cyan")
+    text.append(info.filter_text, CYAN)
     text.append(f" sort:{info.sort}", "grey62")
     if info.next_poll is not None:
         text.append(f" {glyphs.bar} ", "grey42")
         text.append(f"next {fmt_countdown(info.next_poll)}", "grey62")
     if info.unseen:
         text.append(f" {glyphs.bar} ", "grey42")
-        text.append(f" {info.unseen} unseen ", "bold black on cyan")
+        text.append(f" {info.unseen} unseen ", f"bold black on {CYAN}")
     if info.offline:
         text.append(f" {glyphs.bar} ", "grey42")
         text.append("offline, showing saved history", "grey70")

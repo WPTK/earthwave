@@ -9,7 +9,7 @@ from textual.widgets import Static
 from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.ui.labels import fmt_age, fmt_time
-from earthwave.ui.theme import LEVEL_COLORS, YELLOW, mark_level
+from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, YELLOW, mark_level
 
 CANCELLED_SHOWN = timedelta(hours=6)  # how long the panel keeps saying an alert was cancelled
 
@@ -63,13 +63,13 @@ def build_panel(
         if not cancelled:
             return Text("No tsunami alerts in force", style="grey50")
         line = Text(cancelled, style="grey50")
-        line.highlight_words(["cancelled"], "green")  # the word that says it is over reads as resolved
+        line.highlight_words(["cancelled"], GREEN)  # the word that says it is over reads as resolved
         return line
     text = Text(no_wrap=True, overflow="ellipsis")
     for alert in alerts[:max_lines]:
         text.append(f"{alert.level:<11}", LEVEL_COLORS[alert.level])
         if alert.id in overdue:  # the status goes first: the headline is long and the end of the line is what is cut
-            text.append(" OVERDUE, awaiting follow-up", "bold red")
+            text.append(" OVERDUE, awaiting follow-up", f"bold {RED}")
         else:
             text.append(f" {fmt_until(expiry(alert), now)}", "grey62")
         text.append(f"  {alert.headline}\n", "white")
@@ -79,7 +79,7 @@ def build_panel(
         text.append("No tsunami alerts received\n", "grey50")  # not "in force": a feed is not answering in full
     if down:
         if unknown:
-            text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", "bold red")
+            text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", f"bold {RED}")
         else:
             text.append(f"Partial: {', '.join(down)}", YELLOW)
     return text

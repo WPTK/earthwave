@@ -53,7 +53,7 @@ from earthwave.ui.screens.help import HelpScreen
 from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
-from earthwave.ui.theme import LegibleMonochrome
+from earthwave.ui.theme import LegibleMonochrome, css_variables
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
 from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
@@ -79,6 +79,9 @@ class EarthwaveApp(App):
     CSS_PATH = "ui/app.tcss"
     TITLE = "earthwave"
     BINDINGS = [Binding("q", "quit", "Quit")]
+
+    def get_css_variables(self) -> dict[str, str]:
+        return {**super().get_css_variables(), **css_variables()}
 
     def __init__(
         self,

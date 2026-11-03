@@ -2,11 +2,13 @@
 
 from datetime import UTC, datetime, timedelta
 
+from textual.color import Color
 from uat.harness import kam, kam_alert_app, screen_text
 from uat.test_tsunami_states import observe
 
 from earthwave.models import Batch
 from earthwave.ui.screens.tsunami import render_alert
+from earthwave.ui.theme import GREEN, YELLOW, css_variables
 from earthwave.ui.widgets.banner import build_banner
 from earthwave.ui.widgets.gauge_strip import GaugeRowData
 from earthwave.ui.widgets.tsunami_panel import build_panel, recent_cancellation
@@ -120,10 +122,11 @@ async def test_warning_banner_and_status_bar_are_solid_red_and_louder_than_watch
             ).styles.background
 
     banner, status = await colours(0, 1)
-    for red in (banner, status):
-        assert red.r >= 200 and red.g <= 40 and red.b <= 40  # a solid red, not the theme's muted pink
+    variables = css_variables()
+    assert banner.hex == Color.parse(variables["level-warning"]).hex  # the theme's Warning red, not the muted pink
+    assert status.hex == Color.parse(variables["level-warning-dim"]).hex
     watch, _ = await colours(0)
-    assert watch.r >= 200 and watch.g >= 180 and watch.b <= 40  # Watch stays yellow
+    assert watch.hex == Color.parse(YELLOW).hex  # Watch stays yellow
 
 
 # --- overdue is on the banner -------------------------------------------------------------------------------------------
@@ -198,7 +201,7 @@ def test_the_word_cancelled_is_styled_so_the_line_reads_as_resolved():
     text = build_panel([], datetime(2025, 7, 30, 2, tzinfo=UTC), cancelled=line)
     assert text.plain == line
     styled = {text.plain[s.start : s.end]: str(s.style) for s in text.spans}
-    assert styled.get("cancelled") == "green"
+    assert styled.get("cancelled") == GREEN
 
 
 def test_the_bulletin_drops_the_zczc_start_line_only():

@@ -12,7 +12,7 @@ from rich.style import Style
 from textual._ansi_theme import MONOKAI
 from textual.color import Color
 
-from earthwave.ui.theme import LEVEL_COLORS, PAGER_COLORS, contrast, mag_color
+from earthwave.ui.theme import LEVEL_COLORS, PAGER_COLORS, contrast, css_variables, mag_color
 
 _MACHADO = {
     "protanopia": [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
@@ -90,3 +90,77 @@ def test_status_colours_read_on_the_dark_ground():
     dark = Color(30, 30, 30)
     for style in [*PAGER_COLORS.values(), *LEVEL_COLORS.values(), *(mag_color(m) for m in MAG_SAMPLES.values())]:
         assert contrast(Color(*_truecolor(style)), dark) >= 4.5, style
+
+
+def _rgb(colour: str) -> tuple[int, int, int]:
+    c = Color.parse(colour)
+    return c.r, c.g, c.b
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_bright_level_colours_are_told_apart_by_colour_blind_readers(kind):
+    """Banner and pulsing border: Warning, Advisory, Watch, Threat and Information differ from one another."""
+    variables = css_variables()
+    surfaces = {n: _rgb(variables[f"level-{n}"]) for n in ("warning", "advisory", "watch", "threat", "info")}
+    delta, pair = _worst_pair(surfaces, kind)
+    assert delta >= 20, (pair, delta)
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_dim_level_grounds_keep_warning_apart_and_the_rest_apart(kind):
+    """Status bar and calm border. The level word is printed on every surface, so colour is a secondary cue here and a
+    Warning that must be the loudest ground (issues #152, #192) cannot also sit 20 dE from all four others: Warning
+    differs from each other ground by >= 20 dE, and the other four from one another by >= 10 (Threat from Information
+    included)."""
+    variables = css_variables()
+    grounds = {n: _rgb(variables[f"level-{n}-dim"]) for n in ("warning", "advisory", "watch", "threat", "info")}
+    others = {n: v for n, v in grounds.items() if n != "warning"}
+    for name, rgb in others.items():
+        delta, pair = _worst_pair({"warning": grounds["warning"], name: rgb}, kind)
+        assert delta >= 20, (pair, delta)
+    delta, pair = _worst_pair(others, kind)
+    assert delta >= 10, (pair, delta)
+
+
+def test_level_surfaces_agree_with_the_level_words():
+    """One source of truth: a surface is the level word's colour (or its calm step), never a second palette."""
+    variables = css_variables()
+    for name, style in LEVEL_COLORS.items():
+        if name == "CANCELLATION":
+            continue
+        key = "info" if name == "INFORMATION" else name.lower()
+        assert variables[f"level-{key}"] == Style.parse(style).color.name
+
+
+def test_dim_surfaces_carry_white_text_and_bright_ones_black():
+    for name, colour in css_variables().items():
+        text = Color(255, 255, 255) if name.endswith("-dim") else Color(0, 0, 0)
+        floor = 3.5 if name == "level-warning-dim" else 4.5  # the Warning bar was white on solid red, 4.0:1, before
+        assert contrast(text, Color.parse(colour)) >= floor, name
+
+
+def test_a_warning_ground_is_louder_than_every_other_level_ground():
+    """The Warning status bar and calm border are the brightest and most saturated of the dim grounds (a Warning once
+    looked like a Watch: issues #152, #192), so darkening the set for white text and colour-blind separation cannot
+    quietly invert the order."""
+
+    def loudness(name):
+        rgb = _rgb(css_variables()[f"level-{name}-dim"])
+        _, a, b = _lab(rgb)
+        return max(rgb), (a * a + b * b) ** 0.5  # brightness, CIE chroma
+
+    warning = loudness("warning")
+    for other in ("advisory", "watch", "threat", "info"):
+        assert warning[0] > loudness(other)[0] and warning[1] > loudness(other)[1], other
+
+
+def test_no_ansi_colour_names_left_in_the_styled_widgets():
+    """Textual maps ANSI names through its own terminal theme, so a widget naming one shows a different colour from the
+    theme constants for the same meaning (issue #293)."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "earthwave" / "ui"
+    pattern = re.compile(r'"(?:bold )?(?:red|green|cyan|yellow|magenta)(?: on \w+)?"|on (?:red|green|cyan)')
+    for path in [*(root / "widgets").glob("*.py"), *(root / "screens").glob("*.py")]:
+        assert not pattern.search(path.read_text(encoding="utf-8")), path.name
