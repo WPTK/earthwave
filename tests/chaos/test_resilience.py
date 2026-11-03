@@ -179,7 +179,7 @@ async def test_hanging_server_is_cut_by_the_deadline(rig, monkeypatch):
         async def handle_async_request(self, request):
             await asyncio.sleep(3600)
 
-    hung = build_client(transport=Hang(), clock=rig.clock)
+    hung = build_client(transport=Hang(), clock=rig.clock, cache=False)  # the deadline is the subject, not the cache
     result = await asyncio.wait_for(rig.sched.poll_source("usgs", hung), 5)
     assert result.error and "no answer" in result.error
     assert not rig.status.in_flight and rig.status.health.failures == 1

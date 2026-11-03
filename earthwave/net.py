@@ -349,7 +349,11 @@ class PoliteTransport(httpx.AsyncBaseTransport):
                 if self._storage and self._storage.connection is None and not self._cache_path:
                     async with self._connect_lock:
                         if self._storage.connection is None:
-                            self._storage.connection = await anysqlite.connect(":memory:")
+                            # Shielded and adopted by a callback: a request cancelled (a poll's deadline) while the
+                            # connection is being made must not orphan a connection a worker thread is still opening.
+                            opening = asyncio.ensure_future(anysqlite.connect(":memory:"))
+                            opening.add_done_callback(self._adopt_connection)
+                            await asyncio.shield(opening)
                 response = await self._cached.handle_async_request(request)
                 await self._read_body(response, request)  # failures of the cache's own saving belong in this try
                 return response
@@ -363,6 +367,12 @@ class PoliteTransport(httpx.AsyncBaseTransport):
             if response is not None:
                 await response.aclose()
             return await self._retrying.handle_async_request(request)
+
+    def _adopt_connection(self, opening: asyncio.Future) -> None:
+        if opening.cancelled() or opening.exception() is not None or self._storage is None:
+            return
+        if self._storage.connection is None:
+            self._storage.connection = opening.result()
 
     async def _read_body(self, response: httpx.Response, request: httpx.Request) -> None:
         """Read the body the cache is saving, inside the entry's deadline when there is one (see RetryTransport)."""

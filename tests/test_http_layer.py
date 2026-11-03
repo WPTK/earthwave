@@ -578,3 +578,15 @@ async def test_no_request_is_sent_when_the_entry_has_no_time_left(clock):
         with pytest.raises(httpx.ReadTimeout):
             await client.get("https://example.test/a")
     assert seen == []
+
+
+async def test_a_request_cancelled_while_the_cache_connects_does_not_break_the_next_one(clock):
+    import asyncio
+
+    client, _seen = _client(clock, lambda r, n: httpx.Response(200, text="x", headers={"ETag": '"a"'}))
+    async with client:
+        first = asyncio.create_task(client.get("https://example.test/a"))
+        await asyncio.sleep(0)  # let it reach the connection
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert (await client.get("https://example.test/b")).text == "x"
