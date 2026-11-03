@@ -6,11 +6,11 @@ import re
 import time
 from collections import Counter
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from conftest import FIXTURES, T0, footer_keys, load_json, make_quake
+from conftest import FIXTURES, T0, WEEK_NOW, footer_keys, make_quake, week_app
 from rich.text import Text
 from test_observations import drive
 
@@ -21,7 +21,6 @@ from earthwave.models import Batch
 from earthwave.net import ReplayTransport, recording_start
 from earthwave.notify.inapp import DIM_NEW, FLASH_NEW
 from earthwave.poll import Freshness
-from earthwave.sources.usgs import parse_collection
 from earthwave.state.events import QuakeNew
 from earthwave.state.store import SortKey, Store
 from earthwave.ui.glyphs import ASCII, UNICODE, resolve_glyphs
@@ -37,21 +36,8 @@ from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusI
 from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import is_too_small
 
-WEEK = load_json("usgs/4.5_week.geojson")
-WEEK_NOW = datetime.fromtimestamp(WEEK["metadata"]["generated"] / 1000, tz=UTC)
 DETAIL_BODY = (FIXTURES / "usgs" / "detail.geojson").read_bytes()
 HOUR_BODY = (FIXTURES / "usgs" / "all_hour.geojson").read_bytes()
-
-
-def week_app(transport=None, run_scheduler=False, home=True, ticks=False, **kwargs) -> EarthwaveApp:
-    """Dashboard over the captured 4.5_week quakes at the instant they were captured (fully deterministic)."""
-    clock = ReplayClock(WEEK_NOW, real=lambda: 0.0)
-    config = with_overrides(Config(), 4.5, 168, (40.7, -74.0) if home else None, "unicode")
-    store = Store(config.alerts, config.home)
-    store.merge(Batch("usgs", WEEK_NOW, quakes=parse_collection(WEEK), backfill=True, coverage=(168.0, 4.5)), clock)
-    return EarthwaveApp(
-        config, store=store, clock=clock, run_scheduler=run_scheduler, ticks=ticks, transport=transport, **kwargs
-    )
 
 
 def mock_transport(requests: list) -> httpx.MockTransport:
