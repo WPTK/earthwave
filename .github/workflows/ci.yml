@@ -40,8 +40,10 @@ jobs:
         os: [windows-2025, ubuntu-24.04, macos-15]
         python: ["3.13"]
         include:
-          # requires-python is ">=3.13": the next release is covered on one OS, and does not block the merge
-          # while its dependencies catch up.
+          # requires-python is ">=3.12": the floor and the newest release are each covered on one OS. 3.14 does
+          # not block the merge while its dependencies catch up.
+          - os: ubuntu-24.04
+            python: "3.12"
           - os: ubuntu-24.04
             python: "3.14"
             experimental: true
