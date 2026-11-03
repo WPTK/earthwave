@@ -255,6 +255,7 @@ def run(args: argparse.Namespace) -> int:
         history_error=history_error,
         graphics=graphics,
         replay=bool(args.replay),
+        config_path=None if args.no_config else (Path(args.config) if args.config else default_config_path()),
     )
     app.run()
     return app.return_code or 0

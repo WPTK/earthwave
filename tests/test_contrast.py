@@ -20,6 +20,7 @@ SCREENS = {
     "detail": (week_app, ["enter"]),
     "filters": (week_app, ["f"]),
     "help": (week_app, ["question_mark"]),
+    "command palette": (week_app, ["ctrl+p"]),
     "tsunami": (week_app, ["t"]),
     "warning dashboard": (kam_app, []),
     "warning tsunami screen": (kam_app, ["t"]),
