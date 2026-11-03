@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
+from conftest import wait_until
 from test_ui import WEEK_NOW, mock_transport, wait_for, week_app
 from uat.harness import kam_alert_app, screen_text
 from uat.test_tsunami_states import observe
@@ -146,15 +147,14 @@ async def test_tsunami_bulletin_returns_to_the_top_for_another_alert_but_keeps_i
         screen = app.screen
         assert isinstance(screen, TsunamiScreen)
         pane = screen.query_one("#alert_text_scroll")
-        assert pane.max_scroll_y > 2
+        await wait_until(pilot, lambda: pane.max_scroll_y > 2, what="the bulletin to lay out")
         pane.scroll_to(y=2, animate=False)
-        await pilot.pause()
+        await wait_until(pilot, lambda: pane.scroll_y == 2, what="the pane to scroll")
         screen.refresh_alerts()  # a poll re-renders the same alert
         await pilot.pause()
         assert pane.scroll_y == 2
         await pilot.press("j")
-        await pilot.pause()
-        assert pane.scroll_y == 0
+        await wait_until(pilot, lambda: pane.scroll_y == 0, what="the new alert to scroll to the top")
         assert f"{screen.selected().level} (" in screen_text(app)  # the new alert's level and status are in view
 
 
