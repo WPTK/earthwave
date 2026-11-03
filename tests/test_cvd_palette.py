@@ -98,16 +98,28 @@ def _rgb(colour: str) -> tuple[int, int, int]:
 
 
 @pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
-@pytest.mark.parametrize("variant", ["", "-dim"])
-def test_level_surfaces_are_told_apart_by_colour_blind_readers(kind, variant):
-    """Banner and pulsing border (bare) and status bar and calm border (-dim): Warning, Advisory, Watch, Threat and
-    Information differ from one another, including THREAT against INFORMATION."""
+def test_bright_level_colours_are_told_apart_by_colour_blind_readers(kind):
+    """Banner and pulsing border: Warning, Advisory, Watch, Threat and Information differ from one another."""
     variables = css_variables()
-    surfaces = {
-        name: _rgb(variables[f"level-{name}{variant}"]) for name in ("warning", "advisory", "watch", "threat", "info")
-    }
+    surfaces = {n: _rgb(variables[f"level-{n}"]) for n in ("warning", "advisory", "watch", "threat", "info")}
     delta, pair = _worst_pair(surfaces, kind)
     assert delta >= 20, (pair, delta)
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_dim_level_grounds_keep_warning_apart_and_the_rest_apart(kind):
+    """Status bar and calm border. The level word is printed on every surface, so colour is a secondary cue here and a
+    Warning that must be the loudest ground (issues #152, #192) cannot also sit 20 dE from all four others: Warning
+    differs from each other ground by >= 20 dE, and the other four from one another by >= 10 (Threat from Information
+    included)."""
+    variables = css_variables()
+    grounds = {n: _rgb(variables[f"level-{n}-dim"]) for n in ("warning", "advisory", "watch", "threat", "info")}
+    others = {n: v for n, v in grounds.items() if n != "warning"}
+    for name, rgb in others.items():
+        delta, pair = _worst_pair({"warning": grounds["warning"], name: rgb}, kind)
+        assert delta >= 20, (pair, delta)
+    delta, pair = _worst_pair(others, kind)
+    assert delta >= 10, (pair, delta)
 
 
 def test_level_surfaces_agree_with_the_level_words():

@@ -62,24 +62,24 @@ LEVEL_COLORS = {
 
 # Surfaces that carry a level (banner, status bar, panel border) take their colour from the same constants, as these
 # variables for app.tcss (EarthwaveApp.get_css_variables adds them): the bare name is the pulsing border and the banner
-# (black text), -dim the calm border and status-bar ground (white text). Each level darkens by its own amount, chosen so
-# all five dim colours stay tellable apart under protanopia and deuteranopia (tests/test_cvd_palette.py) while Warning
-# stays the loudest ground (issues #152, #192): the brightest and most saturated, the others deep enough for white text.
-# A uniform step merges Warning with Advisory, and Threat with Information.
+# (black text), -dim the calm border and status-bar ground (white text). A Warning must be the loudest thing on screen
+# (issues #152, #192), so its dim ground is a bright red and the other four are deep enough for white text; with five
+# grounds that cannot also be eight CIE units apart under protanopia, so tests/test_cvd_palette.py pins Warning against
+# each other ground at dE >= 20 and the other pairs at >= 10 (the level word is printed on every surface).
 LEVEL_SURFACES = {
-    "warning": (RED, 0.05),
-    "advisory": (ORANGE, 0.6),
-    "watch": (YELLOW, 0.6),
-    "threat": (THREAT_BLUE, 0.35),
-    "info": (INFO_VIOLET, 0.25),
+    "warning": (RED, "#e85641"),
+    "advisory": (ORANGE, "#613013"),
+    "watch": (YELLOW, "#5c4300"),
+    "threat": (THREAT_BLUE, "#4c7999"),
+    "info": (INFO_VIOLET, "#7f6ab0"),
 }
 
 
 def css_variables() -> dict[str, str]:
     out = {}
-    for name, (colour, darken) in LEVEL_SURFACES.items():
-        out[f"level-{name}"] = colour
-        out[f"level-{name}-dim"] = Color.parse(colour).darken(darken).hex
+    for name, (bright, dim) in LEVEL_SURFACES.items():
+        out[f"level-{name}"] = bright
+        out[f"level-{name}-dim"] = dim
     return out
 
 
