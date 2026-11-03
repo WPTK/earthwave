@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add a `Ctrl+P` command palette (Textual's, with earthwave's actions added): switch screens, sort, filters, map, refresh, quit, and Set home location, which writes the config file through the same atomic writer as `--save-home`
 - Add `--save-home` and `--home-name` to keep a home location in the config file without editing it
 - Add `--diagnose`: version, Python, OS, terminal variables, config, history and log paths and feed reachability in one block to paste into a bug report
 - Add `EARTHWAVE_MAP_RENDERER` (`auto`, `braille`, `sixel`) to force the map renderer for one run
