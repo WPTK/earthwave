@@ -307,6 +307,8 @@ Input:focus {
     max-height: 100%;
     padding: 1 2;
     border: round $primary;
+    border-subtitle-color: $text;
+    border-subtitle-background: $panel;
     background: $panel;
 }
 

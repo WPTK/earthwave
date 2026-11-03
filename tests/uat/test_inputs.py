@@ -479,7 +479,7 @@ CLICK_CASES |= {
     f"click:VerticalScroll#{a}": "test_click_the_other_scroll_areas_focus_them"
     for a in ("observations_body", "alert_text_scroll", "gauges")
 }
-SCROLL_AREAS_NOT_CLICK_TESTED: set[str] = set()
+SCROLL_AREAS_NOT_CLICK_TESTED: set[str] = {"click:VerticalScroll#help_box"}  # a scrolling text, nothing to click
 
 
 async def _live_inventory() -> set[str]:

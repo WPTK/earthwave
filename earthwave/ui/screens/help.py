@@ -2,9 +2,12 @@
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
+
+from earthwave.poll import Freshness
+from earthwave.ui.labels import fmt_age
 
 HELP_TEXT = """\
 [b]Keys[/b]
@@ -31,16 +34,55 @@ HELP_TEXT = """\
   Coastlines: Natural Earth, public domain.
   Not an official tsunami or quake warning; follow local authorities.
 
-[dim]Esc or ? to close[/dim]
+[b]Status bar[/b]
+  N shown of M   rows passing the filter and search, of all held
+  M4.5+ 72h      the filter: magnitude 4.5 and up, last 72 hours (f)
+  sort:time      the order of the list (s cycles it)
+  next 4:30      time until the sources are polled again
+  3 unseen       rows that arrived since you looked (a clears)
+  TSUNAMI        an alert is in force (t opens it)
+  REPLAY         the data is a recording, not live
+
+[b]Quake list[/b]
+  DEPTH          km below the surface; negative is above the datum
+  FROM HOME      distance and direction of the quake from home
+  Gauges (o)     Residual is sea level minus the predicted tide;
+                 Mode is how often the gauge reports (15m, 6m, 1m, 15s)
+
 """
+
+FEED_NAMES = {
+    "usgs": "USGS earthquakes",
+    "tsunamigov": "tsunami.gov alerts",
+    "nws": "NWS alerts",
+    "jma": "JMA tsunami",
+    "dart": "DART buoys",
+    "coops": "CO-OPS tide gauges",
+}
+
+
+def feeds_text(app) -> str:
+    """One line per source: its state and when it last answered, so "feeds ok" can be checked source by source."""
+    if app.offline:
+        return "[b]Feeds[/b]\n  offline: nothing is fetched, the list is saved history\n\n"
+    lines = ["[b]Feeds[/b]"]
+    for name in app.scheduler.statuses:
+        fresh = app.scheduler.freshness(name)
+        age = app.scheduler.age(name)
+        state = {Freshness.FRESH: "ok", Freshness.LOADING: "loading", Freshness.STALE: "stale"}.get(fresh, "failed")
+        last = f", last good {fmt_age(age)} ago" if age is not None else ", no good answer yet"
+        lines.append(f"  {FEED_NAMES.get(name, name):<20} {state}{last}")
+    return "\n".join(lines) + "\n\n"
 
 
 class HelpScreen(ModalScreen[None]):
     BINDINGS = [Binding("escape,question_mark", "close", "Close")]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="help_box"):
-            yield Static(HELP_TEXT)
+        box = VerticalScroll(id="help_box")
+        box.border_subtitle = "Esc or ? to close, arrows scroll"
+        with box:
+            yield Static(HELP_TEXT + feeds_text(self.app), id="help_text")
 
     def action_close(self) -> None:
         self.dismiss(None)

@@ -34,7 +34,7 @@ class ObservationsScreen(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="observations_body"):
             yield Static("", id="observations_header")
-            yield GaugeStrip(id="observations_strip")
+            yield GaugeStrip(legend=True, id="observations_strip")
         yield Footer(compact=True, show_command_palette=False)
         yield TooSmall(id="too_small")
 

@@ -17,21 +17,24 @@ from earthwave.config import HomeConfig
 from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.ui.glyphs import Glyphs
-from earthwave.ui.labels import fmt_age, fmt_distance
+from earthwave.ui.labels import fmt_age, fmt_depth, fmt_distance
 from earthwave.ui.theme import CURSOR_BG, CYAN, PAGER_COLORS, lift, mag_color
 
 AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 12, 2  # DIST_W fits "20015 km NNE", the longest distance on Earth
 
 
 def place_width(width: int, has_home: bool) -> int:
-    fixed = 1 + AGE_W + 1 + MAG_W + 1 + DEPTH_W + 1 + (DIST_W + 1 if has_home else 0) + 1 + FLAG_W
+    fixed = 1 + AGE_W + 1 + MAG_W + 1 + DEPTH_W + 1 + (DIST_W + 3 if has_home else 0) + 1 + FLAG_W
     return max(0, width - fixed)
 
 
 def header_text(width: int, has_home: bool) -> Text:
     parts = [" ", "AGE".rjust(AGE_W), " ", "MAG".rjust(MAG_W), " ", "DEPTH".rjust(DEPTH_W), " "]
     if has_home:
-        parts += ["FROM HOME".rjust(DIST_W), " "]
+        parts += [
+            "FROM HOME".rjust(DIST_W),
+            "   ",
+        ]  # the rows put a rule here, so the distance and the place do not read as one phrase
     parts += ["PLACE".ljust(place_width(width, has_home)), " ", "FL"]
     return Text("".join(parts)[:width].ljust(width), style="bold grey62 underline")
 
@@ -161,11 +164,14 @@ class QuakeList(ScrollView, can_focus=True):
             field(" "),
             field(f"{mag:{MAG_W}.1f}", mag_color(quake.mag)),
             field(" "),
-            field(f"{quake.depth_km:.0f}".rjust(DEPTH_W), "grey62"),
+            field(fmt_depth(quake.depth_km).rjust(DEPTH_W), "grey62"),
             field(" "),
         ]
         if self._home is not None:
-            segments += [field(fmt_distance(quake, self._home.lat, self._home.lon).rjust(DIST_W), "grey62"), field(" ")]
+            segments += [
+                field(fmt_distance(quake, self._home.lat, self._home.lon).rjust(DIST_W), "grey62"),
+                field(" " + self._glyphs.bar + " ", "grey50"),
+            ]
         segments += [
             field(place),
             field(" "),

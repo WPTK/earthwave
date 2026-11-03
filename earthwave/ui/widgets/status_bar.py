@@ -76,7 +76,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.sources and not unhealthy:
         text.append(f" {glyphs.bar} ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
-        text.append(" feeds ok", "grey70")
+        text.append(f" {len(info.sources)} feeds ok", "grey70")
     return on_warning_ground(text) if info.alert_level == "WARNING" else text
 
 

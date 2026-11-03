@@ -47,8 +47,15 @@ def fmt_distance(quake: Earthquake, lat: float, lon: float) -> str:
     return f"{km:.0f} km {compass(bearing_deg(lat, lon, quake.lat, quake.lon))}"
 
 
+def fmt_depth(depth_km: float) -> str:
+    """Whole kilometres; a depth that rounds to zero is "0", not "-0" (USGS reports -0.2 km for a quake at the surface).
+    A real negative depth, above the datum, keeps its sign."""
+    text = f"{depth_km:.0f}"
+    return "0" if text == "-0" else text
+
+
 def fmt_hours(hours: float) -> str:
-    if hours % 24 == 0 and hours >= 48:
+    if hours % 24 == 0 and hours >= 168:  # whole weeks read as days; 48 h and 72 h stay in hours
         return f"{int(hours // 24)}d"
     return f"{hours:g}h"
 

@@ -123,6 +123,22 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
     return Text(f"{peak:+.3f} m", style=GREEN, no_wrap=True)
 
 
+def scale_text(rows: Sequence[GaugeRowData]) -> str:
+    """The sparkline header with its scale: a full-height bar is the alert level (#267)."""
+    levels = sorted({r.threshold_m for r in rows})
+    return f"Residual 0-{levels[0]:g} m" if len(levels) == 1 else "Residual (0-alert)"
+
+
+def legend_text(rows: Sequence[GaugeRowData]) -> str:
+    """What the columns mean: the sparkline's scale (it is drawn from 0 to the alert level) and the Mode codes."""
+    levels = sorted({r.threshold_m for r in rows})
+    scale = " and ".join(f"{t:g} m" for t in levels)
+    return (
+        f"Residual: sea level minus the predicted tide over 24 h; a full bar is {scale} or more, the alert level.\n"
+        "Mode: how often the gauge reports; 15m every 15 minutes, 6m every 6, 1m every minute, 15s every 15 seconds."
+    )
+
+
 class GaugeRow(Horizontal):
     DEFAULT_CSS = """
     GaugeRow > Sparkline > .sparkline--min-color { color: $success; }
@@ -151,15 +167,16 @@ class GaugeRow(Horizontal):
 class GaugeHeader(Horizontal):
     """The column headings, in the same columns as the rows."""
 
-    def __init__(self, name_width: int = NAME_WIDTH):
+    def __init__(self, name_width: int = NAME_WIDTH, scale: str = "Residual"):
         super().__init__()
         self._name_width = name_width
+        self._scale = scale
 
     def compose(self) -> ComposeResult:
         label = Static(f"{'Station':<{self._name_width}} {'Distance':>8} {'Mode':<3} Reading", classes="gauge-label")
         label.styles.width = self._name_width + LABEL_REST
         yield label
-        yield Static("Residual", classes="gauge-spark")
+        yield Static(self._scale, classes="gauge-spark")
         yield Static("24 h max", classes="gauge-max")
 
 
@@ -169,12 +186,14 @@ class GaugeStrip(Vertical):
     GaugeStrip > Horizontal { height: 1; }
     GaugeStrip > GaugeHeader { color: $text-muted; }
     GaugeStrip .gauge-spark { width: 1fr; min-width: 8; margin: 0 1; }
-    GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: right; }
+    GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: left; }
+    GaugeStrip > .gauge-legend { color: $text-muted; margin-top: 1; height: auto; }
     GaugeStrip > .gauge-empty { color: $text-muted; }
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, legend: bool = False, **kwargs):
         super().__init__(**kwargs)
+        self._legend = legend  # the two-line key under the rows, where the screen has the room (the gauges screen)
         self._rows: tuple[GaugeRowData, ...] = ()
         self._now: datetime | None = None
         self._name_width = NAME_WIDTH
@@ -193,9 +212,11 @@ class GaugeStrip(Vertical):
             yield Static("No gauge stations selected.", classes="gauge-empty")
             return
         self._name_width = self._fit_name_width()
-        yield GaugeHeader(self._name_width)
+        yield GaugeHeader(self._name_width, scale_text(self._rows))
         for row in self._rows:
             yield GaugeRow(row, self._now, self._name_width)
+        if self._legend:
+            yield Static(legend_text(self._rows), classes="gauge-legend")
         if any(r.kind == "dart" for r in self._rows) and not any(r.kind == "coops" for r in self._rows):
             coops = getattr(self.app, "coops", None)
             if coops is not None and not coops.stations:  # an outage or the first fetch, not a fact about the coast

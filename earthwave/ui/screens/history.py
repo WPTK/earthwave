@@ -124,7 +124,9 @@ class HistoryScreen(Screen):
             stats = f"History could not be read ({type(exc).__name__}); other screens are unaffected"
         if day != self.day or not self.is_attached:  # the user moved on while the read ran
             return
-        self.query_one("#history_head", Static).update(f"History {day:%A %Y-%m-%d}")
+        self.query_one("#history_head", Static).update(
+            f"History {day:%A %Y-%m-%d}  (every magnitude; the dashboard filter and search do not apply here)"
+        )
         self.query_one("#history_stats", Static).update(stats)
         self._draw_header()
         self.query_one(QuakeList).set_rows(quakes)

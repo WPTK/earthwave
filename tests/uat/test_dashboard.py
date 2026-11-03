@@ -16,7 +16,7 @@ async def test_dashboard_shows_list_status_and_ticker(size):
         assert app.screen is app.dashboard and len(app.screen_stack) == 2
         assert "Latest major: M6.2" in text
         assert "AGE  MAG DEPTH" in text and "PLACE" in text
-        assert top.place in text  # the newest quake, whole place string, is on screen
+        assert top.place[:24] in text  # the newest quake's place is on screen (the rule before it costs two cells)
         assert "too small" not in text
 
 

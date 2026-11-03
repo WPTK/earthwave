@@ -324,6 +324,8 @@ class DashboardScreen(Screen):
         box = self.query_one("#search", Input)
         box.display = False
         app = self.earthwave
+        if app.view.query and not query.strip():
+            self.notify("Search cleared", timeout=3)
         app.set_query(query)
         self._focus_main()
 

@@ -517,4 +517,4 @@ async def test_the_history_heading_is_the_date_only(tmp_path):
         screen = app.screen
         await settled(pilot, app, lambda: "History" in str(screen.query_one("#history_head").render()), reload=screen)
         head = str(screen.query_one("#history_head").render())
-        assert head == f"History {screen.day:%A %Y-%m-%d}" and ":" not in head
+        assert head.startswith(f"History {screen.day:%A %Y-%m-%d}") and ":" not in head  # no time of day
