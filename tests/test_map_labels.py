@@ -26,12 +26,20 @@ def test_world_view_labels_continents_and_oceans_but_no_seas():
     assert not any(t.endswith("Sea") for t in shown)
 
 
-def test_region_view_labels_seas_only_and_close_view_none():
+def test_region_view_labels_seas_and_countries_but_no_continents():
     view = zoom_view(115, -2, 40, 200, 50)
     shown = words(place_labels(view, 200, 50, coastline_canvas(200, 50, view)))
     assert "Banda Sea" in shown and not any(t.isupper() for t in shown)
     close = zoom_view(115, -2, 16, 200, 50)
-    assert place_labels(close, 200, 50, coastline_canvas(200, 50, close)) == {}
+    assert not any(t.isupper() for t in words(place_labels(close, 200, 50, coastline_canvas(200, 50, close))))
+
+
+def test_japan_is_found_by_name_when_zoomed_in_and_not_in_the_world_view():
+    for span in (40, 16):
+        view = zoom_view(138, 37, span, 200, 50)
+        assert "Japan" in words(place_labels(view, 200, 50, coastline_canvas(200, 50, view)))
+    world = world_view(0, 200, 50)
+    assert "Japan" not in words(place_labels(world, 200, 50, coastline_canvas(200, 50, world)))
 
 
 def test_labels_keep_clear_of_coast_and_a_marked_cell_drops_its_label():
@@ -49,3 +57,14 @@ def test_label_names_are_unique_and_placement_is_deterministic():
     coast = coastline_canvas(200, 50, view)
     assert place_labels(view, 200, 50, coast) == place_labels(view, 200, 50, coast)
     assert len({t for t, *_ in LABELS}) == len(LABELS)
+
+
+def test_every_label_has_sane_coordinates_and_shows_in_some_view():
+    """A label that can never be placed is dead weight (the coast or the edge always covers it): none may be."""
+    dead = []
+    for text, lon, lat, kind in LABELS:
+        assert -180 <= lon <= 180 and -90 <= lat <= 90 and kind in {"land", "ocean", "sea", "region"}, text
+        views = [world_view(0, 200, 50)] + [zoom_view(lon, lat, span, 200, 50) for span in (90, 40, 16)]
+        if not any(text in words(place_labels(v, 200, 50, coastline_canvas(200, 50, v))) for v in views):
+            dead.append(text)
+    assert dead == []

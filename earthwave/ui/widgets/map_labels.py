@@ -1,4 +1,4 @@
-"""Place-name labels for the map: a few continents, oceans and seas, drawn in empty cells of the braille raster.
+"""Place-name labels for the map: continents, oceans, seas and, zoomed in, countries, in empty braille cells.
 
 Labels are chosen from the view alone, by fixed priority (list order), and one that does not fit is dropped, never
 moved, so a pan changes only where a label is drawn, not which labels win.
@@ -37,10 +37,34 @@ LABELS: tuple[tuple[str, float, float, str], ...] = (
     ("Sea of Okhotsk", 150, 55, "sea"),
     ("Black Sea", 34, 43, "sea"),
     ("North Sea", 3, 56, "sea"),
-    ("Caspian Sea", 51, 42, "sea"),
+    ("Caspian Sea", 54, 44, "sea"),
+    # Countries and regions, shown at region and close zoom. Each sits where the coast leaves the cells free (often
+    # just offshore);
+    # one the coast crosses is dropped, never moved.
+    ("Japan", 143, 36, "region"),
+    ("Philippines", 127, 11, "region"),
+    ("Indonesia", 113, -2, "region"),
+    ("Taiwan", 120, 24.7, "region"),
+    ("Papua New Guinea", 144, -6, "region"),
+    ("New Zealand", 170, -42, "region"),
+    ("Chile", -75, -33, "region"),
+    ("Peru", -75, -10, "region"),
+    ("Ecuador", -78, -1, "region"),
+    ("Colombia", -73, 4, "region"),
+    ("Mexico", -102, 24, "region"),
+    ("Alaska", -152, 64, "region"),
+    ("California", -120, 37, "region"),
+    ("Turkey", 35, 39, "region"),
+    ("Greece", 21, 40, "region"),
+    ("Italy", 12.5, 42.5, "region"),
+    ("Iran", 54, 32, "region"),
+    ("India", 79, 22, "region"),
+    ("China", 103, 35, "region"),
+    ("Kamchatka", 160, 56, "region"),
 )
 BROAD_MIN_SPAN = 60  # continents and oceans show when the view spans at least this many degrees of latitude
 SEA_SPAN = (30, 100)  # seas show between these spans (wide and region zoom, not the world or close)
+REGION_MAX_SPAN = 40  # countries and regions show at region and close zoom, where a reader needs to find one by name
 
 
 def place_labels(
@@ -54,6 +78,9 @@ def place_labels(
     for text, lon, lat, kind in LABELS:
         if kind == "sea":
             if not SEA_SPAN[0] <= span <= SEA_SPAN[1]:
+                continue
+        elif kind == "region":
+            if span > REGION_MAX_SPAN:
                 continue
         elif span < BROAD_MIN_SPAN:
             continue
