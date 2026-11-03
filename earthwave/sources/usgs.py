@@ -78,10 +78,10 @@ def listing(data: dict) -> frozenset[str] | None:
         if not isinstance(feature, dict) or "id" not in feature:
             return None
         props = feature.get("properties")
-        if isinstance(props, dict) and (
-            props.get("type", "earthquake") != "earthquake" or ("mag" in props and props["mag"] is None)
-        ):
-            continue  # reclassified (a blast) or unmagnituded: the feed no longer vouches for it as a quake
+        if isinstance(props, dict) and props.get("type", "earthquake") != "earthquake":
+            continue  # reclassified (a blast): the feed no longer vouches for it as a quake
+        # An earthquake whose magnitude is momentarily null is still listed: leaving it out would remove a real quake
+        # until the next poll. `parse_feature` skips it, so the stored record stands until a magnitude returns.
         ids.add(feature["id"])
         aliases = (feature.get("properties") or {}).get("ids")
         ids.update(_ids(aliases) if isinstance(aliases, str) else ())

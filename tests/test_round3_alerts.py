@@ -228,14 +228,14 @@ async def test_a_stalled_startup_feed_is_given_up_on_so_the_steady_feed_is_reach
     assert result.error is None and requested[-1] == "2.5_day.geojson"
 
 
-def test_a_feature_usgs_retyped_or_left_without_a_magnitude_is_no_longer_listed():
+def test_a_feature_usgs_retyped_is_no_longer_listed_but_one_with_a_null_magnitude_still_is():
     features = [
         {"id": "eq", "properties": {"type": "earthquake", "mag": 3.0}},
         {"id": "blast", "properties": {"type": "quarry blast", "mag": 2.8, "ids": ",blast,ak9,"}},
         {"id": "nomag", "properties": {"type": "earthquake", "mag": None}},
         {"id": "plain", "properties": {}},  # malformed: still vouched for
     ]
-    assert listing({"features": features}) == {"eq", "plain"}
+    assert listing({"features": features}) == {"eq", "nomag", "plain"}
 
 
 def test_a_stored_quake_usgs_retyped_as_a_blast_is_removed(clock):
@@ -456,7 +456,7 @@ async def test_one_stalled_entry_is_given_its_own_limit_so_the_rest_are_read(now
     async with client_for(server) as client:
         batch = await source.fetch(client, None)
     assert [a.id for a in batch.alerts] == ["PAAQ-1-bbbb02"] and batch.meta["incomplete"]
-    assert source._failures == {}  # a stall is an outage: it never counts toward giving the product up
+    assert list(source._failures.values()) == [1]  # a stall counts (#161), so a product that always stalls ends
 
 
 async def test_jma_list_json_is_inside_the_budget(monkeypatch):

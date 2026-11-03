@@ -1,7 +1,8 @@
 """SQLite history: quakes (with `seen_at`) and a per-day record of tsunami alerts, written by one task.
 
-Alerts are stored for display only (counts on the history screen). Nothing ever loads them back into the Store, so
-a restart cannot resurrect an alert, live or expired: the Store learns about alerts from the feeds alone.
+Alerts are stored for display only (counts on the history screen, and the last run's bulletins on the tsunami screen
+when offline, as past products and never as in force). Nothing ever loads them back into the Store, so a restart
+cannot resurrect an alert, live or expired: the Store learns about alerts from the feeds alone.
 """
 
 import asyncio
@@ -35,6 +36,12 @@ CREATE TABLE IF NOT EXISTS alerts (
     headline TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS alerts_at ON alerts (at);
+CREATE TABLE IF NOT EXISTS bulletins (
+    id TEXT PRIMARY KEY,
+    at TEXT NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bulletins_at ON bulletins (at);
 """
 SCHEMA_VERSION = 1  # PRAGMA user_version; bump with a migration when a table changes
 
@@ -69,6 +76,23 @@ def decode_quake(text: str) -> Earthquake:
     if "also_ids" in kwargs:
         kwargs["also_ids"] = tuple(kwargs["also_ids"])
     return Earthquake(**kwargs)
+
+
+_BULLETIN_FIELDS = ("id", "source", "level", "headline", "areas", "issued", "expires", "updated", "text", "quake_ref")
+
+
+def encode_bulletin(alert: TsunamiAlert) -> str:
+    data = {name: getattr(alert, name) for name in _BULLETIN_FIELDS}
+    for name in ("issued", "expires", "updated"):
+        data[name] = _iso(data[name]) if data[name] is not None else None
+    return json.dumps(data, separators=(",", ":"))
+
+
+def decode_bulletin(text: str) -> TsunamiAlert:
+    data = json.loads(text)
+    for name in ("issued", "expires", "updated"):
+        data[name] = datetime.fromisoformat(data[name]) if data.get(name) else None
+    return TsunamiAlert(dedupe_key=data["id"], **{**data, "areas": tuple(data.get("areas") or ())})
 
 
 def day_bounds(day: date, zone: tzinfo | None = None) -> tuple[datetime, datetime]:
@@ -150,6 +174,7 @@ class History:
         cutoff = _iso(self._clock.now() - self._retain)
         db.execute("DELETE FROM quakes WHERE time < ?", (cutoff,))
         db.execute("DELETE FROM alerts WHERE at < ?", (cutoff,))
+        db.execute("DELETE FROM bulletins WHERE at < ?", (cutoff,))
 
     # --- writes -------------------------------------------------------------------------------------------------
 
@@ -182,6 +207,11 @@ class History:
                 "ON CONFLICT(id) DO UPDATE SET level = excluded.level, headline = excluded.headline",
                 [(a.id, _iso(a.issued or a.updated or fetched_at), a.level, a.headline) for a in alerts],
             )
+            db.executemany(
+                "INSERT INTO bulletins (id, at, data) VALUES (?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET at = excluded.at, data = excluded.data",
+                [(a.id, _iso(a.issued or a.updated or fetched_at), encode_bulletin(a)) for a in alerts],
+            )
 
         self._queue.put_nowait(write)
 
@@ -211,6 +241,12 @@ class History:
         rows = self._read("SELECT data FROM quakes WHERE time >= ? AND time < ? ORDER BY time DESC", bounds)
         alerts = self._read("SELECT level FROM alerts WHERE at >= ? AND at < ?", bounds)
         return [decode_quake(r[0]) for r in rows], Counter(r[0] for r in alerts)
+
+    def bulletins_since(self, since: datetime) -> list[TsunamiAlert]:
+        """Tsunami products issued at or after `since`, newest first, as the last run saw them. For display as past
+        products only: they are never loaded into the Store. Raises sqlite3.Error, KeyError or ValueError."""
+        rows = self._read("SELECT data FROM bulletins WHERE at >= ? ORDER BY at DESC", (_iso(since),))
+        return [decode_bulletin(r[0]) for r in rows]
 
     def load_since(self, since: datetime) -> tuple[list[Earthquake], set[str]]:
         """Quakes at or after `since` (to refill the Store) and the ids among them never acknowledged."""
