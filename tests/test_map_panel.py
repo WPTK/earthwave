@@ -14,6 +14,7 @@ from earthwave.clock import ReplayClock
 from earthwave.config import HomeConfig
 from earthwave.notify.inapp import FLASH_NEW, AttentionTracker
 from earthwave.sources.usgs import parse_collection
+from earthwave.ui.theme import ORANGE
 from earthwave.state.events import QuakeNew
 from earthwave.ui.glyphs import ASCII, UNICODE
 from earthwave.ui.widgets.braille import WORLD, Viewport, coastline_canvas, project_cell, warm_coastline
@@ -73,7 +74,7 @@ def test_bonin_islands_marker_lands_on_the_right_cell(cols, rows):
     markers = place_markers([BONIN], None, None, WORLD, cols, rows, False)
     assert list(markers) == [expected_world_cell(139.6184, 27.7953, cols, rows)]
     marker = markers[next(iter(markers))]
-    assert marker.glyph == "◉" and marker.style.color.name == "dark_orange"  # M6.5 is the top band, orange
+    assert marker.glyph == "◉" and marker.style.color.name == ORANGE  # M6.5 is the top band, orange
 
 
 def test_ptwc_epicenter_is_within_a_cell_of_the_usgs_one():
