@@ -70,7 +70,9 @@ jobs:
         shell: bash
         run: |
           ./dist/${{ matrix.exe }} --version
-          ./dist/${{ matrix.exe }} --selftest
+          ./dist/${{ matrix.exe }} --selftest | tee selftest.txt
+          # a spec regression that drops the bundled fixtures must stop the release before anything is public
+          ! grep -q SKIPPED selftest.txt
       - name: Name the artifact
         shell: bash
         run: |
@@ -105,7 +107,6 @@ jobs:
           cd out
           sha256sum earthwave-* > SHA256SUMS
           cat SHA256SUMS
-          sha256sum --check SHA256SUMS
           cd ..
           awk -v h="## [${{ needs.verify.outputs.version }}]" \
             'index($0, h) == 1 { on = 1; next } on && (/^## / || /^\[[0-9.]+\]: /) { exit } on && $0 != "_First release._"' \

@@ -1,6 +1,7 @@
 """Relocatable config and data dirs (#230), `--diagnose` (#235), `--selftest` in the binary (#259), upgrade from 0.1.0 (#239)."""
 
 import asyncio
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -149,3 +150,30 @@ def test_diagnose_survives_an_empty_environment(monkeypatch):
     for name in ("TERM", "COLORTERM", "TERM_PROGRAM", "WT_SESSION", "NO_COLOR", "TMUX", "LANG"):
         monkeypatch.delenv(name, raising=False)
     assert "TERM=(unset)" in report(offline=True)
+
+
+def test_redact_matches_case_insensitively_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(Path, "home", lambda: Path("C:/Users/Zed"))
+    monkeypatch.setattr(os.path, "normcase", str.lower)  # what ntpath.normcase does to case
+    assert redact(str(Path("C:/Users/Zed")).replace("Zed", "ZED") + "-x") == "~-x"
+
+
+def test_redact_survives_a_missing_home(monkeypatch):
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", no_home)
+    assert redact("/somewhere/config.toml") == "/somewhere/config.toml"
+
+
+def test_the_terminal_line_is_redacted(monkeypatch):
+    monkeypatch.setenv("TERM_PROGRAM", str(Path.home() / "bin" / "term"))
+    assert str(Path.home()) not in report(offline=True).split("terminal")[1].split("\n")[0]
+
+
+def test_diagnose_reports_instead_of_crashing_on_a_bad_proxy(monkeypatch):
+    def broken():
+        raise ValueError("Unknown scheme for proxy URL")
+
+    assert "not checked: ValueError" in report(client_factory=broken)

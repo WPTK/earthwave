@@ -33,11 +33,22 @@ FEEDS = (
 HEADERS = {"User-Agent": f"earthwave/{__version__} (--diagnose)"}
 
 
+def _fold(text: str) -> str:
+    """Case-fold for matching where the file system does (Windows paths differ only in case)."""
+    return os.path.normcase(text) if sys.platform == "win32" else text
+
+
 def redact(text: str) -> str:
     """Home directory to ``~`` and the account name masked."""
-    home = str(Path.home())
-    if home and home in text:
-        text = text.replace(home, "~")
+    try:
+        home = str(Path.home())
+    except (RuntimeError, OSError):  # no home directory can be determined
+        home = ""
+    if home:
+        at = _fold(text).find(_fold(home))
+        while at != -1:
+            text = text[:at] + "~" + text[at + len(home) :]
+            at = _fold(text).find(_fold(home))
     try:
         user = getpass.getuser()
     except Exception:
@@ -68,7 +79,7 @@ def report(offline: bool = False, client_factory: Callable[[], httpx.Client] | N
         f"earthwave  {__version__}",
         f"python    {platform.python_version()} ({'frozen binary' if getattr(sys, 'frozen', False) else 'pip/source'})",
         f"os        {platform.system()} {platform.release()} {platform.machine()}",
-        "terminal  " + ", ".join(f"{name}={os.environ.get(name, '(unset)')}" for name in TERMINAL_VARS),
+        "terminal  " + redact(", ".join(f"{name}={os.environ.get(name, '(unset)')}" for name in TERMINAL_VARS)),
         _path_line("config", default_config_path(), CONFIG_DIR_ENV),
         _path_line("history", default_history_path(), DATA_DIR_ENV),
         _path_line("log", default_log_path(), DATA_DIR_ENV),
@@ -77,6 +88,9 @@ def report(offline: bool = False, client_factory: Callable[[], httpx.Client] | N
         lines.append("feeds     not checked (--offline)")
     else:
         make = client_factory or (lambda: httpx.Client(timeout=5.0, headers=HEADERS, follow_redirects=True))
-        with make() as client:
-            lines.extend(f"feed      {name:<12}{check_feed(client, url)}" for name, url in FEEDS)
+        try:
+            with make() as client:
+                lines.extend(f"feed      {name:<12}{check_feed(client, url)}" for name, url in FEEDS)
+        except (httpx.InvalidURL, httpx.HTTPError, ValueError, OSError) as exc:  # e.g. a malformed proxy variable
+            lines.append(f"feeds     not checked: {type(exc).__name__}")
     return "\n".join(lines)

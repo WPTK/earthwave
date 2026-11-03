@@ -5,7 +5,8 @@ name: Post-release smoke
 #
 # A release made with GITHUB_TOKEN does not fire `release: published` for other workflows, so this follows the Release
 # workflow instead. It can also be started by hand for an existing tag (Actions > Post-release smoke > Run workflow).
-# --selftest must not print SKIPPED, so tags older than the build that bundles the fixtures (v0.2.0) fail on purpose.
+# v0.2.0 and earlier lack --diagnose and the fixed spec (--selftest prints SKIPPED), so they fail on purpose; the first
+# tag expected to pass is the next release.
 on:
   workflow_run:
     workflows: [Release]
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   smoke:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     strategy:
       fail-fast: false
       matrix:
@@ -44,18 +45,21 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Check the tag
+        run: |
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
       # Before anything is downloaded: checkout cleans the workspace. Windows only, for the real-input suite below.
       - uses: actions/checkout@v4
         if: matrix.ext == 'exe'
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         if: matrix.ext == 'exe'
         with:
           python-version: "3.13"
       - name: Download the published assets
         run: |
-          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
           mkdir smoke && cd smoke
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           asset="earthwave-${TAG}-${{ matrix.name }}.${{ matrix.ext }}"

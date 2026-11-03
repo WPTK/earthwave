@@ -23,8 +23,8 @@ Pick one. The commands name release `v0.2.0`, the latest release; they do not bu
 uv tool install --python 3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
 ```
 
-**With pipx or pip**, which need Python 3.12 or newer. On Python 3.11 or older pip refuses with
-`requires a different Python`; use uv or the binary instead.
+**With pipx or pip**, which need Python 3.13 for `v0.2.0` as pinned below (releases after it need Python 3.12 or newer).
+On an older Python pip refuses with `requires a different Python`; use uv or the binary instead.
 
 ```
 pipx install --python python3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
