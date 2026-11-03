@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from conftest import footer_keys, wait_until
 from test_ui import HOUR_BODY, mock_transport
-from textual.widgets._footer import FooterKey
 
 from earthwave.app import EarthwaveApp
 from earthwave.config import Config, with_overrides
@@ -23,7 +23,13 @@ from uat import states
 from uat.harness import screen_text, week_app
 
 SIZE = (130, 32)
-TARGETS = {"t": "TsunamiScreen", "o": "ObservationsScreen", "h": "HistoryScreen", "f": "FiltersScreen", "question_mark": "HelpScreen"}
+TARGETS = {
+    "t": "TsunamiScreen",
+    "o": "ObservationsScreen",
+    "h": "HistoryScreen",
+    "f": "FiltersScreen",
+    "question_mark": "HelpScreen",
+}
 
 
 def app_with_history():
@@ -58,15 +64,22 @@ async def test_w2_every_screen_by_mouse_only():
     async with app.run_test(size=SIZE) as pilot:
         await pilot.pause(0.3)
 
-        async def click_footer(key: str):
-            label = next(k for k in app.screen.query(FooterKey) if k.key == key)
+        async def click_footer(key: str, name: str):
+            before = app.screen
+            label = next(k for k in await footer_keys(pilot) if k.key == key)
             await pilot.click(offset=(label.region.x + 1, label.region.y))
-            await pilot.pause(0.5)
+            await wait_until(pilot, lambda: app.screen is not before, what=f"{name} after clicking {key}")
+            await wait_until(pilot, lambda: type(app.screen).__name__ == name, what=name)
 
-        for key, name in {"t": "TsunamiScreen", "o": "ObservationsScreen", "h": "HistoryScreen", "f": "FiltersScreen", "question_mark": "HelpScreen"}.items():
+        for key, name in {
+            "t": "TsunamiScreen",
+            "o": "ObservationsScreen",
+            "h": "HistoryScreen",
+            "f": "FiltersScreen",
+            "question_mark": "HelpScreen",
+        }.items():
             if name in ("FiltersScreen", "HelpScreen"):
-                await click_footer(key)
-                assert type(app.screen).__name__ == name
+                await click_footer(key, name)
                 # the dialogs have no footer: Cancel button for filters; help closes with Esc or ? only
                 if name == "FiltersScreen":
                     await pilot.click("#cancel")
@@ -74,12 +87,10 @@ async def test_w2_every_screen_by_mouse_only():
                 else:
                     app.pop_screen()  # NOTE: no mouse way out of help; see test_help_has_no_mouse_exit
                 continue
-            await click_footer(key)
-            assert type(app.screen).__name__ == name
-            back = next(k for k in app.screen.query(FooterKey) if k.key == "escape")
+            await click_footer(key, name)
+            back = next(k for k in await footer_keys(pilot) if k.key == "escape")
             await pilot.click(offset=(back.region.x + 1, back.region.y))
-            await pilot.pause(0.4)
-            assert app.screen is app.dashboard
+            await wait_until(pilot, lambda: app.screen is app.dashboard, what="dashboard after Back")
         await pilot.click("#quakes", offset=(10, 2))
         assert app.dashboard.query_one(QuakeList).cursor == 2
 
@@ -109,7 +120,7 @@ async def test_w3_use_every_control_once():
         await pilot.pause(0.3)
         rows = app.dashboard.query_one(QuakeList).rows
         assert rows and all("jap" in q.place.lower() for q in rows)
-        assert 'Jap' in screen_text(app)  # the status bar names the search
+        assert "Jap" in screen_text(app)  # the status bar names the search
         await pilot.press("slash", "escape")
         await pilot.press("z")
         assert app.dashboard.query_one("#map").model.mode.value != "world"
@@ -154,6 +165,7 @@ async def test_w4_offline_and_back_says_so_both_ways():
     config = with_overrides(Config(), 0.0, 24, None, "unicode")
     app = EarthwaveApp(config, run_scheduler=True, ticks=True, transport=httpx.MockTransport(net))
     async with app.run_test(size=SIZE) as pilot:
+
         async def status() -> str:
             await pilot.pause(0.6)
             return next((ln for ln in screen_text(app).splitlines() if " shown of " in ln), "")

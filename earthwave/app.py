@@ -321,8 +321,8 @@ class EarthwaveApp(App):
         self._ticks += 1
         if self._ticks % GAUGE_REFRESH_TICKS == 0:
             self.refresh_gauges()
-        if not self.screen_stack or not self.dashboard.query(QuakeList):  # shutting down, or not yet composed
-            return
+        if not self.is_running or not self.screen_stack or not self.dashboard.query(QuakeList):
+            return  # shutting down (children leave one by one, the Banner before the list), or not composed
         if self.screen is self.dashboard:
             quake_list = self.dashboard.query_one(QuakeList)
             visible = quake_list.visible_ids() if self.dashboard.list_shown else set()  # a hidden list is not seen
@@ -385,7 +385,7 @@ class EarthwaveApp(App):
                 self._backfill_if_needed(force=False)
         self.sync_tsunami()
         self.sync_gauges()
-        if not self.screen_stack:  # a poll that lands while the app is shutting down
+        if not self.is_running or not self.screen_stack:  # a poll that lands while the app is shutting down
             return
         if self.dashboard.is_mounted and self.dashboard.query(
             QuakeList
