@@ -8,7 +8,7 @@ from textual.widgets import Static
 from earthwave.poll import DataState, Freshness
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_countdown
-from earthwave.ui.theme import CYAN, FRESHNESS_COLORS, mark_level
+from earthwave.ui.theme import BLACK, CYAN, FRESHNESS_COLORS, INK, TEXT, WHITE, YELLOW, mark_level
 
 ALERT_STATES = ("info", "active", "alarm")
 FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
@@ -75,16 +75,16 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.alert_state in ("active", "alarm"):  # an acknowledged alert is still in force
         text.append(" TSUNAMI ", "bold reverse")
     if info.replay:
-        text.append(" REPLAY ", "bold black on #ffd700")  # a recording, not live data (#249)
+        text.append(" REPLAY ", f"bold {INK} on {YELLOW}")  # a recording, not live data (#249)
     state = DataState.OFFLINE if info.offline else info.data_state
     if state is not None and not info.replay:  # a recording says REPLAY; its feeds' health means nothing
         start = len(text.plain)
         text.append(
             data_chip(state, None if info.offline else info.data_age),
-            f"bold black on {FRESHNESS_COLORS[DATA_STATE_COLORS[state]]}",
+            f"bold {INK} on {FRESHNESS_COLORS[DATA_STATE_COLORS[state]]}",
         )
         chips = ((start, len(text.plain)),)
-    text.append(f" {info.shown} shown of {info.total}", "white")
+    text.append(f" {info.shown} shown of {info.total}", TEXT)
     unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     groups: dict[tuple[Freshness, str], list[SourceLine]] = {}  # one phrase per state: six loading feeds fit the bar
     for line in unhealthy:
@@ -103,7 +103,7 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
         text.append(f"next {fmt_countdown(info.next_poll)}", "grey62")
     if info.unseen:
         text.append(f" {glyphs.bar} ", "grey50")
-        text.append(f" {info.unseen} unseen ", f"bold black on {CYAN}")
+        text.append(f" {info.unseen} unseen ", f"bold {INK} on {CYAN}")
     if info.offline:
         text.append(f" {glyphs.bar} ", "grey50")
         text.append("offline, showing saved history", "grey70")
@@ -118,13 +118,13 @@ def on_warning_ground(text: Text, chips: tuple[tuple[int, int], ...] = ()) -> Te
     """A Warning's status ground is the loudest red on screen (theme.LEVEL_SURFACES), which no light grey or cyan reads
     on (1.3 to 2:1): the words go black and the TSUNAMI chip white on black. Colour meaning in the bar (filter, feed
     dots) gives way to the alert; the words still carry it."""
-    plain = Text(text.plain, style="#000000", no_wrap=True, overflow="ellipsis")
+    plain = Text(text.plain, style=BLACK, no_wrap=True, overflow="ellipsis")
     if text.plain.startswith(" TSUNAMI "):
-        plain.stylize("bold #ffffff on #000000", 0, len(" TSUNAMI "))
+        plain.stylize(f"bold {WHITE} on {BLACK}", 0, len(" TSUNAMI "))
     if (at := text.plain.find(" REPLAY ")) >= 0:
-        plain.stylize("bold #ffffff on #000000", at, at + len(" REPLAY "))
+        plain.stylize(f"bold {WHITE} on {BLACK}", at, at + len(" REPLAY "))
     for at, end in chips:  # the data chip keeps a ground of its own, so a Warning cannot hide an outage
-        plain.stylize("bold #ffffff on #000000", at, end)
+        plain.stylize(f"bold {WHITE} on {BLACK}", at, end)
     return plain
 
 

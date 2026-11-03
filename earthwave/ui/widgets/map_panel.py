@@ -35,7 +35,7 @@ from earthwave.ui.graphics.raster import Palette, Scene, Shape
 from earthwave.ui.graphics.sixel import HOLE, RGB, encode
 from earthwave.ui.graphics.smooth import render_smooth
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import LEVEL_COLORS, mag_color
+from earthwave.ui.theme import BRIGHT, LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
     WORLD,
     Viewport,
@@ -53,7 +53,7 @@ log = logging.getLogger(__name__)
 # Plain fallback for a bare `row_segments` call; the panel colours coast and land from the theme
 # (`MapPanel.DEFAULT_CSS`).
 COAST_STYLE = Style()
-HOME_STYLE = Style(color="bright_white", bold=True)
+HOME_STYLE = Style(color=BRIGHT, bold=True)
 WORLD_TOP = 84.0  # north edge of a world view too short to show all 180 degrees of latitude (Greenland ends at 83.6)
 MAJOR_MAG = AlertsConfig().major_magnitude  # with nothing selected, panned to or home, zoom goes to the latest of these
 WORLD_PAN_STEP = 30  # degrees of longitude per arrow press at world zoom
@@ -233,7 +233,7 @@ def _level_style(mark: TsunamiMark, tracker: AttentionTracker | None) -> Style:
     key = TSUNAMI_PREFIX + mark.alert_id
     if tracker is not None and tracker.kind_of(key) is not None:
         flash = tracker.style_for(key)
-        style = Style(color="white", bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
+        style = Style(color=flash.fg, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
     return style
 
 
@@ -296,7 +296,7 @@ def _marker_style(quake: Earthquake, selected: bool, tracker: AttentionTracker |
     if tracker is not None and tracker.kind_of(quake.id) is not None:
         attended = True
         flash = tracker.style_for(quake.id)
-        style = Style(color="white", bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
+        style = Style(color=flash.fg, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
     if selected:
         style = Style(color=style.color, bold=True, reverse=True)
     return style, attended
