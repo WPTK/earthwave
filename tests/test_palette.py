@@ -1,5 +1,7 @@
 """The Ctrl+P command palette (#322): every screen action by name, and the in-app way to set the home (#251)."""
 
+from dataclasses import replace
+
 import pytest
 from conftest import wait_until
 from test_ui import week_app
@@ -34,11 +36,9 @@ async def run_command(pilot, text: str) -> None:
     await wait_until(pilot, lambda: isinstance(app.screen, CommandPalette), what="the palette")
     app.screen.query_one(CommandInput).value = text
     await wait_until(pilot, lambda: app.screen.query_one(CommandList).option_count > 0, what="a hit")
-    for _ in range(100):
-        if not isinstance(app.screen, CommandPalette):
-            break
-        await pilot.press("enter")
-        await pilot.pause(0.02)
+    listing = app.screen.query_one(CommandList)
+    await wait_until(pilot, lambda: listing.highlighted is not None, what="a highlighted hit")
+    await pilot.press("enter")
     await wait_until(pilot, lambda: not isinstance(app.screen, CommandPalette), what="the palette to close")
 
 
@@ -229,7 +229,6 @@ async def test_set_home_goes_through_save_home(tmp_path, monkeypatch):
     app, path = palette_app(tmp_path)
     calls = []
     monkeypatch.setattr("earthwave.app.save_home", lambda *args: calls.append(args))
-    monkeypatch.setattr("earthwave.app.load_config", lambda _path: None)
     async with app.run_test(size=SIZE) as pilot:
         await ready(pilot)
         await fill_home(pilot, "51.5,-0.12", "")
@@ -295,3 +294,61 @@ async def test_cancel_leaves_the_config_alone(tmp_path):
         await pilot.press("escape")
         await wait_until(pilot, lambda: app.screen is app.dashboard)
     assert path.read_text(encoding="utf-8") == before
+
+
+async def test_the_dialog_is_centred_and_keeps_every_digit_of_the_home(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[home]\nname = "NYC"\nlat = 40.712776\nlon = -74.005974\n', encoding="utf-8")
+    app = week_app(config_path=path)
+    app.config = replace(app.config, home=HomeConfig("NYC", 40.712776, -74.005974))
+    async with app.run_test(size=SIZE) as pilot:
+        await ready(pilot)
+        await run_command(pilot, "Set home location")
+        await wait_until(pilot, lambda: isinstance(app.screen, SetHomeScreen))
+        region = app.screen.query_one("#dialog").region
+        assert abs((region.x + region.width / 2) - SIZE[0] / 2) <= 1 and region.y > 0
+        assert app.screen.query_one("#location", Input).value == "40.712776,-74.005974"
+        app.screen.query_one("#home_name", Input).value = "Home"  # a name-only edit
+        await pilot.click("#apply")
+        await wait_until(pilot, lambda: "Home saved" in notices(app))
+    home = load_config(path).home
+    assert (home.name, home.lat, home.lon) == ("Home", 40.712776, -74.005974)
+
+
+async def test_textual_only_entries_that_fit_stay():
+    app = week_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await ready(pilot)
+        titles = {c.title for c in app.get_system_commands(app.screen)}
+        assert not titles & {"Theme", "Quit", "Screenshot"}
+
+
+async def test_clear_search_closes_the_open_box():
+    app = week_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await ready(pilot)
+        await pilot.press("slash", "z")
+        box = app.dashboard.query_one("#search", Input)
+        await wait_until(pilot, lambda: box.display and box.value == "z", what="the search box")
+        await run_command(pilot, "Clear search")
+        await wait_until(pilot, lambda: not box.display and app.view.query == "", what="the box to close")
+        assert app.screen is app.dashboard
+
+
+@pytest.mark.parametrize(
+    ("setup", "text", "check"),
+    [
+        ("t", "Sort by magnitude", lambda app: app.sort is SortKey.MAG),
+        ("question_mark", "Show M6 and up", lambda app: app.view.min_magnitude == 6.0),
+        ("f", "Search places", lambda app: app.dashboard.query_one("#search", Input).display),
+        ("t", "Set home location", lambda app: isinstance(app.screen, SetHomeScreen)),
+    ],
+)
+async def test_view_commands_from_another_screen_return_to_the_list_first(setup, text, check):
+    app = week_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await ready(pilot)
+        await pilot.press(setup)
+        await wait_until(pilot, lambda: app.screen is not app.dashboard, what="another screen")
+        await run_command(pilot, text)
+        await wait_until(pilot, lambda: check(app), what=text)

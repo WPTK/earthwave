@@ -3,21 +3,22 @@
 import asyncio
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
 import httpx
 from textual import events, work
-from textual.app import App
+from textual.app import App, SystemCommand
 from textual.binding import Binding
 from textual.filter import Monochrome
 from textual.message import Message
+from textual.screen import Screen
 from textual.timer import Timer
 
 from earthwave.clock import Clock, SystemClock
-from earthwave.config import Config, ConfigError, load_config, save_home
+from earthwave.config import Config, ConfigError, save_home
 from earthwave.models import Batch, Earthquake
 from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
@@ -86,6 +87,13 @@ class EarthwaveApp(App):
     TITLE = "earthwave"
     BINDINGS = [Binding("q", "quit", "Quit")]
     COMMANDS = App.COMMANDS | {EarthwaveCommands}  # Ctrl+P: Textual's palette, with the screen actions added
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Textual's own entries, less the ones that are wrong here: Quit is the palette's own, and a theme change or
+        a screenshot has no place in an app that paints its own legible and CVD-safe colours."""
+        for command in super().get_system_commands(screen):
+            if command.title not in ("Theme", "Quit", "Screenshot"):
+                yield command
 
     def get_css_variables(self) -> dict[str, str]:
         return {**super().get_css_variables(), **ground_variables(), **css_variables()}
@@ -681,7 +689,7 @@ class EarthwaveApp(App):
 
     async def go_screen(self, name: str) -> None:
         """A palette command's target: back to the quake list first (the way Esc would), then on to the screen."""
-        while len(self.screen_stack) > 1 and self.screen is not self.dashboard:
+        while len(self.screen_stack) > 1 and self.screen is not self.dashboard:  # a palette still up pops too
             if isinstance(self.screen, ObservationsScreen):
                 self.close_observations()
             await self.pop_screen()
@@ -713,6 +721,14 @@ class EarthwaveApp(App):
             board.action_fullscreen_map()
         elif name == "zoom":
             board.action_zoom_map()
+        elif name == "sethome":
+            self.open_set_home()
+        elif name == "clearsearch":
+            board._close_search("")  # the box too, if it is open
+        elif name.startswith("sort:"):
+            self.set_sort(SortKey(name[5:]))
+        elif name.startswith("mag:"):
+            self.apply_filters(float(name[4:]), self.view.hours)
 
     def set_sort(self, key: SortKey) -> None:
         self.sort = key
@@ -733,8 +749,7 @@ class EarthwaveApp(App):
             self.notify("No config file is in use (--no-config), so the home was not saved", severity="warning")
             return
         try:
-            save_home(self.config_path, name, lat, lon)
-            load_config(self.config_path)  # what was written must parse
+            save_home(self.config_path, name, lat, lon)  # builds and parses the new text first, then swaps it in
         except ConfigError as exc:
             self.notify(str(exc), title="Home not saved", severity="error", timeout=10, markup=False)
             return

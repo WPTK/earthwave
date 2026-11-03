@@ -246,7 +246,7 @@ Screen.map-full #map {
     display: block;
 }
 
-FiltersScreen, HelpScreen {
+FiltersScreen, HelpScreen, SetHomeScreen {
     align: center middle;
 }
 

@@ -37,7 +37,7 @@ class SetHomeScreen(ModalScreen[tuple[float, float, str] | None]):
         with Vertical(id="dialog"):
             yield Label("Set home", id="dialog_title")
             yield Label("Location: LAT,LON")
-            yield Input(f"{here.lat:g},{here.lon:g}" if here.enabled else "", id="location", placeholder="40.71,-74.01")
+            yield Input(f"{here.lat!r},{here.lon!r}" if here.enabled else "", id="location", placeholder="40.71,-74.01")
             yield Label("Name (optional)")
             yield Input(here.name, id="home_name", placeholder="home")
             yield Label("", id="error")
