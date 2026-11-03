@@ -1,16 +1,25 @@
 # Development
 
-earthwave needs Python 3.13.
+earthwave needs Python 3.12 or newer (`requires-python` in `pyproject.toml`).
 
 ## Setup
 
 ```powershell
-py -3.13 -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev]"
 ```
 
-On Linux and macOS use `python3.13 -m venv .venv` and `.venv/bin/python`. Use `127.0.0.1`, not `localhost`, for local
+On Linux and macOS use `python3.12 -m venv .venv` and `.venv/bin/python`. Use `127.0.0.1`, not `localhost`, for local
 servers on Windows.
+
+## Platforms
+
+CI (`.github/workflows/ci.yml`) runs the tests on Python 3.13 on `windows-2025`, `ubuntu-24.04`, `macos-15` and
+`windows-2022`, on Python 3.12 (the floor) on `ubuntu-24.04`, and on Python 3.14 on `ubuntu-24.04` without blocking the
+merge. The Windows runners are Windows Server images, used as stand-ins for the console. The release workflow builds
+the Windows exe on `windows-2025`, the Linux binary on `ubuntu-22.04` and the macOS binary on `macos-latest`. Separately
+from CI, the app is used by hand on Windows 11 in Windows Terminal; nothing in the repository records that. Older
+Windows versions and the legacy console host are not tested.
 
 ## Checks
 
@@ -44,14 +53,14 @@ vendored in `tests/uat_kit/` from WPTK/wxbrief e01891b, sending real key bytes a
 skips with a reason when the exe or `tui-test` is missing.
 
 ```powershell
-gh release download v0.2.0 -p "earthwave-*-windows-x86_64.exe" -p SHA256SUMS -D rel
-$env:EARTHWAVE_EXE = "$PWD\rel\earthwave-v0.2.0-windows-x86_64.exe"; $env:PYTHONUTF8 = "1"
+gh release download -p "earthwave-*-windows-x86_64.exe" -p SHA256SUMS -D rel
+$env:EARTHWAVE_EXE = (Get-Item rel\earthwave-*-windows-x86_64.exe).FullName; $env:PYTHONUTF8 = "1"
 .venv\Scripts\python -m pytest tests/uat/test_realinput.py -p no:xdist
 ```
 
 ConPTY answers no sixel, so this run exercises the braille map path; how sixel looks stays a manual check in a real
-Windows Terminal. Windows keeps its config and history under the user profile whatever the environment says, so the run
-uses `--no-config` and `--replay`. Set `EARTHWAVE_UAT_NETWORK=1` to add one real-network first-run smoke test.
+Windows Terminal. On Windows `%LOCALAPPDATA%` is read directly, but `EARTHWAVE_CONFIG_DIR` and
+`EARTHWAVE_DATA_DIR` win on every OS (`earthwave/paths.py`); this run uses `--no-config` and `--replay`. Set `EARTHWAVE_UAT_NETWORK=1` to add one real-network first-run smoke test.
 
 ## Running with a recording
 
@@ -68,8 +77,8 @@ session plays back in seconds. `--debug` writes a DEBUG log to the default log f
 
 `earthwave.spec` builds a one-file binary with PyInstaller (a dev extra). It bundles `earthwave/data/*.json` and
 `earthwave/ui/*.tcss`, Textual's own data files, and hidden imports for Textual's lazily loaded modules, the HTTP layer (`httpx`, `hishel`,
-`stamina` and what they import) and `platformdirs` and `sqlite3`; the HTTP libraries' package metadata is bundled so
-`--diagnose` can name their versions. Python itself is bundled; the user needs nothing installed.
+`stamina` and what they import) and `platformdirs` and `sqlite3`. Package metadata of the HTTP libraries, Textual and Rich is bundled, so `--diagnose` can
+name their versions and their licence texts travel with the binary. Python itself is bundled; the user needs nothing installed.
 
 ```powershell
 scripts\build_exe.ps1            # builds dist\earthwave.exe, then runs --version and --selftest on it
@@ -77,8 +86,8 @@ scripts\build_exe.ps1            # builds dist\earthwave.exe, then runs --versio
 
 On Linux and macOS, run `python -m PyInstaller --noconfirm --clean earthwave.spec`; the result is `dist/earthwave`.
 A PyInstaller binary is built for the OS and CPU it was built on. The release workflow builds the Linux binary on
-Ubuntu 22.04, so it needs glibc 2.35 or newer. The binary has no `tests/fixtures` folder, so its
-`--selftest` skips the fixture parse and still renders a headless frame.
+Ubuntu 22.04, so it needs glibc 2.35 or newer. The binary bundles the fixtures `--selftest`
+parses (`earthwave.spec`), so its self-test does the same fixture parse as a source checkout.
 
 ### Signing
 
@@ -94,7 +103,7 @@ Only on the maintainer's word.
 1. In a release PR, set `__version__` in `earthwave/__init__.py` (ZeroVer: `0.y.z`, minor for features, patch for
    fixes) and add a `## [0.y.z] - YYYY-MM-DD` section to `CHANGELOG.md` in
    [Common Changelog](https://common-changelog.org/) form, composed from `git log` and the merged pull requests since the last tag.
-   Update the `v0.y.z` tag in every README install command too; `tests/test_install_docs.py` fails until it matches `__version__`.
+   The README install commands use a `TAG` placeholder, so they need no edit.
 2. Merge it, then tag the merge commit and push the tag:
 
    ```powershell

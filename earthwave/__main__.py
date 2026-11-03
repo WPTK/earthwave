@@ -209,7 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 PARSER_EPILOG = r"""environment:
   EARTHWAVE_CONFIG_DIR  directory holding config.toml (default: the platform user config dir)
-  EARTHWAVE_DATA_DIR    directory holding history.sqlite, and the --debug log (default: the platform user data dir)
+  EARTHWAVE_DATA_DIR    directory holding history.sqlite, cache/http.sqlite and the --debug log (default: the
+                        platform user data dir)
   EARTHWAVE_MAP_RENDERER  auto, braille or sixel for this run; beats [view] map_renderer in the config
   HTTPS_PROXY, HTTP_PROXY, NO_PROXY  honoured for every feed request
 On Windows the defaults sit under %LOCALAPPDATA%\earthwave. Uninstalling earthwave never removes these directories."""

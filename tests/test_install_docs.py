@@ -4,8 +4,6 @@ import re
 import tomllib
 from pathlib import Path
 
-import earthwave
-
 ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 
@@ -29,20 +27,20 @@ def test_ci_tests_the_python_floor():
     assert f'python: "{floor}"' in ci
 
 
-def test_install_commands_pin_the_current_release():
+def test_install_commands_name_no_release_and_say_to_use_the_latest():
     section = _install_section()
-    tags = set(re.findall(r"\bv0\.\d+\.\d+\b", section))
-    assert tags == {f"v{earthwave.__version__}"}, "bump the README install tags with __version__ (docs/development.md)"
-    assert "releases/latest" not in section
-    assert not re.search(r"earthwave\.git(?!@)", section), "an unpinned git URL builds main, not the release"
+    assert not re.findall(r"\bv\d+\.\d+\.\d+\b", section), "the install section names no fixed release tag"
+    assert "latest release" in section
+    assert "`TAG`" in section
+    urls = re.findall(r"earthwave\.git\S*", section)
+    assert urls and all(u == "earthwave.git@TAG" for u in urls), "every install URL carries the @TAG placeholder"
 
 
 def test_readme_asset_names_match_the_release_workflow():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert 'base="earthwave-${GITHUB_REF_NAME}-${{ matrix.name }}"' in workflow
-    v = f"v{earthwave.__version__}"
     for suffix in ("windows-x86_64.exe", "linux-x86_64.tar.gz", "macos-arm64.tar.gz"):
-        assert f"earthwave-{v}-{suffix}" in _install_section()
+        assert f"earthwave-TAG-{suffix}" in _install_section()
 
 
 def test_readme_mentions_every_cli_flag():
