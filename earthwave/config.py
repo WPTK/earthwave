@@ -1,6 +1,7 @@
 """TOML configuration: defaults, validation, platformdirs paths and the commented first-run template."""
 
 import dataclasses
+import json
 import logging
 import math
 import re
@@ -308,6 +309,7 @@ def with_overrides(
     hours: float | None = None,
     home: tuple[float, float] | None = None,
     glyphs: str | None = None,
+    home_name: str | None = None,
 ) -> Config:
     """Apply command-line overrides; --home sets a coordinate pair and names it "home" if the config has no name."""
     view = config.view
@@ -323,5 +325,35 @@ def with_overrides(
         view = dataclasses.replace(view, glyphs=glyphs)
     home_cfg = config.home
     if home is not None:
-        home_cfg = dataclasses.replace(home_cfg, name=home_cfg.name or "home", lat=home[0], lon=home[1])
+        home_cfg = dataclasses.replace(home_cfg, name=home_name or home_cfg.name or "home", lat=home[0], lon=home[1])
     return dataclasses.replace(config, view=view, home=home_cfg)
+
+
+def save_home(path: Path, name: str, lat: float, lon: float) -> None:
+    """Write name, lat and lon into the [home] table of the config file, changing nothing else (comments, other keys
+    and other sections stay as they are). A missing table or key is added. Raises ConfigError if the file cannot be
+    read or written; the caller has already checked that it parses."""
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+    values = {"name": json.dumps(name), "lat": repr(float(lat)), "lon": repr(float(lon))}
+    start = next((i for i, line in enumerate(lines) if (m := _HEADER.match(line)) and m.group(1) == "home"), None)
+    if start is None:
+        lines += ["", "[home]", *(f"{key} = {value}" for key, value in values.items())]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if _HEADER.match(lines[i])), len(lines))
+        pending = dict(values)
+        for i in range(start + 1, end):
+            match = re.match(r"^(\s*)(name|lat|lon)(\s*=\s*)(.*?)(\s+#.*)?$", lines[i])
+            if match and match.group(2) in pending:
+                key = match.group(2)
+                lines[i] = f"{match.group(1)}{key}{match.group(3)}{pending.pop(key)}{match.group(5) or ''}"
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1  # before the blank lines that separate the next table
+        lines[insert:insert] = [f"{key} = {value}" for key, value in pending.items()]
+    try:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot save the home: {exc}") from exc

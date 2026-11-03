@@ -17,9 +17,18 @@ import httpx
 from earthwave import __version__
 from earthwave.app import EarthwaveApp
 from earthwave.clock import Clock, ReplayClock, SystemClock
-from earthwave.config import CHOICES, Config, ConfigError, load_config, parse_home, with_overrides
+from earthwave.config import (
+    CHOICES,
+    Config,
+    ConfigError,
+    default_config_path,
+    load_config,
+    parse_home,
+    save_home,
+    with_overrides,
+)
 from earthwave.diagnose import report as diagnose_report
-from earthwave.logging_setup import setup_logging
+from earthwave.logging_setup import default_log_path, setup_logging
 from earthwave.models import Batch, Earthquake
 from earthwave.net import EnvProxyTransport, RecordingTransport, ReplayTransport, recording_start
 from earthwave.notify.desktop import default_notifier
@@ -145,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="earthwave",
         description="Earthquakes and tsunami alerts in your terminal.",
-        epilog=PARSER_EPILOG,
+        epilog=f"default log file (--debug): {default_log_path()}\n\n{PARSER_EPILOG}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"earthwave {__version__}")
@@ -158,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mag", type=float, metavar="M", help="minimum magnitude shown")
     parser.add_argument("--hours", type=float, metavar="N", help="show quakes from the last N hours")
     parser.add_argument("--home", metavar="LAT,LON", help="home location for distances and near-home alerts")
+    parser.add_argument(
+        "--home-name", metavar="NAME", help="name for the home location (default: the config's, else home)"
+    )
+    parser.add_argument(
+        "--save-home", action="store_true", help="write --home (and --home-name) to the config file, then exit"
+    )
     parser.add_argument("--glyphs", choices=("auto", "unicode", "ascii"), help="glyph set")
     parser.add_argument("--record", metavar="PATH", help="append every HTTP exchange to a JSONL recording")
     parser.add_argument("--replay", metavar="PATH", help="serve a recording instead of the network")
@@ -165,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offline", action="store_true", help="fetch nothing; browse the saved history")
     parser.add_argument("--notify", action="store_true", help="force toasts and bell on (off under replay)")
     parser.add_argument("--log", metavar="PATH", help="write a rotating log file (default level WARNING)")
-    parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file")
+    parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file (path below)")
     return parser
 
 
@@ -198,7 +213,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         config = Config() if args.no_config else load_config(Path(args.config) if args.config else None)
         home = parse_home(args.home) if args.home else None
-        config = with_overrides(config, args.min_mag, args.hours, home, args.glyphs)
+        config = with_overrides(config, args.min_mag, args.hours, home, args.glyphs, args.home_name)
         renderer = map_renderer_setting(config.view.map_renderer)
     except ConfigError as exc:
         print(f"earthwave: {exc}", file=sys.stderr)
@@ -255,11 +270,46 @@ def _attach_home_value(argv: list[str]) -> list[str]:
     return out
 
 
+def run_selftest(args: argparse.Namespace) -> int:
+    """--selftest, logging to the file when --debug or --log is given."""
+    try:
+        log_path = setup_logging(Path(args.log) if args.log else None, args.debug)
+    except OSError as exc:
+        print(f"earthwave: cannot open the log file: {exc}", file=sys.stderr)
+        return 2
+    logger = logging.getLogger("earthwave.selftest")
+    logger.info("selftest: start, earthwave %s", __version__)
+    code = selftest()
+    logger.info("selftest: exit %d", code)
+    if log_path:
+        print(f"selftest: log written to {log_path}")
+    return code
+
+
+def run_save_home(args: argparse.Namespace) -> int:
+    if not args.home:
+        print("earthwave: --save-home needs --home LAT,LON", file=sys.stderr)
+        return 2
+    path = Path(args.config) if args.config else default_config_path()
+    try:
+        config = load_config(Path(args.config) if args.config else None)  # also writes the first-run template
+        lat, lon = parse_home(args.home)
+        save_home(path, args.home_name or config.home.name or "home", lat, lon)
+        load_config(path)  # what was written must parse
+    except ConfigError as exc:
+        print(f"earthwave: {exc}", file=sys.stderr)
+        return 2
+    print(f"saved home {lat}, {lon} to {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(_attach_home_value(sys.argv[1:] if argv is None else argv))
     if args.selftest:
-        return selftest()
+        return run_selftest(args)
+    if args.save_home:
+        return run_save_home(args)
     if args.diagnose:
         print(diagnose_report(offline=args.offline))
         return 0
