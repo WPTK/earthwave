@@ -8,56 +8,40 @@ alert next to what the water is actually doing. It uses only free public feeds t
 
 *Recorded data, not live: the app replaying a saved session with `--replay`.*
 
-![earthwave dashboard: quake list, world map and tsunami panel](docs/img/dashboard.svg)
-
 This is a 0.x release. It works and is tested, but it is young, and details such as key bindings and the config file may
 still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
 
-Pick one. The commands name release `v0.2.0`, the latest release; they do not build unreleased code.
+Pick one. The first two need Python 3.12 or newer; the binary needs none. Install the latest release: replace `TAG`
+with its tag from [Releases](https://github.com/WPTK/earthwave/releases). Without `@TAG` the commands build `main`, which
+can be ahead of the latest release.
 
-**With uv** (any Python version; uv fetches Python 3.13 if you lack it):
-
-```
-uv tool install --python 3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
-```
-
-**With pipx or pip**, which need Python 3.13 for `v0.2.0` as pinned below (releases after it need Python 3.12 or newer).
-On an older Python pip refuses with `requires a different Python`; use uv or the binary instead.
+**With uv, pipx or pip.** uv fetches Python 3.12 if you lack it. On an older Python, pip refuses with
+`requires a different Python`; use uv or the binary.
 
 ```
-pipx install --python python3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
+uv tool install --python 3.12 git+https://github.com/WPTK/earthwave.git@TAG
+pipx install --python python3.12 git+https://github.com/WPTK/earthwave.git@TAG
+python -m pip install git+https://github.com/WPTK/earthwave.git@TAG     # inside a virtual environment
 ```
 
-or, inside a virtual environment, `python -m pip install git+https://github.com/WPTK/earthwave.git@v0.2.0`.
+**Release binary.** Download the file for your system from the latest release (names carry the tag):
 
-**Release binary**, no Python needed. The files are named with the version, so the links below name `v0.2.0` too.
-Each release lists them under [Releases](https://github.com/WPTK/earthwave/releases).
-
-- Windows: [`earthwave-v0.2.0-windows-x86_64.exe`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-windows-x86_64.exe).
-  Save it in a folder on your `PATH` and rename it to `earthwave.exe`, so that `earthwave` runs it.
-- Linux x86-64: [`earthwave-v0.2.0-linux-x86_64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-linux-x86_64.tar.gz).
-  Unpack it and put `earthwave` on your `PATH`:
-  `tar -xzf earthwave-v0.2.0-linux-x86_64.tar.gz && mkdir -p ~/.local/bin && install -m 755 earthwave ~/.local/bin/`.
-  It is built for glibc 2.35 or newer (Ubuntu 22.04 and later). Alpine and other musl systems are not supported; use uv or pip with Python 3.13 instead.
-- macOS arm64: [`earthwave-v0.2.0-macos-arm64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-macos-arm64.tar.gz),
-  unpacked and installed the same way (`~/.local/bin` is not on the macOS `PATH` by default; add it, or use
-  `/usr/local/bin`). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
-
-Windows: CI runs the tests on GitHub's `windows-2022` and `windows-2025` runners (Windows Server images, used as
-stand-ins for the console), and the release exe is built on `windows-2025`. Separately from CI, the app is used by hand
-on Windows 11 in Windows Terminal. Older Windows versions and the legacy console host are not tested.
+- Windows: `earthwave-TAG-windows-x86_64.exe`. Save it in a folder on your `PATH` and rename it to `earthwave.exe`.
+- Linux x86-64: `earthwave-TAG-linux-x86_64.tar.gz`. Unpack it and put `earthwave` on your `PATH`:
+  `tar -xzf earthwave-TAG-linux-x86_64.tar.gz && mkdir -p ~/.local/bin && install -m 755 earthwave ~/.local/bin/`.
+  It needs glibc 2.35 or newer (Ubuntu 22.04 and later); musl systems such as Alpine are not supported.
+- macOS arm64: `earthwave-TAG-macos-arm64.tar.gz`, installed the same way (`~/.local/bin` is not on the macOS `PATH`
+  by default). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
 
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
-download against `SHA256SUMS` from the same release.
+download against `SHA256SUMS` from the same release. The platforms CI covers are listed in
+[`docs/development.md`](docs/development.md#platforms); older Windows versions and the legacy console host are not tested.
 
-Then check it works:
-
-```
-earthwave --version
-earthwave --selftest
-```
+**Check the install** with `earthwave --version` and `earthwave --selftest`. The self-test imports five dependencies,
+parses the bundled sample feeds, renders one screen without a terminal, prints `selftest: ok` and exits 0. It does not
+use the network.
 
 ## Run
 
@@ -65,68 +49,32 @@ earthwave --selftest
 earthwave
 ```
 
-The first run writes a commented config file to your user config directory. Useful options:
+The first run writes a commented config file to your user config directory. Use a terminal at least 100 columns by 30
+rows; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
 
-```
-earthwave --min-mag 4.5 --hours 72     # what to list
-earthwave --home 40.7,-74.0            # distances and near-home alerts
-earthwave --glyphs ascii               # for terminals without braille
-earthwave --offline                    # no network; browse the saved history
-earthwave --record session.jsonl       # save every request ...
-earthwave --replay session.jsonl       # ... and play it back later
-earthwave --help                       # everything else
-```
-
-`--home` applies to that run only. `earthwave --home 40.7,-74.0 --home-name "New York" --save-home` writes it to the
-config file and exits, leaving the rest of the file as it was. In the app, `Ctrl+P` then "Set home location" does the
-same (restart earthwave to use it). Or edit the file by hand (its path is under "Where
-files live"):
-
-```toml
-[home]
-name = "New York"
-lat = 40.7
-lon = -74.0
-```
-
-The app has no screen for setting the home. A mistake in the config file is reported with the section
-and key it is in, and every mistake is listed at once.
-
-The rest of the flags:
+For example, `earthwave --min-mag 4.5 --hours 72 --home 40.7,-74.0`.
 
 | Flag | Meaning |
 | --- | --- |
 | `--config PATH` | read this config file instead of the default |
 | `--no-config` | ignore the config file and use defaults |
-| `--notify` | force toasts and the bell on (they are off under `--replay`) |
-| `--speed N` | replay speed multiplier, default 1 (with `--replay`) |
-| `--log PATH` | write a rotating log file to PATH (WARNING and above) |
-| `--debug` | DEBUG logging to the default log file (also with `--selftest`; `--help` prints the path) |
-| `--home-name NAME` | name for the home location |
+| `--min-mag M`, `--hours N` | smallest magnitude and hours back to list |
+| `--home LAT,LON`, `--home-name NAME` | home location for this run, and its name |
 | `--save-home` | write `--home` and `--home-name` to the config file, then exit |
-| `--diagnose` | print version, platform, terminal, file paths and feed reachability, then exit; paste it into a bug report |
+| `--glyphs auto\|unicode\|ascii` | glyph set; `ascii` for terminals without braille |
+| `--offline` | fetch nothing; browse the saved history |
+| `--record PATH`, `--replay PATH` | save every HTTP exchange; serve a recording instead of the network |
+| `--speed N` | replay speed multiplier, default 1 (with `--replay`) |
+| `--notify` | force toasts and the bell on (they are off under `--replay`) |
+| `--log PATH` | write a rotating log file to PATH (WARNING and above) |
+| `--debug` | DEBUG logging to the default log file (`--help` prints the path) |
+| `--diagnose` | print version, platform, terminal, file paths and feed reachability, then exit |
+| `--version`, `--selftest` | see "Check the install" |
 
-### Where files live
-
-| | Windows | Linux | macOS |
-| --- | --- | --- | --- |
-| Config | `%LOCALAPPDATA%\earthwave\config.toml` | `~/.config/earthwave/config.toml` | `~/Library/Application Support/earthwave/config.toml` |
-| Log (only with `--log` or `--debug`) | `%LOCALAPPDATA%\earthwave\Logs\earthwave.log` | `~/.local/state/earthwave/log/earthwave.log` | `~/Library/Logs/earthwave/earthwave.log` |
-| HTTP cache | `%LOCALAPPDATA%\earthwave\cache\http.sqlite` | `~/.local/share/earthwave/cache/http.sqlite` | `~/Library/Application Support/earthwave/cache/http.sqlite` |
-| Saved history | `%LOCALAPPDATA%\earthwave\history.sqlite` | `~/.local/share/earthwave/history.sqlite` | `~/Library/Application Support/earthwave/history.sqlite` |
-
-These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, the HTTP cache under `cache/`, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
-
-To report a bug, paste the output of `earthwave --diagnose`, run `earthwave --debug`, then open an issue at
-[github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues) with the version and the end of the log.
-
-Use a terminal at least 100 columns wide and 30 rows tall; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
-
-On a terminal that supports sixel graphics (Windows Terminal 1.22 or later, foot, WezTerm, xterm with sixel) the map is
-drawn at pixel resolution. `map_renderer` under `[view]` in the config file is `auto` by default: sixel when the terminal
-reports it, braille otherwise (also under `NO_COLOR`, `TERM=dumb`, tmux or screen, a pipe, or a terminal that does not
-answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE_MAP_RENDERER` (`auto`, `braille` or
-`sixel`) does the same for one run and wins over the config file.
+Config keys, home location, file paths, environment variables, proxies and the map renderer are in
+[`docs/configuration.md`](docs/configuration.md). Aftershock grouping, tsunami banners and notifications, replay and the
+saved history are in [`docs/features.md`](docs/features.md). Setup, checks and releases are in
+[`docs/development.md`](docs/development.md).
 
 ## Keys
 
@@ -139,28 +87,10 @@ answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE
 | `f` `s` `/` | filters, sort, search |
 | `g` `Space` | group aftershocks under their mainshock; open or close the group under the cursor |
 | `m` `z` | show or hide the map, zoom it |
-| `t` | tsunami alerts and bulletins |
-| `o` | sea-level gauges |
-| `h` | history by day |
-| `a` | acknowledge alerts |
-| `r` | refresh now |
+| `t` `o` `h` | tsunami alerts and bulletins; sea-level gauges; history by day |
+| `a` `r` | acknowledge alerts; refresh now |
 | `Ctrl+P` | command palette: every action by name, and Set home location |
 | `q` | quit |
-
-### Aftershock groups
-
-`g` nests the quakes that look like an aftershock sequence under their mainshock, collapsed to one row marked `[+3]`
-(three aftershocks); `Space` opens it (`[-3]`) and closes it again. The rule is Gardner and Knopoff (1974): a quake is an
-aftershock of a larger one if it comes after it, is smaller, and falls within `10^(0.5409 M - 0.547)` days (`10^(0.032 M
-+ 2.7389)` from M 6.5) and `10^(0.1238 M + 0.983)` km of it. Quakes are taken biggest first, so each is in at most one
-group and an aftershock is never itself a mainshock. Only the quakes the filters let through are grouped. The status bar still counts folded
-aftershocks as shown, and a new aftershock stays unseen until its group is opened or acknowledged with `a`. It is off by
-default, and the map still shows every quake.
-
-A tsunami watch, advisory or warning raises a coloured banner across the top, and the status bar changes colour. Major
-quakes and new alerts can also raise a desktop notification and a terminal bell.
-
-![the tsunami screen showing a Kamchatka warning and its bulletin](docs/img/tsunami.svg)
 
 ## Data sources
 
@@ -170,30 +100,23 @@ quakes and new alerts can also raise a desktop notification and a terminal bell.
 - [Japan Meteorological Agency](https://www.jma.go.jp/) tsunami information, used with attribution
 - [Natural Earth](https://www.naturalearthdata.com/) coastlines and land polygons, public domain
 
-Requests honour the standard proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) and, on Windows, the system proxy
-setting.
-
 earthwave identifies itself to every feed, asks whether a copy has changed instead of downloading it again, and backs
 off when a feed says to.
 
 **earthwave is not an official tsunami or earthquake warning service and is not affiliated with any of these agencies.
 Do not rely on it for safety decisions; follow your local authorities.**
 
-## Checking an install
+## Reporting a bug
 
-```
-earthwave --version
-earthwave --selftest
-```
-
-`--selftest` checks that every module imports and renders one screen without a terminal; it also parses the saved sample feeds (the release binary carries them). It prints `selftest: ok` and exits 0 on success. It does not use the network.
-
-## Development
-
-See [`docs/development.md`](docs/development.md) for setup, checks, the release process and the data-capture scripts.
+Run `earthwave --diagnose` and paste its output into an issue at
+[github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues). If the problem can be reproduced, run
+`earthwave --debug` and add the end of the log.
 
 ## Licence
 
 [MIT](LICENSE)
 
-The release binary bundles third-party libraries under their own licences: hishel and anysqlite (BSD-3-Clause), stamina (MIT), tenacity and msgpack (Apache-2.0), and httpx (BSD-3-Clause). The licence texts of these six libraries are kept in their `*.dist-info` directories inside the binary; the other dependencies (Textual, Rich and their requirements) are bundled as before and not covered by this note.
+The release binary bundles third-party libraries under their own licences: hishel and anysqlite (BSD-3-Clause), stamina,
+Textual and Rich (MIT), tenacity and msgpack (Apache-2.0), and httpx (BSD-3-Clause). The licence texts of these
+libraries are kept in their `*.dist-info` directories inside the binary; the remaining dependencies are not covered by
+this note.
