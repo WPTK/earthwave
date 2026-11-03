@@ -2,6 +2,7 @@ name: Release
 
 # Pushing a tag v0.y.z builds one-file binaries for Windows, Linux and macOS and attaches them, with
 # SHA256SUMS, to a GitHub Release. The tag must match earthwave/__init__.py and a CHANGELOG.md section.
+# post-release.yml then downloads the published assets and runs them.
 on:
   push:
     tags: ["v0.*.*"]
@@ -104,6 +105,7 @@ jobs:
           cd out
           sha256sum earthwave-* > SHA256SUMS
           cat SHA256SUMS
+          sha256sum --check SHA256SUMS
           cd ..
           awk -v h="## [${{ needs.verify.outputs.version }}]" \
             'index($0, h) == 1 { on = 1; next } on && (/^## / || /^\[[0-9.]+\]: /) { exit } on && $0 != "_First release._"' \

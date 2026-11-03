@@ -41,6 +41,7 @@ dev = [
     "mypy>=1.13",
     "pyinstaller>=6.22,<7",
     "build>=1,<2",
+    "twine>=5",
     "pyshp",
     "tui-test==0.1.1",
     "obspy>=1.4",  # oracle for earthwave/iasp91_table.py: tests/test_seismo_oracle.py, scripts/gen_iasp91_table.py
@@ -85,3 +86,25 @@ ignore = [
 "scripts/uat/**" = ["E501", "C408", "RUF059", "RUF100"]
 # Vendored unchanged from eyewall spike S4 (and the driver built on it): not reformatted.
 "scripts/uat/macos/**" = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["earthwave"]
+warn_unused_configs = true
+warn_redundant_casts = true
+# Baseline, not a target: these modules had 26 errors when mypy joined CI (0.3.0). Everything else is checked.
+# Fix a module's errors, then delete it from this list; do not add to it.
+[[tool.mypy.overrides]]
+module = [
+    "earthwave.app",
+    "earthwave.config",
+    "earthwave.sources.usgs",
+    "earthwave.state.store",
+    "earthwave.ui.graphics.probe",
+    "earthwave.ui.graphics.smooth",
+    "earthwave.ui.screens.tsunami",
+    "earthwave.ui.theme",
+    "earthwave.ui.widgets.map_panel",
+    "earthwave.ui.widgets.quake_list",
+]
+ignore_errors = true

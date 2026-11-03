@@ -4,13 +4,13 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-import platformdirs
+from earthwave.paths import log_dir
 
 LOGGER = "earthwave"
 
 
 def default_log_path() -> Path:
-    return Path(platformdirs.user_log_dir("earthwave", appauthor=False)) / "earthwave.log"
+    return log_dir() / "earthwave.log"
 
 
 def setup_logging(path: Path | None = None, debug: bool = False) -> Path | None:

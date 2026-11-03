@@ -17,6 +17,7 @@ from earthwave import __version__
 from earthwave.app import EarthwaveApp
 from earthwave.clock import Clock, ReplayClock, SystemClock
 from earthwave.config import Config, ConfigError, load_config, parse_home, with_overrides
+from earthwave.diagnose import report as diagnose_report
 from earthwave.logging_setup import setup_logging
 from earthwave.models import Batch, Earthquake
 from earthwave.net import RecordingTransport, ReplayTransport, recording_start
@@ -28,7 +29,9 @@ from earthwave.ui.graphics.probe import BRAILLE
 from earthwave.ui.graphics.probe import resolve as resolve_graphics
 from earthwave.ui.widgets.quake_list import QuakeList
 
-FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+# The release binary carries the fixtures --selftest reads (earthwave.spec) under its unpack directory.
+_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+FIXTURES = _ROOT / "tests" / "fixtures"
 MODULES = ("textual", "httpx", "platformdirs")
 
 
@@ -116,7 +119,7 @@ def selftest(root: Path = FIXTURES) -> int:
         for line in lines:
             print(line)
     else:
-        print("selftest: fixture parse SKIPPED (tests/fixtures not found)")
+        print(f"selftest: fixture parse SKIPPED (no fixture directory at {root})")
     try:
         print(f"selftest: {asyncio.run(_headless_frame(root))}")
     except Exception as exc:
@@ -127,9 +130,17 @@ def selftest(root: Path = FIXTURES) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="earthwave", description="Earthquakes and tsunami alerts in your terminal.")
+    parser = argparse.ArgumentParser(
+        prog="earthwave",
+        description="Earthquakes and tsunami alerts in your terminal.",
+        epilog=PARSER_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--version", action="version", version=f"earthwave {__version__}")
     parser.add_argument("--selftest", action="store_true", help="check imports, parse fixtures, render one frame, exit")
+    parser.add_argument(
+        "--diagnose", action="store_true", help="print version, platform, terminal, paths and feed reachability, exit"
+    )
     parser.add_argument("--config", metavar="PATH", help="config file (default: the user config dir)")
     parser.add_argument("--no-config", action="store_true", help="ignore the config file and use defaults")
     parser.add_argument("--min-mag", type=float, metavar="M", help="minimum magnitude shown")
@@ -144,6 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log", metavar="PATH", help="write a rotating log file (default level WARNING)")
     parser.add_argument("--debug", action="store_true", help="DEBUG logging to the default log file")
     return parser
+
+
+PARSER_EPILOG = r"""environment:
+  EARTHWAVE_CONFIG_DIR  directory holding config.toml (default: the platform user config dir)
+  EARTHWAVE_DATA_DIR    directory holding history.sqlite, and logs/ for --debug (default: the platform user data dir)
+On Windows the defaults sit under %LOCALAPPDATA%\earthwave. Uninstalling earthwave never removes these directories."""
 
 
 def open_history(config: Config, clock: Clock) -> tuple[History | None, str | None]:
@@ -228,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(_attach_home_value(sys.argv[1:] if argv is None else argv))
     if args.selftest:
         return selftest()
+    if args.diagnose:
+        print(diagnose_report(offline=args.offline))
+        return 0
     return run(args)
 
 

@@ -13,22 +13,62 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+  # Lint, types and dependency audit run once, on one OS: they do not depend on it.
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e ".[dev]" pip-audit
       - run: python -m ruff check .
       - run: python -m vulture earthwave scripts --min-confidence 80
+      # Baseline config in pyproject.toml: modules listed there are skipped until fixed.
+      - run: python -m mypy
+      # Runtime dependencies of the project as pyproject.toml pins them, not the dev tools.
+      - run: python -m pip_audit .
+
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+        python: ["3.13"]
+        include:
+          # requires-python is ">=3.13": the next release is covered on one OS, and does not block the merge
+          # while its dependencies catch up.
+          - os: ubuntu-24.04
+            python: "3.14"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental == true }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -n auto
       - run: python -m earthwave --version
       - run: python -m earthwave --selftest
+
+  # The artifacts people install from PyPI-style channels: wheel and sdist build, twine check, package data, a clean
+  # install, an upgrade from 0.1.0 state and an uninstall (scripts/ci_package_check.py).
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install build twine
+      - run: python -m build -o dist
+      - run: python -m twine check --strict dist/*
+      - run: python scripts/ci_package_check.py dist

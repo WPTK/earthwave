@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Add `--diagnose`: version, Python, OS, terminal variables, config, history and log paths and feed reachability in one block to paste into a bug report
+- Add `EARTHWAVE_CONFIG_DIR` and `EARTHWAVE_DATA_DIR` to move the config file, the history database and the log; on Windows the defaults follow `%LOCALAPPDATA%`
+
+### Fixed
+
+- Fix `--selftest` printing SKIPPED in the release binary: the binary now carries the fixtures it parses
+
 ## [0.2.0] - 2026-11-01
 
 ### Changed
