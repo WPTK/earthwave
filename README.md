@@ -27,7 +27,7 @@ uv tool install --python 3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
 `requires a different Python`; use uv or the binary instead.
 
 ```
-pipx install git+https://github.com/WPTK/earthwave.git@v0.2.0
+pipx install --python python3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
 ```
 
 or, inside a virtual environment, `python -m pip install git+https://github.com/WPTK/earthwave.git@v0.2.0`.
@@ -36,13 +36,14 @@ or, inside a virtual environment, `python -m pip install git+https://github.com/
 Each release lists them under [Releases](https://github.com/WPTK/earthwave/releases).
 
 - Windows: [`earthwave-v0.2.0-windows-x86_64.exe`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-windows-x86_64.exe).
-  Save it anywhere, for example in a folder on your `PATH`, and run it.
+  Save it in a folder on your `PATH` and rename it to `earthwave.exe`, so that `earthwave` runs it.
 - Linux x86-64: [`earthwave-v0.2.0-linux-x86_64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-linux-x86_64.tar.gz).
   Unpack it and put `earthwave` on your `PATH`:
-  `tar -xzf earthwave-v0.2.0-linux-x86_64.tar.gz && install -m 755 earthwave ~/.local/bin/`.
-  It is built for glibc 2.35 or newer (Ubuntu 22.04 and later). Alpine and other musl systems are not supported.
+  `tar -xzf earthwave-v0.2.0-linux-x86_64.tar.gz && mkdir -p ~/.local/bin && install -m 755 earthwave ~/.local/bin/`.
+  It is built for glibc 2.35 or newer (Ubuntu 22.04 and later). Alpine and other musl systems are not supported; use uv or pip with Python 3.13 instead.
 - macOS arm64: [`earthwave-v0.2.0-macos-arm64.tar.gz`](https://github.com/WPTK/earthwave/releases/download/v0.2.0/earthwave-v0.2.0-macos-arm64.tar.gz),
-  unpacked and installed the same way.
+  unpacked and installed the same way (`~/.local/bin` is not on the macOS `PATH` by default; add it, or use
+  `/usr/local/bin`). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
 
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
 download against `SHA256SUMS` from the same release.
