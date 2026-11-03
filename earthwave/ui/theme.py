@@ -45,6 +45,8 @@ def mag_color(mag: float) -> str:
 
 
 PAGER_COLORS = {"green": GREEN, "yellow": YELLOW, "orange": ORANGE, "red": RED}
+# The tsunami-flag badge ("T"): the Threat blue, a hue no PAGER or magnitude band uses
+TSUNAMI_BADGE_COLOR = f"bold {THREAT_BLUE}"
 
 FRESHNESS_COLORS = {
     Freshness.LOADING: "grey62",

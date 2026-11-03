@@ -5,6 +5,7 @@ from datetime import datetime
 from earthwave.models import Earthquake
 from earthwave.sources.geo import bearing_deg, compass, haversine_km
 from earthwave.state.store import ViewFilter
+from earthwave.ui.theme import PAGER_COLORS, TSUNAMI_BADGE_COLOR
 
 
 def fmt_age(seconds: float) -> str:
@@ -63,3 +64,15 @@ def fmt_hours(hours: float) -> str:
 def filter_summary(view: ViewFilter) -> str:
     text = f"M{view.min_magnitude:g}+ {fmt_hours(view.hours)}"
     return f'{text} "{view.query}"' if view.query else text
+
+
+def pager_badge(alert: str | None) -> tuple[str, str]:
+    """The PAGER level as one letter (G/Y/O/R, never colour alone) and its colour; a blank cell if none."""
+    if alert in PAGER_COLORS:
+        return alert[0].upper(), PAGER_COLORS[alert]
+    return " ", ""
+
+
+def tsunami_badge(flagged: bool, letter: str = "T") -> tuple[str, str]:
+    """The tsunami flag as a letter and its colour; a blank cell when the quake has none."""
+    return (letter, TSUNAMI_BADGE_COLOR) if flagged else (" ", "")

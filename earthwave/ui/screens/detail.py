@@ -15,8 +15,8 @@ from textual.widgets import Footer, Static
 from earthwave.models import Earthquake, QuakeDetail
 from earthwave.seismo import ENERGY_PER_MAGNITUDE_STEP, arrivals, energy_joules, fmt_tnt, tnt_tons
 from earthwave.sources.geo import haversine_km
-from earthwave.ui.labels import fmt_age, fmt_countdown, fmt_distance, fmt_time
-from earthwave.ui.theme import PAGER_COLORS, YELLOW, mag_color
+from earthwave.ui.labels import fmt_age, fmt_countdown, fmt_distance, fmt_time, pager_badge, tsunami_badge
+from earthwave.ui.theme import PAGER_COLORS, TSUNAMI_BADGE_COLOR, YELLOW, mag_color
 from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
 if TYPE_CHECKING:
@@ -63,7 +63,13 @@ def render_detail(
     """`detail_current`: the product was fetched for this revision; an older one yields to the quake's own values."""
     text = Text()
     text.append(f"M{quake.mag:.1f} ", mag_color(quake.mag))
-    text.append(f"{quake.place or 'unknown location'}\n\n", "bold")
+    product = (detail.pager_alert if detail else None) if detail_current else None
+    alert = product or quake.pager_alert or (detail.pager_alert if detail else None)
+    for badge, color in (tsunami_badge(quake.tsunami_flag), pager_badge(alert)):  # the list's FL letters, in brackets
+        if badge != " ":
+            text.append(f"[{badge}] ", color)
+    place = "".join(c if c.isprintable() else " " for c in quake.place).strip()
+    text.append(f"{place or 'unknown location'}\n\n", "bold")
     _row(text, "Time", f"{fmt_time(quake.time, time_zone)} ({fmt_age((now - quake.time).total_seconds())} ago)")
     if quake.updated:
         _row(text, "Updated", fmt_time(quake.updated, time_zone))
@@ -84,9 +90,7 @@ def render_detail(
     if quake.mmi is not None:
         _row(text, "Max MMI", f"{quake.mmi:g}")
     if quake.tsunami_flag:
-        _row(text, "Tsunami", "USGS links a tsunami product", "bold blue")
-    product = (detail.pager_alert if detail else None) if detail_current else None
-    alert = product or quake.pager_alert or (detail.pager_alert if detail else None)
+        _row(text, "Tsunami", "USGS links a tsunami product", TSUNAMI_BADGE_COLOR)
     if alert:
         _row(text, "PAGER alert", alert, PAGER_COLORS.get(alert, "white"))
     if detail:

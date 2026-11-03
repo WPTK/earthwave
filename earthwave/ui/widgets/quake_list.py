@@ -17,8 +17,8 @@ from earthwave.config import HomeConfig
 from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.ui.glyphs import Glyphs
-from earthwave.ui.labels import fmt_age, fmt_depth, fmt_distance
-from earthwave.ui.theme import CURSOR_BG, CYAN, PAGER_COLORS, lift, mag_color
+from earthwave.ui.labels import fmt_age, fmt_depth, fmt_distance, pager_badge, tsunami_badge
+from earthwave.ui.theme import CURSOR_BG, CYAN, lift, mag_color
 
 AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 12, 2  # DIST_W fits "20015 km NNE", the longest distance on Earth
 
@@ -157,7 +157,8 @@ class QuakeList(ScrollView, can_focus=True):
             place = set_cell_size(place, max(place_w - 1, 0)) + self._glyphs.ellipsis
         place = set_cell_size(place, place_w)  # pad in terminal cells, so a wide glyph cannot push the flags out
         mag = max(-9.9, min(quake.mag, 99.9))  # the MAG column is four cells wide
-        pager = quake.pager_alert[0].upper() if quake.pager_alert in PAGER_COLORS else " "  # G/Y/O/R: not colour alone
+        pager, pager_color = pager_badge(quake.pager_alert)  # G/Y/O/R: not colour alone
+        flag, flag_color = tsunami_badge(quake.tsunami_flag, self._glyphs.tsunami)
         segments = [
             field(marker, CYAN),
             field(age, "grey62"),
@@ -175,8 +176,8 @@ class QuakeList(ScrollView, can_focus=True):
         segments += [
             field(place),
             field(" "),
-            field(self._glyphs.tsunami if quake.tsunami_flag else " ", "bold blue"),
-            field(pager, PAGER_COLORS.get(quake.pager_alert or "", "")),
+            field(flag, flag_color),
+            field(pager, pager_color),
         ]
         return Strip(segments)
 
