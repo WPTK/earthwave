@@ -154,10 +154,9 @@ class RetryTransport(httpx.AsyncBaseTransport):
     retry ends within RETRY_BUDGET seconds, which is ENTRY_MARGIN below ENTRY_LIMIT, the time one tsunami or JMA entry
     may take. Inside an `entry_deadline` block the entry's remaining time is the budget when that is shorter, so the
     requests of one entry share it. A retry is started only when its pause, a worst-case backoff and RETRY_MIN_TRY
-    fit; a try is cut with an httpx timeout just short of the limit; nothing is slept after the last try. What this
-    covers is getting the response: the body of an uncached response is read by the caller afterwards, bounded by
-    httpx's read timeout between chunks and by the source's own entry limit (a body that trickles is a stall, which
-    counts). The pauses are stamina's backoff; a rate-limit hint is slept on the injected clock.
+    fit; a try, its body included, is cut with an httpx timeout just short of the limit; nothing is slept after the
+    last try. Without an `entry_deadline` the first try is bounded only by httpx's timeouts. The pauses are
+    stamina's backoff; a rate-limit hint is slept on the injected clock.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport, clock: Clock):
@@ -211,13 +210,26 @@ class RetryTransport(httpx.AsyncBaseTransport):
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _send(self, request: httpx.Request, cut: float | None) -> httpx.Response:
+        """One try. With a cut the whole answer, body included, must arrive before it: the body is read here and handed
+        up as bytes, so a slow one ends as an httpx timeout (an outage) and not as the caller's builtin stall."""
         if cut is None:
             return await self._inner.handle_async_request(request)
+        left = cut - self._clock.monotonic()
+        if left <= 0:
+            raise httpx.ReadTimeout("no time left", request=request)
         try:
-            async with asyncio.timeout(max(cut - self._clock.monotonic(), 0.1)):
-                return await self._inner.handle_async_request(request)
+            async with asyncio.timeout(left):
+                response = await self._inner.handle_async_request(request)
+                body = await response.aread()
+                await response.aclose()
         except TimeoutError:  # the retry budget, not the builtin kind that the entry limits use to mean a stall
             raise httpx.ReadTimeout("retry budget spent", request=request) from None
+        headers = httpx.Headers(response.headers)
+        for name in ("content-encoding", "content-length", "transfer-encoding"):  # the body is decoded and whole now
+            headers.pop(name, None)
+        return httpx.Response(
+            response.status_code, headers=headers, content=body, extensions=response.extensions, request=request
+        )
 
     def _room_for_retry(self, attempt: int, deadline: float, pause: float) -> bool:
         left = deadline - self._clock.monotonic() - pause - RETRY_WAIT_MAX - RETRY_WAIT_JITTER
@@ -339,7 +351,7 @@ class PoliteTransport(httpx.AsyncBaseTransport):
                         if self._storage.connection is None:
                             self._storage.connection = await anysqlite.connect(":memory:")
                 response = await self._cached.handle_async_request(request)
-                await response.aread()  # the cache reads and saves the body as it streams: failures belong in this try
+                await self._read_body(response, request)  # failures of the cache's own saving belong in this try
                 return response
             finally:
                 self._reading -= 1
@@ -351,6 +363,21 @@ class PoliteTransport(httpx.AsyncBaseTransport):
             if response is not None:
                 await response.aclose()
             return await self._retrying.handle_async_request(request)
+
+    async def _read_body(self, response: httpx.Response, request: httpx.Request) -> None:
+        """Read the body the cache is saving, inside the entry's deadline when there is one (see RetryTransport)."""
+        entry = _entry_deadline.get()
+        if entry is None:
+            await response.aread()
+            return
+        left = entry - 1.0 - self._clock.monotonic()
+        if left <= 0:
+            raise httpx.ReadTimeout("no time left", request=request)
+        try:
+            async with asyncio.timeout(left):
+                await response.aread()
+        except TimeoutError:
+            raise httpx.ReadTimeout("entry deadline spent reading the body", request=request) from None
 
     async def _wait_for_trim(self) -> None:
         """Trim the cache when it is due and nothing is reading it; a request arriving meanwhile waits."""

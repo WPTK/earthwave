@@ -5,7 +5,7 @@
 ### Added
 
 - Add a `Ctrl+P` command palette (Textual's, with earthwave's actions added): switch screens, sort, filters, map, refresh, quit, and Set home location, which writes the config file through the same atomic writer as `--save-home`
-- Add one HTTP layer for every feed: requests that fail in a way likely to pass (connect errors, timeouts, 500, 502, 503, 504, and a 429 or 503 with a short Retry-After) are tried up to three times, always inside one tsunami or JMA entry's 25 s, and a feed that stays down still shows as failing. Conditional requests use an on-disk cache in the data directory (up to 20 MB, entries kept 7 days, a damaged file is replaced). Uses `hishel` and `stamina`
+- Add one HTTP layer for every feed: requests that fail in a way likely to pass (connect errors, timeouts, 500, 502, 503, 504, and a 429 or 503 with a short Retry-After) are tried up to three times; retries and body reads stay inside one tsunami or JMA entry's 25 s budget, and a feed that stays down still shows as failing. Conditional requests use an on-disk cache in the data directory (up to 20 MB, entries kept 7 days, a damaged file is replaced). Uses `hishel` and `stamina`
 - Add `--save-home` and `--home-name` to keep a home location in the config file without editing it
 - Add `--diagnose`: version, Python, OS, terminal variables, config, history and log paths and feed reachability in one block to paste into a bug report
 - Add `EARTHWAVE_MAP_RENDERER` (`auto`, `braille`, `sixel`) to force the map renderer for one run

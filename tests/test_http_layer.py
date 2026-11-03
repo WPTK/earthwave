@@ -524,7 +524,7 @@ async def test_a_jma_report_that_times_out_is_an_outage_and_never_counts(clock):
     from earthwave.sources import jma
     from earthwave.sources.base import ENTRY_LIMIT
 
-    sleeps = _ticking(clock)
+    _ticking(clock)
 
     def handler(request, n):
         clock.advance(10.0)
@@ -533,10 +533,48 @@ async def test_a_jma_report_that_times_out_is_an_outage_and_never_counts(clock):
     client, seen = _client(clock, handler)
     source = jma.JmaSource(clock)
     entry = {"json": "20261101_x.json", "rdt": clock.now().isoformat()}
-    start = clock.monotonic()
     async with client:
-        for _ in range(jma.MAX_ENTRY_FAILURES + 2):
-            clock.advance(0.0)
+        for poll in range(jma.MAX_ENTRY_FAILURES + 2):
+            before, tries = clock.monotonic(), len(seen)
             assert await source._report(client, entry, clock.now(), {}, [], []) is False
-    assert source._failures == {} and clock.monotonic() - start < ENTRY_LIMIT * (jma.MAX_ENTRY_FAILURES + 2)
-    assert sleeps is not None and len(seen) >= jma.MAX_ENTRY_FAILURES
+            assert clock.monotonic() - before < ENTRY_LIMIT and len(seen) - tries >= 1, poll
+            assert source._failures == {}
+
+
+class _SlowBody(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        import asyncio
+
+        yield b"<"
+        await asyncio.sleep(30)
+        yield b">"  # pragma: no cover
+
+
+@pytest.mark.parametrize("cached", [False, True])
+async def test_a_slow_body_at_the_end_of_the_entry_is_an_httpx_timeout_not_the_entry_limit(tmp_path, cached):
+    """Real loop time: the entry's own asyncio.timeout would fire at 1.3 s; the body read is cut at 0.3 s first."""
+    import asyncio
+
+    from earthwave.clock import SystemClock
+    from earthwave.sources.tsunamigov import stalled
+
+    headers = {"ETag": '"a"'}
+    transport = PoliteTransport(
+        httpx.MockTransport(lambda r: httpx.Response(200, headers=headers, stream=_SlowBody())),
+        SystemClock(),
+        tmp_path / "h.sqlite" if cached else None,
+        cache=cached,
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx.TimeoutException) as raised:
+            async with net.entry_deadline(SystemClock(), 1.3), asyncio.timeout(1.3):
+                await client.get("https://example.test/slow")
+    assert not stalled(raised.value)
+
+
+async def test_no_request_is_sent_when_the_entry_has_no_time_left(clock):
+    client, seen = _client(clock, lambda r, n: httpx.Response(200, text="x"))
+    async with client, net.entry_deadline(clock, 0.5):  # under the 1 s kept free: nothing fits
+        with pytest.raises(httpx.ReadTimeout):
+            await client.get("https://example.test/a")
+    assert seen == []
