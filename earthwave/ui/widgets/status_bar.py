@@ -14,6 +14,11 @@ ALERT_STATES = ("info", "active", "alarm")
 FRESHNESS_WORDS = {Freshness.LOADING: "loading", Freshness.STALE: "stale", Freshness.ERROR: "failed"}
 
 
+def down_feeds(feeds: list[tuple[str, Freshness]]) -> tuple[str, ...]:
+    """Feeds in trouble as "name word", the one wording of the dashboard panel and the tsunami screen."""
+    return tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLine:
     name: str

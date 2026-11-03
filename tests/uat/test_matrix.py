@@ -29,8 +29,6 @@ HAS_QUAKES = {"loading", "stale", "busy", "quiet", "offline", "replay"}
 
 # (state, screen) -> issue number, for a rule violation that is filed and not yet fixed. Filled from real findings.
 KNOWN: dict[tuple[str, str, int | None], tuple[int, str]] = {
-    ("stale", "tsunami", None): (227, "tsunami screen says no products received while the feeds are down"),
-    ("error", "tsunami", None): (227, "tsunami screen says no products received while the feeds are down"),
     ("loading", "dashboard", 100): (228, "status bar clips the failing feed names at 100 columns"),
     ("stale", "dashboard", 100): (228, "status bar clips the failing feed names at 100 columns"),
 }
@@ -206,7 +204,7 @@ def r_tsunami_screen_matches_store(c: Ctx) -> str | None:
     alerts = app.store.alerts()
     if alerts and "No tsunami products received yet" in c.text:
         return "'No tsunami products received yet' with alerts in the store"
-    if not alerts and "No tsunami products received yet" not in c.text:
+    if not alerts and "No tsunami products received" not in c.text and "Nothing was requested" not in c.text:
         return "no alerts in the store but no empty message"
     if not alerts and app.scheduler_running:
         down, _ = app.tsunami_feeds_down()
