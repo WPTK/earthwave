@@ -186,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 PARSER_EPILOG = r"""environment:
   EARTHWAVE_CONFIG_DIR  directory holding config.toml (default: the platform user config dir)
-  EARTHWAVE_DATA_DIR    directory holding history.sqlite, and logs/ for --debug (default: the platform user data dir)
+  EARTHWAVE_DATA_DIR    directory holding history.sqlite, and the --debug log (default: the platform user data dir)
   EARTHWAVE_MAP_RENDERER  auto, braille or sixel for this run; beats [view] map_renderer in the config
   HTTPS_PROXY, HTTP_PROXY, NO_PROXY  honoured for every feed request
 On Windows the defaults sit under %LOCALAPPDATA%\earthwave. Uninstalling earthwave never removes these directories."""
@@ -277,6 +277,9 @@ def run_selftest(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"earthwave: cannot open the log file: {exc}", file=sys.stderr)
         return 2
+    if log_path:  # --log alone logs WARNING and up; the start and exit lines are INFO
+        root = logging.getLogger("earthwave")
+        root.setLevel(min(root.level, logging.INFO))
     logger = logging.getLogger("earthwave.selftest")
     logger.info("selftest: start, earthwave %s", __version__)
     code = selftest()
@@ -286,14 +289,34 @@ def run_selftest(args: argparse.Namespace) -> int:
     return code
 
 
-def run_save_home(args: argparse.Namespace) -> int:
+def conflicting_flags(args: argparse.Namespace) -> str | None:
+    """The reason these flags cannot be used together, or None."""
+    if args.home_name and not args.home:
+        return "--home-name needs --home LAT,LON"
+    if not args.save_home:
+        return None
     if not args.home:
-        print("earthwave: --save-home needs --home LAT,LON", file=sys.stderr)
-        return 2
+        return "--save-home needs --home LAT,LON"
+    used = {
+        "--selftest": args.selftest,
+        "--diagnose": args.diagnose,
+        "--no-config": args.no_config,
+        "--min-mag": args.min_mag is not None,
+        "--hours": args.hours is not None,
+        "--glyphs": args.glyphs is not None,
+        "--record": args.record,
+        "--replay": args.replay,
+        "--offline": args.offline,
+    }
+    other = next((flag for flag, on in used.items() if on), None)
+    return f"--save-home cannot be combined with {other}" if other else None
+
+
+def run_save_home(args: argparse.Namespace) -> int:
     path = Path(args.config) if args.config else default_config_path()
     try:
+        lat, lon = parse_home(args.home)  # before the config is touched: a bad value must not create the template
         config = load_config(Path(args.config) if args.config else None)  # also writes the first-run template
-        lat, lon = parse_home(args.home)
         save_home(path, args.home_name or config.home.name or "home", lat, lon)
         load_config(path)  # what was written must parse
     except ConfigError as exc:
@@ -306,6 +329,9 @@ def run_save_home(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(_attach_home_value(sys.argv[1:] if argv is None else argv))
+    if problem := conflicting_flags(args):
+        print(f"earthwave: {problem}", file=sys.stderr)
+        return 2
     if args.selftest:
         return run_selftest(args)
     if args.save_home:
