@@ -49,12 +49,12 @@ jobs:
         run: |
           [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
       # Before anything is downloaded: checkout cleans the workspace. Windows only, for the real-input suite below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: matrix.ext == 'exe'
         with:
           ref: ${{ env.TAG }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.ext == 'exe'
         with:
           python-version: "3.13"
