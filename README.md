@@ -136,6 +136,7 @@ answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE
 | `j` `k`, arrows | move in the list |
 | `Enter` | quake detail (`b` opens the USGS page, `y` copies its URL) |
 | `f` `s` `/` | filters, sort, search |
+| `g` `Space` | group aftershocks under their mainshock; open or close the group under the cursor |
 | `m` `z` | show or hide the map, zoom it |
 | `t` | tsunami alerts and bulletins |
 | `o` | sea-level gauges |
@@ -144,6 +145,16 @@ answer). `braille` or `sixel` forces either. The environment variable `EARTHWAVE
 | `r` | refresh now |
 | `Ctrl+P` | command palette: every action by name, and Set home location |
 | `q` | quit |
+
+### Aftershock groups
+
+`g` nests the quakes that look like an aftershock sequence under their mainshock, collapsed to one row marked `[+3]`
+(three aftershocks); `Space` opens it (`[-3]`) and closes it again. The rule is Gardner and Knopoff (1974): a quake is an
+aftershock of a larger one if it comes after it, is smaller, and falls within `10^(0.5409 M - 0.547)` days (`10^(0.032 M
++ 2.7389)` from M 6.5) and `10^(0.1238 M + 0.983)` km of it. Quakes are taken biggest first, so each is in at most one
+group and an aftershock is never itself a mainshock. Only the quakes the filters let through are grouped. The status bar still counts folded
+aftershocks as shown, and a new aftershock stays unseen until its group is opened or acknowledged with `a`. It is off by
+default, and the map still shows every quake.
 
 A tsunami watch, advisory or warning raises a coloured banner across the top, and the status bar changes colour. Major
 quakes and new alerts can also raise a desktop notification and a terminal bell.

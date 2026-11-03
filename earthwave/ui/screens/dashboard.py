@@ -48,6 +48,7 @@ class DashboardScreen(Screen):
         Binding("f", "filters", "Filters"),
         Binding("s", "sort", "Sort"),
         Binding("slash", "search", "Search"),
+        Binding("g", "group", "Group aftershocks", show=False),
         Binding("m", "toggle_map", "Map"),
         Binding("M", "fullscreen_map", "Full map", show=False),
         Binding("z", "zoom_map", "Zoom", show=False),
@@ -200,7 +201,7 @@ class DashboardScreen(Screen):
     def refresh_status(self, shown: int | None = None) -> None:
         app = self.earthwave
         if shown is None:
-            shown = len(self.query_one(QuakeList).rows)
+            shown = self.query_one(QuakeList).total
         _, actionable, _, state = self.tsunami_state()
         sched = app.scheduler
         lines = (
@@ -241,6 +242,15 @@ class DashboardScreen(Screen):
     def action_sort(self) -> None:
         app = self.earthwave
         app.set_sort(app.sort.next(app.config.home.enabled))
+
+    def action_group(self) -> None:
+        """Nest aftershocks under their mainshock (Space opens or closes a group), or list every quake again."""
+        app = self.earthwave
+        quake_list = self.query_one(QuakeList)
+        quake_list.set_group(not quake_list.group, app.store.visible(app.view, app.clock, app.sort))
+        self.notify(
+            "Aftershocks grouped under their mainshock" if quake_list.group else "Aftershocks ungrouped", timeout=3
+        )
 
     def action_search(self) -> None:
         box = self.query_one("#search", Input)

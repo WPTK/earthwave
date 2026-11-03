@@ -16,6 +16,7 @@ from earthwave.clock import Clock
 from earthwave.config import HomeConfig
 from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
+from earthwave.state.clusters import group_by_mainshock
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_depth, fmt_distance, pager_badge, tsunami_badge
 from earthwave.ui.theme import CURSOR_BG, CYAN, lift, mag_color
@@ -48,6 +49,7 @@ class QuakeList(ScrollView, can_focus=True):
         Binding("home", "cursor_first", "First", show=False),
         Binding("end", "cursor_last", "Last", show=False),
         Binding("enter", "select", "Detail", show=False),
+        Binding("space", "toggle_group", "Expand or collapse an aftershock group", show=False),
     ]
 
     class Selected(Message):
@@ -73,8 +75,14 @@ class QuakeList(ScrollView, can_focus=True):
         self._tracker = tracker
         self._glyphs = glyphs
         self._home = home if home and home.enabled else None
-        self.rows: list[Earthquake] = []
+        self.rows: list[Earthquake] = []  # what the list shows: with grouping on, collapsed aftershocks are left out
         self.cursor = 0
+        self.group = False  # nest aftershocks under their mainshock (g on the dashboard)
+        self._groups: dict[str, tuple[Earthquake, ...]] = {}  # mainshock id -> its aftershocks, while grouping
+        self._children: dict[str, str] = {}  # aftershock id -> its mainshock id
+        self._expanded: set[str] = set()  # mainshock ids whose aftershocks are listed
+        self._source: list[Earthquake] = []  # the rows as last set, before grouping
+        self._cache: tuple[frozenset, dict[str, tuple[Earthquake, ...]]] | None = None
 
     # --- data ---------------------------------------------------------------------------------------------------
 
@@ -82,6 +90,8 @@ class QuakeList(ScrollView, can_focus=True):
         """Replace the rows. The cursor stays on its quake and, if it was on screen, on the same screen line (kept
         visible after a reorder); a list scrolled to the top stays at the top. A cursor scrolled out of sight leaves
         the view anchored on its top row."""
+        self._source = rows
+        rows = self._arrange(rows)
         selected, height, scroll = self.selected, max(self.size.height, 1), self.scroll_offset.y
         line = self.cursor - scroll if selected is not None and 0 <= self.cursor - scroll < height else None
         top = self.rows[scroll].id if 0 < scroll < len(self.rows) else None
@@ -101,11 +111,63 @@ class QuakeList(ScrollView, can_focus=True):
             self.scroll_to(y=target, animate=False, immediate=True)
         self.refresh()
 
+    def _arrange(self, rows: list[Earthquake]) -> list[Earthquake]:
+        """With grouping on, the rows in their sort order minus the aftershocks, each mainshock followed by its
+        aftershocks when expanded. A row never moves for being grouped except to sit under its mainshock."""
+        self._groups = self._cluster(rows) if self.group else {}
+        self._children = {q.id: main for main, quakes in self._groups.items() for q in quakes}
+        self._expanded &= self._groups.keys()
+        if not self._groups:
+            return rows
+        kids: dict[str, list[Earthquake]] = {main: [] for main in self._expanded}
+        for q in rows:  # one pass; the children keep the sort order of `rows`
+            if (main := self._children.get(q.id)) in kids:
+                kids[main].append(q)
+        out: list[Earthquake] = []
+        for q in rows:
+            if q.id in self._children:
+                continue
+            out.append(q)
+            out += kids.get(q.id, ())
+        return out
+
+    def _cluster(self, rows: list[Earthquake]) -> dict[str, tuple[Earthquake, ...]]:
+        """The clusters of `rows`, recomputed only when a quake that matters to them is new or has changed."""
+        key = frozenset((q.id, q.updated, q.mag, q.time, q.lat, q.lon) for q in rows)
+        if self._cache is None or self._cache[0] != key:
+            self._cache = (key, dict(group_by_mainshock(rows)))
+        return self._cache[1]
+
+    def set_group(self, group: bool, rows: list[Earthquake]) -> None:
+        self.group = group
+        self._expanded.clear()
+        self.set_rows(rows)
+
+    def action_toggle_group(self) -> None:
+        """Expand or collapse the group under the cursor (from an aftershock row: its mainshock's group)."""
+        quake = self.selected
+        if quake is None:
+            return
+        main = self._children.get(quake.id, quake.id)
+        if main not in self._groups:
+            return
+        self._expanded ^= {main}
+        self.set_rows(self._source)
+        index = next(i for i, q in enumerate(self.rows) if q.id == main) if quake.id in self._children else self.cursor
+        self._move(index)
+
+    @property
+    def total(self) -> int:
+        """How many quakes the view holds, folded aftershocks included."""
+        return len(self._source)
+
     @property
     def selected(self) -> Earthquake | None:
         return self.rows[self.cursor] if 0 <= self.cursor < len(self.rows) else None
 
     def visible_ids(self) -> set[str]:
+        """The quakes in sight. A folded aftershock is not: a new one stays unseen (and counted) until its group is
+        opened or acknowledged."""
         top = self.scroll_offset.y
         return {q.id for q in self.rows[top : top + self.size.height]}
 
@@ -153,6 +215,7 @@ class QuakeList(ScrollView, can_focus=True):
         age = fmt_age((self._clock.now() - quake.time).total_seconds()).rjust(AGE_W)
         place_w = place_width(width, self._home is not None)
         place = "".join(c if c.isprintable() else " " for c in quake.place).strip() or "unknown"  # no tab/newline
+        place = self._group_mark(quake) + place
         if cell_len(place) > place_w:
             place = set_cell_size(place, max(place_w - 1, 0)) + self._glyphs.ellipsis
         place = set_cell_size(place, place_w)  # pad in terminal cells, so a wide glyph cannot push the flags out
@@ -180,6 +243,14 @@ class QuakeList(ScrollView, can_focus=True):
             field(pager, pager_color),
         ]
         return Strip(segments)
+
+    def _group_mark(self, quake: Earthquake) -> str:
+        """A prefix for the place column: the aftershock count on a mainshock, an indent on an aftershock."""
+        if quake.id in self._children:
+            return "  " + ("└ " if self._glyphs.unicode else "` ")
+        if (members := self._groups.get(quake.id)) is not None:
+            return f"[{'-' if quake.id in self._expanded else '+'}{len(members)}] "
+        return ""
 
     # --- cursor -------------------------------------------------------------------------------------------------
 
