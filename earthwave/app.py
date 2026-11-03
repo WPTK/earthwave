@@ -78,6 +78,8 @@ class PollDone(Message):
 
 class EarthwaveApp(App):
     CSS_PATH = "ui/app.tcss"
+    CSS = "ToastRack { margin-bottom: 2; }"  # Textual leaves 1 row for the footer; the status bar is a second row
+
     TITLE = "earthwave"
     BINDINGS = [Binding("q", "quit", "Quit")]
 
@@ -98,6 +100,7 @@ class EarthwaveApp(App):
         offline: bool = False,
         history_error: str | None = None,
         graphics: GraphicsChoice | None = None,
+        replay: bool = False,
     ):
         super().__init__()
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
@@ -135,6 +138,7 @@ class EarthwaveApp(App):
         self._ticks = 0
         self.scheduler = Scheduler(self._enabled_sources(config), self.store, self.clock, self._on_poll)
         self.offline = offline
+        self.replay = replay  # the clock and feeds come from a recording: marked on screen, ages are not live
         self.history = history
         self.history_error = history_error  # why there is no history, when it was wanted
         self.scheduler_running = run_scheduler and not offline
@@ -164,6 +168,21 @@ class EarthwaveApp(App):
         self._driver.write("[16t")
 
     async def on_event(self, event: events.Event) -> None:
+        if (
+            isinstance(event, events.Key)
+            and not event.is_forwarded
+            and not self._startup_replies
+            and len(event.key) == 5
+            and event.key.startswith("alt+")
+            and event.key[4].isalnum()
+        ):
+            # Esc then a letter typed quickly arrives as one Alt-letter ( q); nothing here uses Alt, so it is two
+            # keys, the way the person pressed them (#256). The rule is global (whatever has focus, a search box or the
+            # filter dialog included), except while startup replies may still arrive: a late `ESC P ...` reply must not
+            # be taken for Esc and a letter.
+            await self.on_event(events.Key("escape", None))
+            await self.on_event(events.Key(event.key[4], event.key[4]))
+            return
         if (
             isinstance(event, events.Key)
             and not event.is_forwarded
@@ -438,7 +457,8 @@ class EarthwaveApp(App):
         if self.scheduler.freshness("usgs") in (Freshness.ERROR, Freshness.STALE):
             age = self.scheduler.age("usgs")
             return "USGS is not answering" + (f"; last data {fmt_age(age)} ago" if age is not None else "")
-        return "" if self.store.warm else "Waiting for USGS"
+        answered = self.store.warm or self.scheduler.age("usgs") is not None  # a startup backfill counts
+        return "" if answered else "Waiting for USGS"
 
     def tsunami_feeds_loading(self) -> bool:
         """True while an enabled tsunami feed has not answered yet: an empty list says nothing until it has, because
