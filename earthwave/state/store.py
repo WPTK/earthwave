@@ -462,10 +462,13 @@ class Store:
         )
 
     def expiry(self, alert: TsunamiAlert) -> datetime:
-        """When the alert lapses: its own expiry, else DEFAULT_TTL after it was last issued, updated or first seen."""
-        if alert.expires is not None:
-            return alert.expires
+        """When the alert lapses: its own expiry, else DEFAULT_TTL after it was last issued, updated or first seen.
+
+        An expiry at or before the product's own issue time is a feed error (tsunami.gov has sent one 11 h
+        before its send time), not a product already over: it is not believed, and the default lifetime applies."""
         base = alert.updated or alert.issued or self._first_seen.get(alert.id)
+        if alert.expires is not None and not (alert.issued and alert.expires <= alert.issued):
+            return alert.expires
         return (base + DEFAULT_TTL) if base else datetime.max.replace(tzinfo=UTC)
 
     def active_alerts(self, clock: Clock, actionable_only: bool = False) -> list[TsunamiAlert]:
@@ -650,6 +653,9 @@ class Store:
         later) a held report among those `alert` names."""
         enders = [self.get_alert(ref) for ref in alert.references if alert.source in SNAPSHOT_SOURCES]
         enders += [o for o in self._tsunamis.values() if any(self.get_alert(ref) is alert for ref in o.references)]
+        # A cancellation that names nothing ends, in `_close_referenced`, the open products of its quake and source;
+        # read before the product it ends (newest first across polls), it must end it on arrival by the same rule.
+        enders += [o for o in self._tsunamis.values() if self._cancels_unnamed(o, alert)]
         for other in enders:
             if other is None or other.id == alert.id or self._replaces_nothing(other):
                 continue
@@ -659,6 +665,19 @@ class Store:
                 self._closed[alert.id] = "cancelled" if other.level == levels.CANCELLATION else "superseded"
                 return True
         return False
+
+    def _cancels_unnamed(self, closer: TsunamiAlert, target: TsunamiAlert) -> bool:
+        """Whether `closer` is a cancellation naming no known alert that, by quake, source and areas, ends `target`."""
+        if closer.level != levels.CANCELLATION or closer.id == target.id or not closer.quake_ref:
+            return False
+        if any(self.get_alert(ref) for ref in closer.references) or target.level in QUIET:
+            return False
+        wanted = {a.lower() for a in closer.areas}
+        return (
+            closer.quake_ref == target.quake_ref
+            and closer.source == target.source
+            and (not wanted or bool(wanted & {x.lower() for x in target.areas}))
+        )
 
     def _in_force(self, alert: TsunamiAlert, clock: Clock, answering: str | None) -> bool:
         current = self.get_alert(alert.id)
@@ -687,16 +706,7 @@ class Store:
             return []
         targets = [self.get_alert(ref) for ref in alert.references]
         if alert.level == levels.CANCELLATION and not any(targets) and alert.quake_ref:
-            wanted = {a.lower() for a in alert.areas}
-            targets = [
-                a
-                for a in self._tsunamis.values()
-                if a.quake_ref == alert.quake_ref
-                and a.source == alert.source
-                and a.id != alert.id
-                and a.level not in QUIET
-                and (not wanted or wanted & {x.lower() for x in a.areas})
-            ]
+            targets = [a for a in self._tsunamis.values() if self._cancels_unnamed(alert, a)]
         status = "cancelled" if alert.level == levels.CANCELLATION else "superseded"
         closed = []
         for target in targets:

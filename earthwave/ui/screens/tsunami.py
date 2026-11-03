@@ -14,10 +14,11 @@ from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
-from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED
+from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, YELLOW
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
+from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS
 from earthwave.ui.widgets.too_small import TooSmall, refresh_too_small, sync_too_small
-from earthwave.ui.widgets.tsunami_panel import fmt_until
+from earthwave.ui.widgets.tsunami_panel import OFFLINE_LINE, feed_line, fmt_until
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
@@ -151,6 +152,8 @@ class TsunamiScreen(Screen):
                 if status == "overdue"
                 else fmt_until(app.store.expiry(alert), now)
                 if status == "active"
+                else fmt_time(alert.expires, tz)  # what the detail below shows, so a closed row keeps its date
+                if alert.expires and alert.level != levels.CANCELLATION
                 else "",
             )
         # Diff by alert id so a poll keeps the cursor, the scroll position and the reader's place (clear() lost them).
@@ -183,22 +186,46 @@ class TsunamiScreen(Screen):
         app = self.earthwave
         self.query_one(GaugeStrip).show(app.gauge_rows(), app.clock.now())
 
+    def _feed_note(self) -> Text | None:
+        """The state of the feeds, when it qualifies an empty or short list: offline, or tsunami feeds failing."""
+        app = self.earthwave
+        if app.offline:  # nothing was fetched, so an empty table says nothing
+            return Text(OFFLINE_LINE, style=f"bold {YELLOW}")
+        feeds, none_fresh = app.tsunami_feeds_down()
+        if not feeds:
+            return None
+        down = tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
+        return feed_line(down, none_fresh)
+
     def _show_selected(self) -> None:
         app = self.earthwave
         alert = self.selected()
         body = self.query_one("#alert_text", Static)
+        note = self._feed_note()
+        head = Text()
+        if note is not None:
+            head.append_text(note)
+            head.append("\n\n")
         if alert is None:
             self._shown_id = None
-            body.update(Text("No tsunami products received yet.", style="grey50"))
+            if app.offline:
+                empty = "Nothing was requested this run, so no tsunami products are known."
+            elif note is not None:
+                empty = "No tsunami products received."
+            else:
+                empty = "No tsunami products received yet."
+            head.append(empty, style="grey50")
+            body.update(head)
             return
         if alert.id != self._shown_id:  # another alert starts at its level and status; a poll keeps the reader's place
             self._shown_id = alert.id
             self.query_one("#alert_text_scroll").scroll_home(animate=False)
         quake = app.store.quake_for(alert)
         quake_line = f"M{quake.mag:.1f} {quake.place} ({quake.id})" if quake else ""
-        body.update(
+        head.append_text(
             render_alert(alert, app.store.alert_status(alert, app.clock), quake_line, app.config.view.time_zone)
         )
+        body.update(head)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self._show_selected()

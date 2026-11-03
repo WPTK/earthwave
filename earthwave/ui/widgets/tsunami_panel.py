@@ -78,15 +78,22 @@ def build_panel(
     if not alerts and not unknown:
         text.append("No tsunami alerts received\n", "grey50")  # not "in force": a feed is not answering in full
     if down:
-        if unknown:
-            text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", f"bold {RED}")
-        else:
-            text.append(f"Partial: {', '.join(down)}", YELLOW)
+        text.append_text(feed_line(down, unknown))
     return text
 
 
+def feed_line(down: tuple[str, ...], unknown: bool) -> Text:
+    """What the feeds' trouble means for the list above it, on the dashboard panel and the tsunami screen alike."""
+    if unknown:
+        return Text(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", f"bold {RED}")
+    return Text(f"Partial: {', '.join(down)}", YELLOW)
+
+
+OFFLINE_LINE = "Tsunami feeds not checked (offline)"
+
+
 def offline_panel() -> Text:
-    return Text("Tsunami feeds not checked (offline)", style=f"bold {YELLOW}")
+    return Text(OFFLINE_LINE, style=f"bold {YELLOW}")
 
 
 class TsunamiPanel(Static):
