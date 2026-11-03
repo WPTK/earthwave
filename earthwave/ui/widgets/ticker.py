@@ -5,7 +5,7 @@ from textual.widgets import Static
 
 from earthwave.models import Earthquake
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import mag_color
+from earthwave.ui.theme import RED, mag_color
 
 MIN_PLACE = 8  # the place is shortened to fit the line, but never below this
 
@@ -26,7 +26,7 @@ class Ticker(Static):
             tail.append(f" {fmt_age(age_seconds)} ago", "grey62")
         if gauge:
             tail.append("   Gauge anomaly: ", "grey62")
-            tail.append(gauge, "bold red")
+            tail.append(gauge, f"bold {RED}")
         if quake is None:
             text = Text(" " if waiting else " No major quakes in the loaded data", style="grey50")
         else:

@@ -12,7 +12,7 @@ from rich.style import Style
 from textual._ansi_theme import MONOKAI
 from textual.color import Color
 
-from earthwave.ui.theme import LEVEL_COLORS, PAGER_COLORS, contrast, mag_color
+from earthwave.ui.theme import LEVEL_COLORS, PAGER_COLORS, contrast, css_variables, mag_color
 
 _MACHADO = {
     "protanopia": [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
@@ -90,3 +90,49 @@ def test_status_colours_read_on_the_dark_ground():
     dark = Color(30, 30, 30)
     for style in [*PAGER_COLORS.values(), *LEVEL_COLORS.values(), *(mag_color(m) for m in MAG_SAMPLES.values())]:
         assert contrast(Color(*_truecolor(style)), dark) >= 4.5, style
+
+
+def _rgb(colour: str) -> tuple[int, int, int]:
+    c = Color.parse(colour)
+    return c.r, c.g, c.b
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+@pytest.mark.parametrize("variant", ["", "-dim"])
+def test_level_surfaces_are_told_apart_by_colour_blind_readers(kind, variant):
+    """Banner and pulsing border (bare) and status bar and calm border (-dim): Warning, Advisory, Watch, Threat and
+    Information differ from one another, including THREAT against INFORMATION."""
+    variables = css_variables()
+    surfaces = {
+        name: _rgb(variables[f"level-{name}{variant}"]) for name in ("warning", "advisory", "watch", "threat", "info")
+    }
+    delta, pair = _worst_pair(surfaces, kind)
+    assert delta >= 20, (pair, delta)
+
+
+def test_level_surfaces_agree_with_the_level_words():
+    """One source of truth: a surface is the level word's colour (or its calm step), never a second palette."""
+    variables = css_variables()
+    for name, style in LEVEL_COLORS.items():
+        if name == "CANCELLATION":
+            continue
+        key = "info" if name == "INFORMATION" else name.lower()
+        assert variables[f"level-{key}"] == Style.parse(style).color.name
+
+
+def test_dim_surfaces_carry_white_text_and_bright_ones_black():
+    for name, colour in css_variables().items():
+        text = Color(255, 255, 255) if name.endswith("-dim") else Color(0, 0, 0)
+        assert contrast(text, Color.parse(colour)) >= 4.5, name
+
+
+def test_no_ansi_colour_names_left_in_the_styled_widgets():
+    """Textual maps ANSI names through its own terminal theme, so a widget naming one shows a different colour from the
+    theme constants for the same meaning (issue #293)."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "earthwave" / "ui"
+    pattern = re.compile(r'"(?:bold )?(?:red|green|cyan|yellow|magenta)(?: on \w+)?"|on (?:red|green|cyan)')
+    for path in [*(root / "widgets").glob("*.py"), *(root / "screens").glob("*.py")]:
+        assert not pattern.search(path.read_text(encoding="utf-8")), path.name

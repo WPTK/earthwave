@@ -70,7 +70,7 @@
 .terminal-r36 { fill: #b3425c }
 .terminal-r37 { fill: #b93c5b }
 .terminal-r38 { fill: #b83c5b }
-.terminal-r39 { fill: #ff0000;font-weight: bold }
+.terminal-r39 { fill: #f25f49;font-weight: bold }
     </style>
 
     <defs>

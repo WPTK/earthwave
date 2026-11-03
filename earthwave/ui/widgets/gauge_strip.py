@@ -13,7 +13,7 @@ from textual.widgets import Sparkline, Static
 from earthwave.sources.geo import COOPS_MAX_KM
 from earthwave.state.store import GAUGE_FRESH
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import YELLOW
+from earthwave.ui.theme import CYAN, GREEN, RED, YELLOW
 
 MAX_POINTS = 240  # sparkline samples drawn per row; the "24 h max" summary reads every stored residual
 NAME_WIDTH = 26  # the least room a station name gets; a wider strip gives names the free width (see GaugeStrip)
@@ -97,7 +97,7 @@ def row_label(row: GaugeRowData, now: datetime, name_width: int = NAME_WIDTH) ->
     text = Text(no_wrap=True, overflow="ellipsis")
     text.append(f"{short_name(name, name_width):<{name_width}} ", "bold")
     text.append(f"{dist} ", "grey62")
-    text.append(f"{row.mode:<3} ", "cyan")
+    text.append(f"{row.mode:<3} ", CYAN)
     text.append(age_text(row, now), "grey70")
     return text
 
@@ -117,10 +117,10 @@ def max_text(row: GaugeRowData, now: datetime) -> Text:
     if lag is not None:  # detection is blind here: an old residual must not read as the current, calm value
         return Text(f"resid {fmt_age(lag.total_seconds())} old", style=YELLOW, no_wrap=True)
     if is_over_now(row, now):
-        return Text(f"{peak:+.3f} m !", style="bold red", no_wrap=True)
+        return Text(f"{peak:+.3f} m !", style=f"bold {RED}", no_wrap=True)
     if abs(peak) >= row.threshold_m:  # it settled: the peak is history, not a current exceedance
         return Text(f"{peak:+.3f} m peak", style="grey70", no_wrap=True)
-    return Text(f"{peak:+.3f} m", style="green", no_wrap=True)
+    return Text(f"{peak:+.3f} m", style=GREEN, no_wrap=True)
 
 
 class GaugeRow(Horizontal):

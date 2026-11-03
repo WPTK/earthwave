@@ -8,6 +8,7 @@ from textual.color import Color
 from textual.widgets import Sparkline
 
 from earthwave.sources import coops, ndbc
+from earthwave.ui.theme import GREEN, RED
 from earthwave.ui.widgets.gauge_strip import (
     MAX_POINTS,
     GaugeRow,
@@ -114,9 +115,9 @@ def test_label_and_max_text():
     )
     assert row_label(_row(distance_km=None), NOW).plain.count("km") == 0
     quiet = max_text(_row(), NOW)
-    assert quiet.plain == "-0.012 m" and "green" in str(quiet.style)
+    assert quiet.plain == "-0.012 m" and GREEN in str(quiet.style)
     loud = max_text(_row(residuals=(0.01, -0.081, 0.02), exceeded_at=NOW - timedelta(minutes=10)), NOW)
-    assert loud.plain == "-0.081 m !" and "red" in str(loud.style)
+    assert loud.plain == "-0.081 m !" and RED in str(loud.style)
     assert max_text(_row(residuals=()), NOW).plain == "no residual"
     assert max_residual(()) is None and max_residual((0.01, -0.02, 0.015)) == -0.02
 

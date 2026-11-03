@@ -60,6 +60,28 @@ LEVEL_COLORS = {
 }
 
 
+# Surfaces that carry a level (banner, status bar, panel border) take their colour from the same constants, as these
+# variables for app.tcss (EarthwaveApp.get_css_variables adds them): the bare name is the pulsing border and the banner
+# (black text), -dim the calm border and status-bar ground (white text). Each level darkens by its own amount, chosen so
+# all five dim colours stay tellable apart under protanopia and deuteranopia (tests/test_cvd_palette.py): a uniform step
+# merges Warning with Advisory, and Threat with Information.
+LEVEL_SURFACES = {
+    "warning": (RED, 0.65),
+    "advisory": (ORANGE, 0.4),
+    "watch": (YELLOW, 0.4),
+    "threat": (THREAT_BLUE, 0.65),
+    "info": (INFO_VIOLET, 0.5),
+}
+
+
+def css_variables() -> dict[str, str]:
+    out = {}
+    for name, (colour, darken) in LEVEL_SURFACES.items():
+        out[f"level-{name}"] = colour
+        out[f"level-{name}-dim"] = Color.parse(colour).darken(darken).hex
+    return out
+
+
 def mark_level(widget, level: str | None) -> None:
     """Give a widget the level-<name> class of the alert it is showing (none when it shows no actionable alert), so
     app.tcss can colour it from theme variables: a Warning and a Watch call for different actions."""

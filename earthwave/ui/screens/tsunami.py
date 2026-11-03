@@ -14,7 +14,7 @@ from earthwave.models import TsunamiAlert
 from earthwave.sources import levels
 from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
-from earthwave.ui.theme import LEVEL_COLORS
+from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
 from earthwave.ui.widgets.too_small import TooSmall, refresh_too_small, sync_too_small
 from earthwave.ui.widgets.tsunami_panel import fmt_until
@@ -24,13 +24,18 @@ if TYPE_CHECKING:
 
 SOURCE_NAMES = {"tsunamigov": "tsunami.gov", "nws": "NWS", "jma": "JMA"}
 STATUS_STYLE = {
-    "active": "green",
-    "overdue": "bold red",
+    "active": GREEN,
+    "overdue": f"bold {RED}",
     "expired": "grey50",
     "cancelled": "grey50",
     "superseded": "grey50",
     "withdrawn": "grey50",
 }
+
+
+def _cell_key(cell: object) -> object:
+    """What a cell shows: Rich's Text equality ignores its base style, which is where the colour is."""
+    return (cell.plain, str(cell.style)) if isinstance(cell, Text) else cell
 
 
 def table_rows(alerts: list[TsunamiAlert], statuses: dict[str, str]) -> list[TsunamiAlert]:
@@ -133,10 +138,11 @@ class TsunamiScreen(Screen):
         self._rows = table_rows(alerts, statuses)
         now = app.clock.now()
         tz = app.config.view.time_zone
-        table.clear()
+        scroll_y = table.scroll_y
+        wanted = {}
         for alert in self._rows:
             status = statuses[alert.id]
-            table.add_row(
+            wanted[alert.id] = (
                 Text(alert.level, LEVEL_COLORS[alert.level]),
                 Text("" if alert.level == levels.CANCELLATION else status, STATUS_STYLE.get(status, "grey62")),
                 SOURCE_NAMES.get(alert.source, alert.source),
@@ -146,12 +152,26 @@ class TsunamiScreen(Screen):
                 else fmt_until(app.store.expiry(alert), now)
                 if status == "active"
                 else "",
-                key=alert.id,
             )
-        if keep is not None:
-            for index, alert in enumerate(self._rows):
-                if alert.id == keep.id:
-                    table.move_cursor(row=index)
+        # Diff by alert id so a poll keeps the cursor, the scroll position and the reader's place (clear() lost them).
+        for key in [k.value for k in table.rows if k.value not in wanted]:
+            table.remove_row(key)
+        columns = list(table.columns)
+        for alert_id, cells in wanted.items():
+            if alert_id not in table.rows:
+                table.add_row(*cells, key=alert_id)
+                continue
+            for column, new in zip(columns, cells, strict=True):  # ColumnKey objects
+                if _cell_key(table.get_cell(alert_id, column)) != _cell_key(new):
+                    table.update_cell(alert_id, column, new)
+        order = [k.value for k in sorted(table.rows, key=lambda k: table.get_row_index(k))]
+        if order != [a.id for a in self._rows]:
+            # sort() hands its key only the cell values; the level cell object is unique to its row.
+            place = {id(table.get_row(a.id)[0]): index for index, a in enumerate(self._rows)}
+            table.sort(key=lambda cells: place[id(cells[0])])
+        if keep is not None and keep.id in wanted:
+            table.move_cursor(row=table.get_row_index(keep.id), animate=False, scroll=False)
+        table.scroll_to(y=scroll_y, animate=False, immediate=True)
         self._show_selected()
 
     def refresh_gauges(self) -> None:

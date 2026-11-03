@@ -1,10 +1,3 @@
-/* Watch yellow. The theme has no yellow ($warning is orange, and the ANSI yellow renders orange too), so the sheet
-   names one: CSS "gold" is the same colour as YELLOW in theme.py. */
-$watch: gold;
-$watch-dim: olive;
-/* A Warning is the loudest thing on screen: a solid red (the theme's $error is a muted pink, quieter than Watch). */
-$alarm: red;
-
 Screen {
     background: $surface;
 }
@@ -66,84 +59,83 @@ Screen {
     height: auto;
     max-height: 12;
     min-height: 4;
-    border: round $primary-darken-2;
+    border: round $level-info-dim;  /* no actionable alert: an Information product */
     padding: 0 1;
 }
 
-/* Tsunami level colours: Warning red ($error), Advisory orange ($warning), Watch yellow ($watch), because they call for
-   different actions; the level word is printed too, so the difference survives NO_COLOR. */
+/* Tsunami level colours come from earthwave/ui/theme.py (css_variables): Warning red, Advisory orange, Watch yellow,
+   Threat blue, Information violet. They call for different actions; the level word is printed too, so the difference
+   survives NO_COLOR. */
 #tsunami.level-warning {
-    border: round $error-darken-2;
+    border: round $level-warning-dim;
 }
 
 #tsunami.level-advisory {
-    border: round $warning-darken-3;
+    border: round $level-advisory-dim;
 }
 
 #tsunami.level-watch {
-    border: round $watch-dim;
+    border: round $level-watch-dim;
 }
 
 #tsunami.level-threat {
-    border: round $primary-darken-2;
+    border: round $level-threat-dim;
 }
 
 #tsunami.pulse.level-warning {
-    border: round $error;
+    border: round $level-warning;
 }
 
 #tsunami.pulse.level-advisory {
-    border: round $warning;
+    border: round $level-advisory;
 }
 
 #tsunami.pulse.level-watch {
-    border: round $watch;
+    border: round $level-watch;
 }
 
 #tsunami.pulse.level-threat {
-    border: round $primary;
+    border: round $level-threat;
 }
 
 #banner {
     display: none;
     height: 1;
-    background: $alarm;
-    color: white;
+    background: $level-warning;
+    color: black;
     text-style: bold;
 }
 
 #banner.level-advisory {
-    background: $warning-darken-3;
+    background: $level-advisory;
 }
 
 #banner.level-watch {
-    background: $watch;
-    color: black;
+    background: $level-watch;
 }
 
 #banner.level-threat {
-    background: $primary-darken-1;
+    background: $level-threat;
 }
 
 #status.alert-info {
-    background: $primary-darken-2;
+    background: $level-info-dim;
 }
 
 #status.level-warning {
-    background: $alarm;
-    color: white;
+    background: $level-warning-dim;
 }
 
 #status.level-advisory {
-    background: $warning-darken-3;
+    background: $level-advisory-dim;
 }
 
 #status.level-watch {
-    background: $watch-dim;  /* the bar's text is light, so a deep yellow; the banner above has black text on $watch */
+    background: $level-watch-dim;
 }
 
 #status.level-threat {
-    background: $primary-darken-1;
+    background: $level-threat-dim;
 }
 
 TsunamiScreen {
