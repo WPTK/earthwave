@@ -82,13 +82,18 @@ class ReplyFilter:
     Tokens are `(key, character)` pairs. `push` returns (released tokens, cell size when the reply gave one).
     """
 
-    __slots__ = ("held",)
+    __slots__ = ("held", "hold_escape")
 
-    _PARTIAL = re.compile(r"(?:\x1b|\^)?(?:\[\??[\d;]{0,48})?")
-    _DONE = re.compile(r"(?:\x1b|\^)?\[\??((?:\d{1,5})(?:;\d{1,5}){0,15}|)([tc])")
+    # also the mode reports Textual asks for itself at startup (`CSI ? 2026 $ p` -> `CSI ? 2026 ; 2 $ y`)
+    _PARTIAL = re.compile(r"(?:\x1b|\^)?(?:\[\??[\d;]{0,48}\$?)?")
+    _DONE = re.compile(r"(?:\x1b|\^)?\[\??((?:\d{1,5})(?:;\d{1,5}){0,15}|)([tc]|\$y)")
 
-    def __init__(self) -> None:
+    def __init__(self, hold_escape: bool = True) -> None:
+        """`hold_escape`: an Escape may start a reply, so it waits for the next key. Without it (no query of ours is
+        outstanding) Escape is typed at once, and a reply whose Escape Textual already gave up on (it waits 100 ms for
+        the rest of a sequence) is still caught from its `[`."""
         self.held: list[tuple[str, str]] = []
+        self.hold_escape = hold_escape
 
     @staticmethod
     def _char(token: tuple[str, str]) -> str:
@@ -96,7 +101,12 @@ class ReplyFilter:
         return "\x1b" if key == "escape" else char
 
     def push(self, token: tuple[str, str]) -> tuple[list[tuple[str, str]], tuple[int, int] | None]:
+        if not self.hold_escape and not self.held and token[0] == "escape":
+            return [token], None
         self.held.append(token)
+        if any(not self._char(t) for t in self.held):  # arrows, F-keys: a key with no character is never a reply
+            released, self.held = self.held, []
+            return released, None
         text = "".join(self._char(t) for t in self.held)
         if done := self._DONE.fullmatch(text):
             self.held = []

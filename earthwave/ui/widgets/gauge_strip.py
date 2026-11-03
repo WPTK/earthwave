@@ -110,9 +110,9 @@ def is_over_now(row: GaugeRowData, now: datetime) -> bool:
 def max_text(row: GaugeRowData, now: datetime) -> Text:
     peak = max_residual(row.residuals)  # all stored residuals (about 24 h), not just the drawn tail
     if peak is None:
-        return Text("no residual", style="grey50", no_wrap=True)
+        return Text("no residual", style="grey62", no_wrap=True)
     if is_stale(row, now):  # old data is never flagged or coloured as if it were live
-        return Text(f"{peak:+.3f} m stale", style="grey50", no_wrap=True)
+        return Text(f"{peak:+.3f} m stale", style="grey62", no_wrap=True)
     lag = residual_lag(row)
     if lag is not None:  # detection is blind here: an old residual must not read as the current, calm value
         return Text(f"resid {fmt_age(lag.total_seconds())} old", style=YELLOW, no_wrap=True)

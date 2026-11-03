@@ -1014,8 +1014,11 @@ class MapPanel(Widget, can_focus=True):
         frame = self._frame
         if y >= frame.rows:
             return self._spare_row(y - frame.rows)
+        ground = Style(
+            color=self.rich_style.color, bgcolor=self.background_colors[1].rich_color
+        )  # never the terminal's own
         if y >= len(frame.base):
-            return Strip.blank(self.size.width, Style())
+            return Strip.blank(self.size.width, ground)
         coast = Style(color=self.get_component_rich_style("map--coast").color)  # the panel supplies the sea
         land_style = Style(color=self.get_component_rich_style("map--hatch").color)
         land = frame.land[y] if y < len(frame.land) else b""
@@ -1024,4 +1027,4 @@ class MapPanel(Widget, can_focus=True):
         markers = self._by_row.get(y, ())
         return Strip(
             row_segments(frame.base[y], markers, self._tint_by_row.get(y), land, coast, land_style, labels, label_style)
-        )
+        ).apply_style(ground)

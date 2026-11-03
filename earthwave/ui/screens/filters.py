@@ -33,6 +33,7 @@ class FiltersScreen(ModalScreen[tuple[float, float] | None]):
     def __init__(self, view: ViewFilter):
         super().__init__()
         self._view = view
+        self._showing_error = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -49,13 +50,26 @@ class FiltersScreen(ModalScreen[tuple[float, float] | None]):
     def on_mount(self) -> None:
         self.query_one("#min_mag", Input).focus()
 
-    def _submit(self) -> None:
+    def _check(self) -> tuple[float, float] | None:
+        """Validate both fields and show the message, or clear it: the error always describes what is typed now."""
         try:
             result = parse_filters(self.query_one("#min_mag", Input).value, self.query_one("#hours", Input).value)
         except ValueError as exc:
             self.query_one("#error", Label).update(str(exc))
-            return
-        self.dismiss(result)
+            self._showing_error = True
+            return None
+        self.query_one("#error", Label).update("")
+        self._showing_error = False
+        return result
+
+    def _submit(self) -> None:
+        if (result := self._check()) is not None:
+            self.dismiss(result)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()
+        if self._showing_error:
+            self._check()  # a message shown by Apply follows the typing; nothing is shown before the first Apply
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()

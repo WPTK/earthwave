@@ -20,6 +20,12 @@ ORANGE = "#e68a00"
 RED = "#f25f49"
 CYAN = "#58d1eb"
 THREAT_BLUE = "#87d7ff"
+# Panel borders and their titles. Textual's own $primary-darken-2 is 2.2:1 on the ground (and its title text must
+# reach 4.5:1), so app.tcss takes this from css_variables as $border instead.
+BORDER = "#5b93d3"
+# The selected quake row. Darker than the ground's blue tint would be at 4.5:1 for every status colour, so the row
+# lifts its foregrounds with lift() instead of darkening further (it must stay tellable from the #1e1e1e ground).
+CURSOR_BG = "#1e3a5f"
 INFO_VIOLET = "#9682e6"
 
 
@@ -75,6 +81,18 @@ LEVEL_SURFACES = {
 }
 
 
+def ground_variables() -> dict[str, str]:
+    """Non-level colours app.tcss shares with the Python widgets."""
+    return {
+        "border": BORDER,
+        "cursor": CURSOR_BG,
+        "bright": "#ffffff",  # white text on the cursor and button grounds, the focused input's border
+        "title": "#e0e0e0",  # panel titles, which the level border colours cannot carry
+        "button": "#2f4663",
+        "button-primary": "#1d5fa8",
+    }
+
+
 def css_variables() -> dict[str, str]:
     out = {}
     for name, (bright, dim) in LEVEL_SURFACES.items():
@@ -102,6 +120,17 @@ def contrast(a: Color, b: Color) -> float:
     """WCAG contrast ratio between two colours."""
     hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
     return (hi + 0.05) / (lo + 0.05)
+
+
+def lift(fg: Color, bg: Color, minimum: float = 4.5) -> Color:
+    """fg itself when it reads on bg at the minimum ratio; otherwise the nearest tint of it (same hue, mixed towards
+    white on a dark ground, black on a light one) that does."""
+    target = Color(255, 255, 255) if _luminance(bg) < 0.18 else Color(0, 0, 0)
+    for step in range(0, 101, 2):
+        out = fg.blend(target, step / 100)
+        if contrast(out, bg) >= minimum:
+            return out
+    return target
 
 
 def legible_grey(fg: Color, bg: Color, minimum: float = 4.5) -> Color:

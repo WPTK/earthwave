@@ -46,33 +46,43 @@ def build_status(info: StatusInfo, glyphs: Glyphs) -> Text:
     if info.alert_state in ("active", "alarm"):  # an acknowledged alert is still in force
         text.append(" TSUNAMI ", "bold reverse")
     text.append(f" {info.shown} shown of {info.total}", "white")
-    text.append(f" {glyphs.bar} ", "grey42")
+    text.append(f" {glyphs.bar} ", "grey50")
     text.append(info.filter_text, CYAN)
     text.append(f" sort:{info.sort}", "grey62")
     if info.next_poll is not None:
-        text.append(f" {glyphs.bar} ", "grey42")
+        text.append(f" {glyphs.bar} ", "grey50")
         text.append(f"next {fmt_countdown(info.next_poll)}", "grey62")
     if info.unseen:
-        text.append(f" {glyphs.bar} ", "grey42")
+        text.append(f" {glyphs.bar} ", "grey50")
         text.append(f" {info.unseen} unseen ", f"bold black on {CYAN}")
     if info.offline:
-        text.append(f" {glyphs.bar} ", "grey42")
+        text.append(f" {glyphs.bar} ", "grey50")
         text.append("offline, showing saved history", "grey70")
     unhealthy = [line for line in info.sources if line.freshness is not Freshness.FRESH or line.incomplete]
     if info.sources and not unhealthy:
-        text.append(f" {glyphs.bar} ", "grey42")
+        text.append(f" {glyphs.bar} ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[Freshness.FRESH])
         text.append(" feeds ok", "grey70")
     groups: dict[tuple[Freshness, str], list[SourceLine]] = {}  # one phrase per state: six loading feeds fit the bar
     for line in unhealthy:
         groups.setdefault((line.freshness, FRESHNESS_WORDS.get(line.freshness, "incomplete")), []).append(line)
     for index, ((freshness, word), lines) in enumerate(groups.items()):
-        text.append(f" {glyphs.bar} " if index == 0 else "  ", "grey42")
+        text.append(f" {glyphs.bar} " if index == 0 else "  ", "grey50")
         text.append(f"{glyphs.dot}", FRESHNESS_COLORS[freshness])
         names = ", ".join(line.name for line in lines)
         age = f", last ok {fmt_age(lines[0].age)}" if len(lines) == 1 and lines[0].age is not None else ""
         text.append(f" {names} {word}{age}" if len(lines) == 1 else f" {word}: {names}", "grey70")
-    return text
+    return on_warning_ground(text) if info.alert_level == "WARNING" else text
+
+
+def on_warning_ground(text: Text) -> Text:
+    """A Warning's status ground is the loudest red on screen (theme.LEVEL_SURFACES), which no light grey or cyan reads
+    on (1.3 to 2:1): the words go black and the TSUNAMI chip white on black. Colour meaning in the bar (filter, feed
+    dots) gives way to the alert; the words still carry it."""
+    plain = Text(text.plain, style="#000000", no_wrap=True, overflow="ellipsis")
+    if text.plain.startswith(" TSUNAMI "):
+        plain.stylize("bold #ffffff on #000000", 0, len(" TSUNAMI "))
+    return plain
 
 
 class StatusBar(Static):

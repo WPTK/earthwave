@@ -5,6 +5,7 @@ from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
 from textual.binding import Binding
+from textual.color import Color
 from textual.events import Click
 from textual.geometry import Region, Size
 from textual.message import Message
@@ -17,10 +18,9 @@ from earthwave.models import Earthquake
 from earthwave.notify.inapp import AttentionTracker
 from earthwave.ui.glyphs import Glyphs
 from earthwave.ui.labels import fmt_age, fmt_distance
-from earthwave.ui.theme import CYAN, PAGER_COLORS, mag_color
+from earthwave.ui.theme import CURSOR_BG, CYAN, PAGER_COLORS, lift, mag_color
 
 AGE_W, MAG_W, DEPTH_W, DIST_W, FLAG_W = 4, 4, 5, 12, 2  # DIST_W fits "20015 km NNE", the longest distance on Earth
-CURSOR_BG = "#1e3a5f"
 
 
 def place_width(width: int, has_home: bool) -> int:
@@ -116,24 +116,35 @@ class QuakeList(ScrollView, can_focus=True):
         width = self.scrollable_content_region.width  # size.width includes the scrollbar column
         index = scroll_y + y
         if index >= len(self.rows):
-            return Strip.blank(width, Style())
+            return Strip.blank(width, self.rich_style)
         return self._row_strip(self.rows[index], index == self.cursor, width).crop_extend(
-            scroll_x, scroll_x + width, Style()
+            scroll_x, scroll_x + width, self.rich_style
         )
 
     def _row_strip(self, quake: Earthquake, selected: bool, width: int) -> Strip:
         attention = self._tracker.style_for(quake.id)
+        # Every cell names both colours: left unset, the terminal's own (a light profile's white) shows through
+        ground = self.rich_style
         if attention is not None:
             flat: Style | None = Style(color=attention.fg, bgcolor=attention.bg, bold=attention.bold)
             base = flat
         else:
             flat = None
-            base = Style(bgcolor=CURSOR_BG) if selected else Style()
+            base = Style(color=ground.color, bgcolor=CURSOR_BG if selected else ground.bgcolor)
+        ground_bg = Color.parse(CURSOR_BG) if selected else Color.from_rich_color(ground.bgcolor)
 
         def field(text: str, color: str = "") -> Segment:
             if flat is not None:
                 return Segment(text, flat)
-            return Segment(text, base + Style.parse(color) if color else base)
+            if not color:
+                return Segment(text, base)
+            style = Style.parse(color)
+            if (
+                selected and style.color is not None
+            ):  # a status colour tuned for the ground (ANSI red at 2.8:1 on the navy bar) is tinted to read
+                fg = style.color.get_truecolor(self.app.ansi_theme)
+                style += Style(color=lift(Color(fg.red, fg.green, fg.blue), ground_bg).rich_color)
+            return Segment(text, base + style)
 
         marker = ("▌" if self._glyphs.unicode else ">") if selected else " "
         age = fmt_age((self._clock.now() - quake.time).total_seconds()).rjust(AGE_W)
