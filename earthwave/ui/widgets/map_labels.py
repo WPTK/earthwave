@@ -37,33 +37,34 @@ LABELS: tuple[tuple[str, float, float, str], ...] = (
     ("Sea of Okhotsk", 150, 55, "sea"),
     ("Black Sea", 34, 43, "sea"),
     ("North Sea", 3, 56, "sea"),
-    ("Caspian Sea", 51, 42, "sea"),
-    # Countries, shown at region and close zoom. Each sits where the coast leaves the cells free (often just offshore);
+    ("Caspian Sea", 54, 44, "sea"),
+    # Countries and regions, shown at region and close zoom. Each sits where the coast leaves the cells free (often
+    # just offshore);
     # one the coast crosses is dropped, never moved.
-    ("Japan", 143, 36, "country"),
-    ("Philippines", 126, 10, "country"),
-    ("Indonesia", 113, -2, "country"),
-    ("Taiwan", 121, 23.7, "country"),
-    ("Papua New Guinea", 144, -6, "country"),
-    ("New Zealand", 172, -42, "country"),
-    ("Chile", -75, -33, "country"),
-    ("Peru", -75, -10, "country"),
-    ("Ecuador", -78, -1, "country"),
-    ("Colombia", -73, 4, "country"),
-    ("Mexico", -102, 24, "country"),
-    ("Alaska", -152, 64, "country"),
-    ("California", -120, 37, "country"),
-    ("Turkey", 35, 39, "country"),
-    ("Greece", 22, 39, "country"),
-    ("Italy", 12.5, 42.5, "country"),
-    ("Iran", 54, 32, "country"),
-    ("India", 79, 22, "country"),
-    ("China", 103, 35, "country"),
-    ("Kamchatka", 160, 56, "country"),
+    ("Japan", 143, 36, "region"),
+    ("Philippines", 127, 11, "region"),
+    ("Indonesia", 113, -2, "region"),
+    ("Taiwan", 120, 24.7, "region"),
+    ("Papua New Guinea", 144, -6, "region"),
+    ("New Zealand", 170, -42, "region"),
+    ("Chile", -75, -33, "region"),
+    ("Peru", -75, -10, "region"),
+    ("Ecuador", -78, -1, "region"),
+    ("Colombia", -73, 4, "region"),
+    ("Mexico", -102, 24, "region"),
+    ("Alaska", -152, 64, "region"),
+    ("California", -120, 37, "region"),
+    ("Turkey", 35, 39, "region"),
+    ("Greece", 21, 40, "region"),
+    ("Italy", 12.5, 42.5, "region"),
+    ("Iran", 54, 32, "region"),
+    ("India", 79, 22, "region"),
+    ("China", 103, 35, "region"),
+    ("Kamchatka", 160, 56, "region"),
 )
 BROAD_MIN_SPAN = 60  # continents and oceans show when the view spans at least this many degrees of latitude
 SEA_SPAN = (30, 100)  # seas show between these spans (wide and region zoom, not the world or close)
-COUNTRY_MAX_SPAN = 40  # countries show at region and close zoom, where a reader needs to find one by name
+REGION_MAX_SPAN = 40  # countries and regions show at region and close zoom, where a reader needs to find one by name
 
 
 def place_labels(
@@ -78,8 +79,8 @@ def place_labels(
         if kind == "sea":
             if not SEA_SPAN[0] <= span <= SEA_SPAN[1]:
                 continue
-        elif kind == "country":
-            if span > COUNTRY_MAX_SPAN:
+        elif kind == "region":
+            if span > REGION_MAX_SPAN:
                 continue
         elif span < BROAD_MIN_SPAN:
             continue

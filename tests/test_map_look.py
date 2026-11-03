@@ -75,3 +75,15 @@ def test_tsunami_source_ring_is_wide_enough_to_read_on_land():
     start = round(y) * scene.width + round(x) + int(ring.radius)
     ring_pixels = [px for px in pixels[start : start + 12] if px not in (SEA, LAND, COAST)]
     assert len(ring_pixels) >= TSUNAMI_RING_WIDTH
+
+
+def test_tsunami_ring_leaves_a_gap_round_the_biggest_marker():
+    quake = make_quake("big", 8.7, lat=-20.0, lon=-150.0)  # open ocean, so a gap is sea
+    scene, pixels, _ = scene_of([quake], [TsunamiMark("a", "warning", None, (-20.0, -150.0))])
+    x, y = project(-150, -20, scene.view, scene.width, scene.height)
+    start = round(y) * scene.width + round(x)
+    row = pixels[start : start + 40]
+    kinds = ["sea" if px == SEA else "ink" for px in row]
+    first_gap = kinds.index("sea")
+    assert "ink" in kinds[first_gap:], "the ring is drawn beyond the marker"
+    assert kinds[first_gap : kinds.index("ink", first_gap)].count("sea") >= 2  # a visible gap, not touching

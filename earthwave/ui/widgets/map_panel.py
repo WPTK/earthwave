@@ -567,6 +567,7 @@ def _truecolor(color, theme) -> RGB:
 
 
 MARKER_RADIUS = (0.38, 0.55, 0.78, 1.05, 1.3)  # marker disc radius per magnitude band, in cell widths
+TSUNAMI_RING_RADIUS = MARKER_RADIUS[-1] + 0.4  # in cell widths: clear of the biggest marker, the quake that raises one
 TSUNAMI_RING_WIDTH = 4  # pixels; 2 was a hairline that land swallowed
 PIXEL_BAND = 6  # a sixel band; the image height is a whole number of them
 
@@ -610,7 +611,14 @@ def pixel_scene(
                 tints[place] = index
         if mark.source is not None:
             shapes.append(
-                Shape(mark.source[1], mark.source[0], cw * 1.3, None, ring=index, ring_width=TSUNAMI_RING_WIDTH)
+                Shape(
+                    mark.source[1],
+                    mark.source[0],
+                    cw * TSUNAMI_RING_RADIUS,
+                    None,
+                    ring=index,
+                    ring_width=TSUNAMI_RING_WIDTH,
+                )
             )
     selected_id = model.selected.id if model.selected else None
     tracker = model.tracker

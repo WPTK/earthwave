@@ -1628,3 +1628,16 @@ def test_replay_fixture_nws_polls_match_what_the_source_sends():
     rows = [json.loads(line) for line in read(FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl").splitlines()]
     urls = {r["url"] for r in rows if r["url"].startswith(nws.URL)}
     assert urls == {wanted}
+
+
+@pytest.mark.parametrize("speed", [30.0, 120.0])
+async def test_replay_at_speed_shows_the_warning_and_the_quake(speed):
+    """`--replay --speed N` with the default filter: the warning is raised and the Kamchatka quake is in the store (#223)."""
+    path = FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl"
+    clock = ReplayClock(recording_start(path), speed)
+    app = EarthwaveApp(Config(), clock=clock, transport=ReplayTransport(path, clock), history=None)
+    async with app.run_test(size=(120, 40)):
+        await wait_for(
+            lambda: any(a.level == levels.WARNING for a in app.store.alerts()) and bool(app.store.all()), 30.0
+        )
+        assert max(q.mag for q in app.store.all()) >= 8.0  # the first report is M8.0, revised to 8.7 later

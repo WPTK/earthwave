@@ -57,3 +57,14 @@ def test_label_names_are_unique_and_placement_is_deterministic():
     coast = coastline_canvas(200, 50, view)
     assert place_labels(view, 200, 50, coast) == place_labels(view, 200, 50, coast)
     assert len({t for t, *_ in LABELS}) == len(LABELS)
+
+
+def test_every_label_has_sane_coordinates_and_shows_in_some_view():
+    """A label that can never be placed is dead weight (the coast or the edge always covers it): none may be."""
+    dead = []
+    for text, lon, lat, kind in LABELS:
+        assert -180 <= lon <= 180 and -90 <= lat <= 90 and kind in {"land", "ocean", "sea", "region"}, text
+        views = [world_view(0, 200, 50)] + [zoom_view(lon, lat, span, 200, 50) for span in (90, 40, 16)]
+        if not any(text in words(place_labels(v, 200, 50, coastline_canvas(200, 50, v))) for v in views):
+            dead.append(text)
+    assert dead == []
