@@ -224,6 +224,7 @@ def run(args: argparse.Namespace) -> int:
         offline=args.offline,
         history_error=history_error,
         graphics=graphics,
+        replay=bool(args.replay),
     )
     app.run()
     return app.return_code or 0

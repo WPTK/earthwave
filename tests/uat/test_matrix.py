@@ -29,8 +29,6 @@ HAS_QUAKES = {"loading", "stale", "busy", "quiet", "offline", "replay"}
 
 # (state, screen) -> issue number, for a rule violation that is filed and not yet fixed. Filled from real findings.
 KNOWN: dict[tuple[str, str, int | None], tuple[int, str]] = {
-    ("loading", "dashboard", 100): (228, "status bar clips the failing feed names at 100 columns"),
-    ("stale", "dashboard", 100): (228, "status bar clips the failing feed names at 100 columns"),
 }
 
 

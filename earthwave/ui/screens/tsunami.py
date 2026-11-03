@@ -85,7 +85,7 @@ class TsunamiScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("escape,t,q", "back", "Back"),
+        Binding("escape,t", "back", "Back"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("a", "ack", "Ack tsunami"),
