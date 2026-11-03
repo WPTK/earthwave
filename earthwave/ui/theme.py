@@ -12,40 +12,50 @@ from earthwave.poll import Freshness
 # app.tcss defines the same value as $watch.
 YELLOW = "#ffd700"
 
+# The status colours differ in lightness as well as hue, so a red-green colour-blind reader still tells adjacent bands
+# apart (worst pair under protanopia and deuteranopia: CIE76 dE >= 20, pinned in tests/test_cvd_palette.py). Same hue
+# families as before: green, orange and red are lighter or darker steps of the old ANSI/256-colour names.
+GREEN = "#52cc7a"
+ORANGE = "#e68a00"
+RED = "#f25f49"
+CYAN = "#58d1eb"
+THREAT_BLUE = "#87d7ff"
+INFO_VIOLET = "#9682e6"
+
 
 def mag_color(mag: float) -> str:
     """Magnitude bands: <3 grey, 3-4.4 cyan, 4.5-5.4 green, 5.5-6.4 yellow, 6.5-6.9 orange, 7+ red."""
     if mag < 3.0:
         return "grey62"
     if mag < 4.5:
-        return "cyan"
+        return CYAN
     if mag < 5.5:
-        return "green"
+        return GREEN
     if mag < 6.5:
         return YELLOW
     if mag < 7.0:
-        return "dark_orange"
-    return "bold red"
+        return ORANGE
+    return f"bold {RED}"
 
 
-PAGER_COLORS = {"green": "green", "yellow": YELLOW, "orange": "dark_orange", "red": "red"}
+PAGER_COLORS = {"green": GREEN, "yellow": YELLOW, "orange": ORANGE, "red": RED}
 
 FRESHNESS_COLORS = {
     Freshness.LOADING: "grey62",
-    Freshness.FRESH: "green",
+    Freshness.FRESH: GREEN,
     Freshness.STALE: YELLOW,
-    Freshness.ERROR: "red",
+    Freshness.ERROR: RED,
 }
 
-# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat and Information blue (what each renders as, with
-# the app's ANSI theme applied, is pinned in tests/uat/test_screens.py). These colour the level word wherever it is
+# Tsunami levels: Warning red, Advisory orange, Watch yellow, Threat blue, Information violet (what each renders as,
+# with the app's ANSI theme applied, is pinned in tests/uat/test_screens.py). These colour the level word wherever it is
 # printed; the banner, status bar and panel border take theirs from level-* classes in app.tcss.
 LEVEL_COLORS = {
-    "WARNING": "bold red",
-    "ADVISORY": "dark_orange",
+    "WARNING": f"bold {RED}",
+    "ADVISORY": ORANGE,
     "WATCH": YELLOW,
-    "THREAT": "sky_blue1",
-    "INFORMATION": "sky_blue1",
+    "THREAT": THREAT_BLUE,
+    "INFORMATION": INFO_VIOLET,
     "CANCELLATION": "grey62",
 }
 

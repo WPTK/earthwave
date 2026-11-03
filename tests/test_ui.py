@@ -31,7 +31,7 @@ from earthwave.ui.screens.detail import DetailScreen
 from earthwave.ui.screens.filters import FiltersScreen, parse_filters
 from earthwave.ui.screens.help import HELP_TEXT, HelpScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
-from earthwave.ui.theme import mag_color
+from earthwave.ui.theme import GREEN, RED, mag_color
 from earthwave.ui.widgets.quake_list import QuakeList
 from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusInfo, build_status
 from earthwave.ui.widgets.ticker import Ticker
@@ -354,7 +354,7 @@ def test_label_helpers():
     )
     assert fmt_time(T0, "UTC") == "2026-10-31 12:00:00 UTC"
     assert fmt_distance(make_quake(lat=1.0, lon=0.0), 0.0, 0.0) == "111 km N"
-    assert mag_color(2.9) == "grey62" and mag_color(4.5) == "green" and mag_color(7.0) == "bold red"
+    assert mag_color(2.9) == "grey62" and mag_color(4.5) == GREEN and mag_color(7.0) == f"bold {RED}"
 
 
 def test_glyph_auto_selection():
