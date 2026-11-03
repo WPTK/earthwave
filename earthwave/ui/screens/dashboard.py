@@ -1,5 +1,6 @@
 """Main screen: ticker, quake list, map panel, status bar, search box and the too-small overlay."""
 
+import math
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,14 @@ MAP_MIN_WIDTH = 120  # below this the map hides itself and the list takes the fu
 
 
 HIDDEN_ACTIONS = {"ack_all", "search", "filters", "sort", "toggle_map", "fullscreen_map", "zoom_map", "observations"}
+
+
+def refresh_message(waits: dict[str, float]) -> str:
+    """The toast for `r`: sources inside their minimum interval are not re-polled; say when they will be."""
+    if not waits:
+        return "Refreshing"
+    names = ", ".join(name.upper() for name in waits)
+    return f"Refreshing; {names} can be asked again in {math.ceil(max(waits.values()))} s"
 
 
 class DashboardScreen(Screen):
@@ -284,8 +293,8 @@ class DashboardScreen(Screen):
         if not self.earthwave.scheduler_running:
             self.notify("Offline: nothing to refresh", timeout=2)
             return
-        self.earthwave.scheduler.refresh_now()
-        self.notify("Refreshing", timeout=1.5)
+        waits = self.earthwave.scheduler.refresh_now()
+        self.notify(refresh_message(waits), timeout=1.5 if not waits else 4)
 
     def action_help(self) -> None:
         self.earthwave.open_help()

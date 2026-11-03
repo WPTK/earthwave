@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import math
+import urllib.request
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -141,15 +142,47 @@ class PoliteTransport(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
+def proxy_for(url: httpx.URL) -> str | None:
+    """The proxy the environment names for this URL (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, NO_PROXY, and on Windows the
+    system setting), or None. httpx only reads these when it builds the transport itself, and the polite transport
+    below is passed in, so the choice is made here."""
+    host = url.host
+    if urllib.request.proxy_bypass(host):  # type: ignore[attr-defined]
+        return None
+    return urllib.request.getproxies().get(url.scheme)
+
+
+class EnvProxyTransport(httpx.AsyncBaseTransport):
+    """Sends each request direct or through the proxy the environment names for it; one connection pool per proxy."""
+
+    def __init__(self) -> None:
+        self._direct = httpx.AsyncHTTPTransport()
+        self._proxied: dict[str, httpx.AsyncHTTPTransport] = {}
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        proxy = proxy_for(request.url)
+        if proxy is None:
+            return await self._direct.handle_async_request(request)
+        if proxy not in self._proxied:
+            self._proxied[proxy] = httpx.AsyncHTTPTransport(proxy=httpx.Proxy(proxy))
+        return await self._proxied[proxy].handle_async_request(request)
+
+    async def aclose(self) -> None:
+        for transport in (self._direct, *self._proxied.values()):
+            await transport.aclose()
+
+
 def build_client(
     contact: str = "", transport: httpx.AsyncBaseTransport | None = None, clock: Clock | None = None
 ) -> httpx.AsyncClient:
-    """The one shared client: identifying User-Agent, gzip, 10 s connect and 20 s read timeouts, polite transport."""
+    """The one shared client: identifying User-Agent, gzip, 10 s connect and 30 s read timeouts, polite transport.
+
+    Without an explicit transport (recording and replay pass their own) requests honour the proxy environment."""
     return httpx.AsyncClient(
         headers={"User-Agent": user_agent(contact), "Accept-Encoding": "gzip"},
-        timeout=httpx.Timeout(20.0, connect=10.0),
+        timeout=httpx.Timeout(30.0, connect=10.0),
         follow_redirects=True,
-        transport=PoliteTransport(transport or httpx.AsyncHTTPTransport(), clock or SystemClock()),
+        transport=PoliteTransport(transport or EnvProxyTransport(), clock or SystemClock()),
     )
 
 

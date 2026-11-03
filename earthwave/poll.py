@@ -133,15 +133,20 @@ class Scheduler:
         status = self.statuses.get(name)
         return status is None or (not status.backfill_blocked and self._clock.monotonic() >= status.backfill_due)
 
-    def refresh_now(self) -> None:
-        """Poll every source as soon as its minimum interval allows."""
+    def refresh_now(self) -> dict[str, float]:
+        """Poll every source as soon as its minimum interval allows. Returns the sources that must still wait,
+        with the seconds until they may be asked again, so the caller can say so instead of implying a fresh poll."""
         now = self._clock.monotonic()
+        waits: dict[str, float] = {}
         for name, status in self.statuses.items():
             if status.last_poll is None:
                 status.next_due = 0.0
             else:
                 earliest = max(now, status.last_poll + self._sources[name].min_interval)
                 status.next_due = min(status.next_due, earliest)
+                if status.next_due > now:
+                    waits[name] = status.next_due - now
+        return waits
 
     def reschedule(self, name: str, immediate: bool = False) -> None:
         """A source's cadence or selection changed: poll it again as soon as its new interval (or `immediate`) allows.

@@ -5,10 +5,15 @@
 ### Added
 
 - Add `--diagnose`: version, Python, OS, terminal variables, config, history and log paths and feed reachability in one block to paste into a bug report
+- Add `EARTHWAVE_MAP_RENDERER` (`auto`, `braille`, `sixel`) to force the map renderer for one run
 - Add `EARTHWAVE_CONFIG_DIR` and `EARTHWAVE_DATA_DIR` to move the config file, the history database and the log; on Windows the defaults follow `%LOCALAPPDATA%`
 
 ### Fixed
 
+- Fix feeds being unreachable behind a proxy: `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and the Windows system proxy are now honoured
+- Fix `r` implying a fresh poll: the toast now names the sources still inside their minimum interval and how long until they can be asked again
+- Raise the per-request read timeout from 20 s to 30 s so a feed that takes 20 s to answer is not cut off at the limit
+- Fix settings errors: each one names its section and key, and all are reported together; syntax errors give the line
 - Fix `--selftest` printing SKIPPED in the release binary: the binary now carries the fixtures it parses
 
 ## [0.2.0] - 2026-11-01
