@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from rich.text import Text
 from textual import events
-from textual.app import ComposeResult
+from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
@@ -21,6 +21,17 @@ from earthwave.ui.widgets.too_small import TooSmall, sync_too_small
 
 if TYPE_CHECKING:
     from earthwave.app import EarthwaveApp
+
+
+def is_console_browser() -> bool:
+    """True when `webbrowser` would start a program that draws on this terminal and holds it until it exits."""
+    try:
+        browser = webbrowser.get()
+    except webbrowser.Error:
+        return False
+    if isinstance(browser, webbrowser.BackgroundBrowser):
+        return False
+    return isinstance(browser, webbrowser.GenericBrowser) or getattr(browser, "background", True) is False
 
 
 def _row(text: Text, label: str, value: str, style: str = "white") -> None:
@@ -195,11 +206,22 @@ class DetailScreen(Screen):
     def action_open_browser(self) -> None:
         """Only web pages open: on Windows webbrowser.open hands any string to os.startfile (files, programs).
 
-        It runs in a thread: a console browser keeps webbrowser.open waiting until it exits.
+        A graphical browser opens from a thread: webbrowser.open can wait on it. A console browser (w3m, lynx, links
+        on a machine with no display, over ssh) takes over the terminal this app is drawing on, so the app steps
+        aside with App.suspend() until the browser exits; started beside the running app it left the screen a mix of
+        both and the keyboard dead (#246). Where the terminal cannot be handed over, the URL is shown instead.
         """
         url = self.quake.url
-        if urlsplit(url).scheme in ("http", "https"):
+        if urlsplit(url).scheme not in ("http", "https"):
+            return
+        if not is_console_browser():
             self.run_worker(lambda: webbrowser.open(url), thread=True, exit_on_error=False)
+            return
+        try:
+            with self.app.suspend():
+                webbrowser.open(url)
+        except SuspendNotSupported:
+            self.app.notify(f"No graphical browser here. Open this page yourself: {url}", timeout=15)
 
     def action_copy_url(self) -> None:
         if self.quake.url:

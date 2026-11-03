@@ -58,11 +58,11 @@ def build_panel(
     `expiry` says when each alert lapses (the store's answer, which covers alerts that state no expiry).
     `cancelled` is the recent-cancellation line, shown in place of "none in force"."""
     if not alerts and checking:
-        return Text("Checking tsunami feeds", style="grey50")
+        return Text("Checking tsunami feeds", style="grey62")
     if not alerts and not down:
         if not cancelled:
-            return Text("No tsunami alerts in force", style="grey50")
-        line = Text(cancelled, style="grey50")
+            return Text("No tsunami alerts in force", style="grey62")
+        line = Text(cancelled, style="grey62")
         line.highlight_words(["cancelled"], GREEN)  # the word that says it is over reads as resolved
         return line
     text = Text(no_wrap=True, overflow="ellipsis")
@@ -76,7 +76,7 @@ def build_panel(
     if len(alerts) > max_lines:
         text.append(f"+{len(alerts) - max_lines} more, t for all\n", "grey62")
     if not alerts and not unknown:
-        text.append("No tsunami alerts received\n", "grey50")  # not "in force": a feed is not answering in full
+        text.append("No tsunami alerts received\n", "grey62")  # not "in force": a feed is not answering in full
     if down:
         if unknown:
             text.append(f"Tsunami status UNKNOWN, feeds not answering: {', '.join(down)}", f"bold {RED}")
@@ -93,7 +93,7 @@ class TsunamiPanel(Static):
     def __init__(self, **kwargs):
         super().__init__("", **kwargs)
         self.border_title = "Tsunami"
-        self.update(Text("No tsunami alerts in force", style="grey50"))
+        self.update(Text("No tsunami alerts in force", style="grey62"))
 
     def show(
         self,

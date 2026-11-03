@@ -28,7 +28,7 @@ class Ticker(Static):
             tail.append("   Gauge anomaly: ", "grey62")
             tail.append(gauge, f"bold {RED}")
         if quake is None:
-            text = Text(" " if waiting else " No major quakes in the loaded data", style="grey50")
+            text = Text(" " if waiting else " No major quakes in the loaded data", style="grey62")
         else:
             text = Text(" Latest major: ", style="grey62")
             text.append(f"M{quake.mag:.1f} ", mag_color(quake.mag))

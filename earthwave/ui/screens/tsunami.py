@@ -26,10 +26,10 @@ SOURCE_NAMES = {"tsunamigov": "tsunami.gov", "nws": "NWS", "jma": "JMA"}
 STATUS_STYLE = {
     "active": GREEN,
     "overdue": f"bold {RED}",
-    "expired": "grey50",
-    "cancelled": "grey50",
-    "superseded": "grey50",
-    "withdrawn": "grey50",
+    "expired": "grey62",
+    "cancelled": "grey62",
+    "superseded": "grey62",
+    "withdrawn": "grey62",
 }
 
 
@@ -75,7 +75,7 @@ def render_alert(alert: TsunamiAlert, status: str, quake_line: str, time_zone: s
 
 class TsunamiScreen(Screen):
     DEFAULT_CSS = """
-    TsunamiScreen #gauges { border-top: solid $primary-darken-2; }  /* a rule sets the strip off from the bulletin */
+    TsunamiScreen #gauges { border-top: solid $border; }  /* a rule sets the strip off from the bulletin */
     """
 
     BINDINGS = [
@@ -189,7 +189,7 @@ class TsunamiScreen(Screen):
         body = self.query_one("#alert_text", Static)
         if alert is None:
             self._shown_id = None
-            body.update(Text("No tsunami products received yet.", style="grey50"))
+            body.update(Text("No tsunami products received yet.", style="grey62"))
             return
         if alert.id != self._shown_id:  # another alert starts at its level and status; a poll keeps the reader's place
             self._shown_id = alert.id

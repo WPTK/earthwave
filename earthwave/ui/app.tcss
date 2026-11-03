@@ -6,7 +6,7 @@ Screen {
     scrollbar-background: $surface;
     scrollbar-background-hover: $surface;
     scrollbar-background-active: $surface;
-    scrollbar-color: $primary-darken-2;
+    scrollbar-color: $border;
     scrollbar-color-hover: $primary;
     scrollbar-color-active: $primary;
     scrollbar-size-vertical: 1;
@@ -15,7 +15,7 @@ Screen {
 
 #ticker {
     height: 1;
-    background: $panel;
+    background: $surface;  /* $panel is 4.2:1 for the Warning red of a major quake's magnitude; the surface is 5.2:1 */
 }
 
 #main {
@@ -48,7 +48,7 @@ Screen {
 
 #map {
     height: 1fr;
-    border: round $primary-darken-2;
+    border: round $border;
 }
 
 #map:focus {
@@ -56,6 +56,7 @@ Screen {
 }
 
 #tsunami {
+    border-title-color: $title;  /* the level border colours are grounds for white text; a title must read on the screen's own */
     height: auto;
     max-height: 12;
     min-height: 4;
@@ -155,7 +156,7 @@ TsunamiScreen {
 #alert_text_scroll {
     height: 1fr;
     min-height: 3;  /* the bulletin keeps some rows however many gauges are shown */
-    border-top: solid $primary-darken-2;
+    border-top: solid $border;
     padding: 0 1;
 }
 
@@ -276,6 +277,28 @@ FiltersScreen, HelpScreen {
 
 #buttons Button {
     margin-right: 2;
+    border: none;  /* Textual's tinted button edges are 1.05:1 against the dialog; the label is the button */
+    height: 3;
+    content-align: center middle;
+    background: $button;
+    color: $bright;
+}
+
+#buttons Button.-primary {
+    background: $button-primary;
+}
+
+/* focus must not rest on colour alone (issue #253): reverse video and a marker on the label as well */
+#buttons Button:focus {
+    text-style: bold reverse;
+}
+
+Input {
+    border: tall $border;
+}
+
+Input:focus {
+    border: heavy $bright;
 }
 
 #help_box {
@@ -293,4 +316,13 @@ FiltersScreen, HelpScreen {
 
 Footer {
     scrollbar-size-horizontal: 0;  /* too long for the width: later (lower priority) keys are cut off, no scrollbar row */
+}
+
+/* The selected alert row takes the quake list's selection ground; Textual's default is a bright blue that no status
+   colour reads on (3.8:1 for white). The bar glyph in the quake list marks the row too, so focus is not colour alone. */
+DataTable > .datatable--cursor,
+DataTable:focus > .datatable--cursor {
+    background: $cursor;
+    color: $bright;
+    text-style: bold;
 }

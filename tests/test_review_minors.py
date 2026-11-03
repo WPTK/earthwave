@@ -288,6 +288,7 @@ async def test_pressing_b_does_not_block_the_app_while_the_browser_runs(monkeypa
         return True
 
     monkeypatch.setattr("earthwave.ui.screens.detail.webbrowser.open", slow_open)
+    monkeypatch.setattr("earthwave.ui.screens.detail.is_console_browser", lambda: False)
     app = week_app()
     quake = replace(app.store.visible(app.view, app.clock)[0], url="https://earthquake.usgs.gov/x")
     try:

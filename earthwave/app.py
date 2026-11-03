@@ -53,7 +53,7 @@ from earthwave.ui.screens.help import HelpScreen
 from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
-from earthwave.ui.theme import LegibleMonochrome, css_variables
+from earthwave.ui.theme import LegibleMonochrome, css_variables, ground_variables
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
 from earthwave.ui.widgets.map_panel import MapPanel
 from earthwave.ui.widgets.quake_list import QuakeList
@@ -61,6 +61,7 @@ from earthwave.ui.widgets.quake_list import QuakeList
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.5
+STARTUP_REPLY_WINDOW = 10.0  # seconds after mount in which Textual's own query answers may still turn up as keys
 REPLY_HOLD = 0.1  # seconds a run of keys that may be a terminal reply waits for its next key
 TSUNAMI_FEEDS = (TsunamiGovSource.name, NwsSource.name, JmaSource.name)
 SEND_TIMEOUT = 15.0  # seconds a desktop notifier gets before the next toast goes out
@@ -81,7 +82,7 @@ class EarthwaveApp(App):
     BINDINGS = [Binding("q", "quit", "Quit")]
 
     def get_css_variables(self) -> dict[str, str]:
-        return {**super().get_css_variables(), **css_variables()}
+        return {**super().get_css_variables(), **ground_variables(), **css_variables()}
 
     def __init__(
         self,
@@ -107,7 +108,9 @@ class EarthwaveApp(App):
         self.glyphs = resolve_glyphs(config.view.glyphs)
         self.graphics = graphics or BRAILLE
         self._overlays: list[Callable[[Callable[[str], None]], None]] = []
-        self._replies = ReplyFilter()  # terminal answers re-issued as key presses; never reach the bindings
+        # terminal answers re-issued as key presses; never reach the bindings
+        self._replies = ReplyFilter(hold_escape=self.graphics.probed or self.graphics.renderer == "sixel")
+        self._startup_replies = True  # Textual's own startup queries are answered late too (issue #270)
         self._replies_flush: Timer | None = None
         self.view = ViewFilter(config.view.min_magnitude, config.view.hours)
         self.sort = SortKey.TIME
@@ -164,7 +167,7 @@ class EarthwaveApp(App):
         if (
             isinstance(event, events.Key)
             and not event.is_forwarded
-            and (self.graphics.probed or self.graphics.renderer == "sixel")
+            and (self.graphics.probed or self.graphics.renderer == "sixel" or self._startup_replies)
         ):
             released, cell = self._replies.push((event.key, event.character or ""))
             if self._replies_flush is not None:
@@ -230,6 +233,7 @@ class EarthwaveApp(App):
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
     def on_mount(self) -> None:
+        self.set_timer(STARTUP_REPLY_WINDOW, self._end_startup_replies)
         self._restore_history()
         self.push_screen(self.dashboard)
         if self.notifier is not None:
@@ -250,6 +254,9 @@ class EarthwaveApp(App):
                 self.notify("Offline, and there is no saved history to show", severity="warning", timeout=10)
             else:
                 self.notify("Offline: showing saved history, no data is fetched", timeout=8)
+
+    def _end_startup_replies(self) -> None:
+        self._startup_replies = False
 
     def _restore_history(self) -> None:
         """Refill the store from saved quakes, silently (no events, so no flash storm and no stale alert: only quakes
