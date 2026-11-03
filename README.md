@@ -23,7 +23,7 @@ Pick one. The commands name release `v0.2.0`, the latest release; they do not bu
 uv tool install --python 3.13 git+https://github.com/WPTK/earthwave.git@v0.2.0
 ```
 
-**With pipx or pip**, which need Python 3.13 or newer. On Python 3.12 or older pip refuses with
+**With pipx or pip**, which need Python 3.12 or newer. On Python 3.11 or older pip refuses with
 `requires a different Python`; use uv or the binary instead.
 
 ```
@@ -83,6 +83,7 @@ The rest of the flags:
 | `--speed N` | replay speed multiplier, default 1 (with `--replay`) |
 | `--log PATH` | write a rotating log file to PATH (WARNING and above) |
 | `--debug` | DEBUG logging to the default log file |
+| `--diagnose` | print version, platform, terminal, file paths and feed reachability, then exit; paste it into a bug report |
 
 ### Where files live
 
@@ -92,9 +93,9 @@ The rest of the flags:
 | Log (only with `--log` or `--debug`) | `%LOCALAPPDATA%\earthwave\Logs\earthwave.log` | `~/.local/state/earthwave/log/earthwave.log` | `~/Library/Logs/earthwave/earthwave.log` |
 | Saved history | `%LOCALAPPDATA%\earthwave\history.sqlite` | `~/.local/share/earthwave/history.sqlite` | `~/Library/Application Support/earthwave/history.sqlite` |
 
-These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones.
+These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
 
-To report a bug, run `earthwave --debug`, then open an issue at
+To report a bug, paste the output of `earthwave --diagnose`, run `earthwave --debug`, then open an issue at
 [github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues) with the version and the end of the log.
 
 Use a terminal at least 100 columns wide and 30 rows tall; below that the app asks you to enlarge the window. The map appears at 120 columns or more.
@@ -147,8 +148,7 @@ earthwave --version
 earthwave --selftest
 ```
 
-`--selftest` checks that every module imports and renders one screen without a terminal; from a source checkout it also
-parses the saved sample feeds. It prints `selftest: ok` and exits 0 on success. It does not use the network.
+`--selftest` checks that every module imports and renders one screen without a terminal; it also parses the saved sample feeds (the release binary carries them). It prints `selftest: ok` and exits 0 on success. It does not use the network.
 
 ## Development
 
