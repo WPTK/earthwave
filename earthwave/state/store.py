@@ -339,7 +339,7 @@ class Store:
             if reading.ts > latest:
                 if reading.station_id not in self._future_warned:
                     self._future_warned.add(reading.station_id)
-                    log.warning("gauge %s: ignoring readings stamped after %s (bad sensor clock?)", reading.station_id, latest)
+                    log.warning("gauge %s: ignoring readings stamped after %s", reading.station_id, latest)
                 continue  # a bad sensor clock: it must not move the 24 h window and prune real history
             if self._gauge_selected is not None and reading.station_id not in self._gauge_selected:
                 continue  # a fetch that was in flight when the station left the selection
