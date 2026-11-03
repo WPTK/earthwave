@@ -77,7 +77,9 @@ earthwave --replay session.jsonl       # ... and play it back later
 earthwave --help                       # everything else
 ```
 
-`--home` applies to that run only. To keep a home, put it in the config file (its path is under "Where files live"):
+`--home` applies to that run only. `earthwave --home 40.7,-74.0 --home-name "New York" --save-home` writes it to the
+config file and exits, leaving the rest of the file as it was. Or edit the file by hand (its path is under "Where
+files live"):
 
 ```toml
 [home]
@@ -86,7 +88,7 @@ lat = 40.7
 lon = -74.0
 ```
 
-Setting the home from inside the app is not supported yet. A mistake in the config file is reported with the section
+The app has no screen for setting the home. A mistake in the config file is reported with the section
 and key it is in, and every mistake is listed at once.
 
 The rest of the flags:
@@ -98,7 +100,9 @@ The rest of the flags:
 | `--notify` | force toasts and the bell on (they are off under `--replay`) |
 | `--speed N` | replay speed multiplier, default 1 (with `--replay`) |
 | `--log PATH` | write a rotating log file to PATH (WARNING and above) |
-| `--debug` | DEBUG logging to the default log file |
+| `--debug` | DEBUG logging to the default log file (also with `--selftest`; `--help` prints the path) |
+| `--home-name NAME` | name for the home location |
+| `--save-home` | write `--home` and `--home-name` to the config file, then exit |
 | `--diagnose` | print version, platform, terminal, file paths and feed reachability, then exit; paste it into a bug report |
 
 ### Where files live
