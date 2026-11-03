@@ -588,7 +588,9 @@ class GatedReplay(ReplayTransport):
 async def test_event_mode_replay_shows_the_pulse_the_anomaly_and_the_cadence_switch(monkeypatch):
     """Real 32401 payloads of 2026-10-09: a stale standard batch, then 1-minute and 15-second rows with a 3 cm pulse."""
     monkeypatch.setattr("earthwave.notify.inapp.GAUGE_SECONDS", 1e9)  # keep the flag up however long the test takes
-    monkeypatch.setattr("earthwave.poll.TICK", 0.05)  # the scheduler notices a due poll quickly; `drive` waits for it
+    monkeypatch.setattr(
+        "earthwave.poll.TICK", 0.05
+    )  # the scheduler notices a due poll quickly; `drive_settled` waits for it
     clock = ReplayClock(recording_start(REPLAY), real=lambda: 0.0)  # moves only with `drive` and the recordings
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     config = replace(config, alerts=replace(config.alerts, gauge_anomaly_dart_m=0.02))  # the real pulse peaks at 3.1 cm

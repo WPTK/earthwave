@@ -9,7 +9,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 
-from test_ui import WEEK, mock_transport
+from conftest import WEEK
+from test_ui import mock_transport
 
 from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock

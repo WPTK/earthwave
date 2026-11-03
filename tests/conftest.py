@@ -10,9 +10,14 @@ import psutil
 import pytest
 import stamina
 
+from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
-from earthwave.models import Earthquake
+from earthwave.config import Config, with_overrides
+from earthwave.models import Batch, Earthquake
 from earthwave.net import RETRY_ATTEMPTS
+from earthwave.sources.usgs import parse_collection
+from earthwave.state.store import Store
+from earthwave.ui.widgets.quake_list import QuakeList
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # Resident-memory ceiling for one test process (the pytest process, or each xdist worker). A runaway test then dies
@@ -111,3 +116,24 @@ def _memory_limit():
     """Applies to every process that runs tests: the plain pytest process and each xdist worker."""
     watch_rss(RSS_LIMIT_MB << 20)
     yield
+
+
+WEEK = load_json("usgs/4.5_week.geojson")
+WEEK_NOW = datetime.fromtimestamp(WEEK["metadata"]["generated"] / 1000, tz=UTC)
+
+
+def week_app(transport=None, run_scheduler=False, home=True, ticks=False, **kwargs) -> EarthwaveApp:
+    """Dashboard over the captured 4.5_week quakes at the instant they were captured (fully deterministic)."""
+    clock = ReplayClock(WEEK_NOW, real=lambda: 0.0)
+    config = with_overrides(Config(), 4.5, 168, (40.7, -74.0) if home else None, "unicode")
+    store = Store(config.alerts, config.home)
+    store.merge(Batch("usgs", WEEK_NOW, quakes=parse_collection(WEEK), backfill=True, coverage=(168.0, 4.5)), clock)
+    return EarthwaveApp(
+        config, store=store, clock=clock, run_scheduler=run_scheduler, ticks=ticks, transport=transport, **kwargs
+    )
+
+
+def row_strip(app, quake):
+    """The quake list's row for `quake`, drawn at the list's own width."""
+    quakes = app.dashboard.query_one(QuakeList)
+    return quakes._row_strip(quake, False, quakes.scrollable_content_region.width)

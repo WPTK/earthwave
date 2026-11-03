@@ -3,14 +3,9 @@
 from dataclasses import replace
 
 import pytest
-from test_ui import week_app
+from conftest import row_strip, week_app
 
 from earthwave.ui.widgets.quake_list import QuakeList
-
-
-def row_strip(app, quake):
-    quakes = app.dashboard.query_one(QuakeList)
-    return quakes._row_strip(quake, False, quakes.scrollable_content_region.width)
 
 
 @pytest.mark.parametrize(

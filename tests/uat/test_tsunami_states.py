@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 from conftest import FIXTURES, wait_until
-from test_observations import drive
+from test_observations import drive_settled
 from test_tsunami import kam, nws_alert
 
 from earthwave.app import EarthwaveApp
@@ -141,17 +141,20 @@ async def test_tsunami_screen_lists_alerts_at_each_size(size):
 
 
 @pytest.mark.parametrize("terminal", [(120, 30), (200, 50)])
-async def test_replay_drives_banner_up_and_back_down(terminal):
+async def test_replay_drives_banner_up_and_back_down(monkeypatch, terminal):
+    monkeypatch.setattr("earthwave.poll.TICK", 0.05)  # the scheduler notices a due poll at once
     path = FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl"
-    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive` and the recording
+    clock = ReplayClock(recording_start(path), real=lambda: 0.0)  # moves only with `drive_settled` and the recording
     config = with_overrides(Config(), 2.5, 24, None, "ascii")
     app = EarthwaveApp(config, clock=clock, transport=ReplayTransport(path, clock), notifier=RecordingNotifier())
     async with app.run_test(size=terminal) as pilot:
         banner = app.dashboard.query_one("#banner")
-        await drive(clock, lambda: banner.display and "TSUNAMI" in str(banner.render()), step=30)
+        await drive_settled(app, pilot, lambda: banner.display and "TSUNAMI" in str(banner.render()), step=30)
         assert "TSUNAMI" in screen_text(app).splitlines()[1]  # the banner sits under the ticker
-        await drive(clock, lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()), step=30)
-        await drive(clock, lambda: not banner.display, step=30)
+        await drive_settled(
+            app, pilot, lambda: any(a.level == levels.CANCELLATION for a in app.store.alerts()), step=30
+        )
+        await drive_settled(app, pilot, lambda: not banner.display, step=30)
         await pilot.pause()
         assert "t details, a acknowledge" not in screen_text(app)
         assert app.store.active_alerts(clock) == []
