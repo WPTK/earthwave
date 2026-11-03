@@ -38,6 +38,9 @@ def steady_feed(min_magnitude: float) -> str:
     return f"{prefix}_day"
 
 
+PAGER_LEVELS = frozenset({"green", "yellow", "orange", "red"})
+
+
 def feed_coverage(feed: str) -> tuple[float, float] | None:
     """(hours, min_magnitude) a summary feed is complete for; None for the significant feed."""
     prefix, _, period = feed.rpartition("_")
@@ -55,6 +58,12 @@ def _ms(value: Any) -> datetime | None:
 
 def _ids(value: str | None) -> tuple[str, ...]:
     return tuple(part for part in (value or "").split(",") if part)
+
+
+def _alert(value: Any) -> str | None:
+    """A PAGER alert level as USGS spells it (lowercase); anything else is no alert."""
+    level = value.strip().lower() if isinstance(value, str) else None
+    return level if level in PAGER_LEVELS else None
 
 
 def listing(data: dict) -> frozenset[str] | None:
@@ -103,20 +112,32 @@ def parse_feature(feature: dict) -> Earthquake | None:
     lon, lat, *rest = feature["geometry"]["coordinates"]
     quake_id = feature["id"]
     time = _ms(props["time"])
-    assert time is not None
+    if time is None:
+        raise ValueError("feature has no time")
+    mag, lat, lon = float(props["mag"]), float(lat), float(lon)
+    depth = float(rest[0]) if rest and rest[0] is not None else 0.0
+    if not (
+        math.isfinite(mag)
+        and math.isfinite(lat)
+        and math.isfinite(lon)
+        and math.isfinite(depth)
+        and abs(lat) <= 90
+        and abs(lon) <= 180
+    ):
+        return None
     return Earthquake(
         id=quake_id,
         time=time,
-        lat=float(lat),
-        lon=float(lon),
-        mag=float(props["mag"]),
-        depth_km=float(rest[0]) if rest and rest[0] is not None else 0.0,
+        lat=lat,
+        lon=lon,
+        mag=mag,
+        depth_km=depth,
         source="usgs",
         mag_type=props.get("magType") or "",
         place=props.get("place") or "",
         status=props.get("status") or "automatic",
         tsunami_flag=bool(props.get("tsunami")),
-        pager_alert=props.get("alert"),
+        pager_alert=_alert(props.get("alert")),
         sig=int(props.get("sig") or 0),
         felt=props.get("felt"),
         cdi=props.get("cdi"),
@@ -130,11 +151,14 @@ def parse_feature(feature: dict) -> Earthquake | None:
 
 def parse_collection(data: dict) -> tuple[Earthquake, ...]:
     """Parse a feed or fdsnws FeatureCollection, skipping (and logging) malformed features."""
+    features = data.get("features") if isinstance(data, dict) else None
+    if not isinstance(features, list):
+        raise ValueError("reply has no features list")
     quakes = []
-    for feature in data.get("features", []):
+    for feature in features:
         try:
             quake = parse_feature(feature)
-        except (KeyError, TypeError, ValueError, IndexError) as exc:
+        except Exception as exc:  # whatever a hostile feature raises, it costs only itself
             log.warning(
                 "usgs: skipping malformed feature %r: %r", feature.get("id") if isinstance(feature, dict) else "?", exc
             )
@@ -168,7 +192,7 @@ def _prop(products: dict, name: str, *keys: str) -> float | None:
 def parse_detail(data: dict) -> QuakeDetail:
     products = data.get("properties", {}).get("products", {})
     pager = products.get("losspager") or []
-    pager_alert = pager[0].get("properties", {}).get("alertlevel") if pager else None
+    pager_alert = _alert(pager[0].get("properties", {}).get("alertlevel")) if pager else None
     responses = _prop(products, "dyfi", "num-responses")
     return QuakeDetail(
         id=data.get("id", ""),
@@ -190,11 +214,13 @@ def nearby_cities_url(data: dict) -> str | None:
     return ((items[0].get("contents") or {}).get("nearby-cities.json") or {}).get("url")
 
 
-def parse_nearby_cities(rows: list[dict]) -> tuple[str, ...]:
+def parse_nearby_cities(rows: Any) -> tuple[str, ...]:
+    if not isinstance(rows, list):
+        return ()
     return tuple(
         f"{row['distance']} km {row['direction']} of {row['name']}"
         for row in rows
-        if {"distance", "direction", "name"} <= row.keys()
+        if isinstance(row, dict) and {"distance", "direction", "name"} <= row.keys()
     )
 
 
@@ -240,7 +266,7 @@ class UsgsSource:
         try:
             response = await client.get(f"{FEED_BASE}{feed}.geojson", headers=headers)
             elapsed = self._clock.monotonic() - started
-            if response.status_code == 304:
+            if response.status_code == 304 and "If-Modified-Since" in headers:
                 self._done(feed, backfill)
                 log.debug("usgs %s: 304 not modified (%.2fs)", feed, elapsed)
                 return Batch(

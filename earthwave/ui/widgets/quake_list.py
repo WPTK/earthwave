@@ -1,5 +1,6 @@
 """The quake list: a Line-API widget so every row can carry its own flash color and blink phase."""
 
+from rich.cells import cell_len, set_cell_size
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
@@ -137,15 +138,17 @@ class QuakeList(ScrollView, can_focus=True):
         marker = ("▌" if self._glyphs.unicode else ">") if selected else " "
         age = fmt_age((self._clock.now() - quake.time).total_seconds()).rjust(AGE_W)
         place_w = place_width(width, self._home is not None)
-        place = quake.place or "unknown"
-        if len(place) > place_w:
-            place = place[: max(place_w - 1, 0)] + self._glyphs.ellipsis
+        place = "".join(c if c.isprintable() else " " for c in quake.place).strip() or "unknown"  # no tab/newline
+        if cell_len(place) > place_w:
+            place = set_cell_size(place, max(place_w - 1, 0)) + self._glyphs.ellipsis
+        place = set_cell_size(place, place_w)  # pad in terminal cells, so a wide glyph cannot push the flags out
+        mag = max(-9.9, min(quake.mag, 99.9))  # the MAG column is four cells wide
         pager = quake.pager_alert[0].upper() if quake.pager_alert in PAGER_COLORS else " "  # G/Y/O/R: not colour alone
         segments = [
             field(marker, "cyan"),
             field(age, "grey62"),
             field(" "),
-            field(f"{quake.mag:{MAG_W}.1f}", mag_color(quake.mag)),
+            field(f"{mag:{MAG_W}.1f}", mag_color(quake.mag)),
             field(" "),
             field(f"{quake.depth_km:.0f}".rjust(DEPTH_W), "grey62"),
             field(" "),
@@ -153,7 +156,7 @@ class QuakeList(ScrollView, can_focus=True):
         if self._home is not None:
             segments += [field(fmt_distance(quake, self._home.lat, self._home.lon).rjust(DIST_W), "grey62"), field(" ")]
         segments += [
-            field(place.ljust(place_w)),
+            field(place),
             field(" "),
             field(self._glyphs.tsunami if quake.tsunami_flag else " ", "bold blue"),
             field(pager, PAGER_COLORS.get(quake.pager_alert or "", "")),
