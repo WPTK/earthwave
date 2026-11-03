@@ -143,3 +143,9 @@ def test_state_written_by_0_1_0_survives_the_upgrade(tmp_path, monkeypatch):
     assert {q.id for q in quakes} == {"us0001", "us0002"}
     assert unseen == set()  # acknowledgements survive too
     assert default_config_path().read_text(encoding="utf-8") == (UPGRADE / "config.toml").read_text(encoding="utf-8")
+
+
+def test_diagnose_survives_an_empty_environment(monkeypatch):
+    for name in ("TERM", "COLORTERM", "TERM_PROGRAM", "WT_SESSION", "NO_COLOR", "TMUX", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    assert "TERM=(unset)" in report(offline=True)

@@ -68,8 +68,7 @@ def report(offline: bool = False, client_factory: Callable[[], httpx.Client] | N
         f"earthwave  {__version__}",
         f"python    {platform.python_version()} ({'frozen binary' if getattr(sys, 'frozen', False) else 'pip/source'})",
         f"os        {platform.system()} {platform.release()} {platform.machine()}",
-        "terminal  "
-        + ", ".join(f"{name}={os.environ[name]}" for name in TERMINAL_VARS if name in os.environ or name == "TERM"),
+        "terminal  " + ", ".join(f"{name}={os.environ.get(name, '(unset)')}" for name in TERMINAL_VARS),
         _path_line("config", default_config_path(), CONFIG_DIR_ENV),
         _path_line("history", default_history_path(), DATA_DIR_ENV),
         _path_line("log", default_log_path(), DATA_DIR_ENV),
