@@ -48,6 +48,7 @@ class DashboardScreen(Screen):
         Binding("f", "filters", "Filters"),
         Binding("s", "sort", "Sort"),
         Binding("slash", "search", "Search"),
+        Binding("g", "group", "Group aftershocks", show=False),
         Binding("m", "toggle_map", "Map"),
         Binding("M", "fullscreen_map", "Full map", show=False),
         Binding("z", "zoom_map", "Zoom", show=False),
@@ -243,6 +244,15 @@ class DashboardScreen(Screen):
         app.sort = app.sort.next(app.config.home.enabled)
         self.refresh_view()
         self.query_one(QuakeList).go_top()  # the head of the new order, not the old quake's row in it (#247)
+
+    def action_group(self) -> None:
+        """Nest aftershocks under their mainshock (Space opens or closes a group), or list every quake again."""
+        app = self.earthwave
+        quake_list = self.query_one(QuakeList)
+        quake_list.set_group(not quake_list.group, app.store.visible(app.view, app.clock, app.sort))
+        self.notify(
+            "Aftershocks grouped under their mainshock" if quake_list.group else "Aftershocks ungrouped", timeout=3
+        )
 
     def action_search(self) -> None:
         box = self.query_one("#search", Input)

@@ -19,6 +19,7 @@ HELP_TEXT = """\
   r  refresh now             ?      this help
   o  tide gauges near quake  Tab    focus map; arrows pan
   h  history by day          q      quit
+  g  group aftershocks       Space  open or close a group
   Detail: b open page, y copy URL, Esc back
 
 [b]Colors[/b]
