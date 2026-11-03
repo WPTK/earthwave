@@ -16,7 +16,7 @@ from earthwave.ui.labels import filter_summary
 from earthwave.ui.widgets.banner import Banner
 from earthwave.ui.widgets.map_panel import MapPanel, tsunami_marks
 from earthwave.ui.widgets.quake_list import QuakeList, header_text
-from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS, SourceLine, StatusBar, StatusInfo
+from earthwave.ui.widgets.status_bar import SourceLine, StatusBar, StatusInfo, down_feeds
 from earthwave.ui.widgets.ticker import Ticker
 from earthwave.ui.widgets.too_small import TooSmall, is_too_small, refresh_too_small
 from earthwave.ui.widgets.tsunami_panel import TsunamiPanel, recent_cancellation
@@ -165,7 +165,7 @@ class DashboardScreen(Screen):
         refresh_too_small(self, self.size.width, self.size.height)
         self.query_one(MapPanel).set_tsunami(tsunami_marks(active, app.store.quake_for))
         feeds, none_fresh = app.tsunami_feeds_down()
-        down = tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
+        down = down_feeds(feeds)
         pulse = bool(unacked) and blink
         if app.offline:  # nothing was fetched, so an empty list says nothing
             self.query_one(TsunamiPanel).show_offline()

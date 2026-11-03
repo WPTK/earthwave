@@ -156,3 +156,67 @@ async def test_an_expired_products_expires_cell_shows_the_date_the_detail_shows(
         cell = table.get_cell(warning.id, list(table.columns)[4])
         assert cell.strip() and "2025-07-29" in cell, repr(cell)
         assert "Expires  2025-07-29" in screen_text(app)
+
+
+# --- review round ---------------------------------------------------------------------------------------------------
+
+
+def test_with_no_issue_time_an_expiry_before_the_update_time_is_not_believed_either():
+    store, clock = _store()
+    warning = _alert("w", "WARNING", issued=None, expires=NOW - timedelta(hours=11))  # updated is 3 minutes ago
+    _merge(store, clock, warning)
+    assert store.expiry(warning) == warning.updated + DEFAULT_TTL
+    assert store.alert_status(warning, clock) == "active"
+
+
+def test_with_no_issue_or_update_time_an_expiry_before_first_seen_is_kept():
+    """A restart reads old entries: a product that really expired before it was first merged stays expired."""
+    store, clock = _store()
+    old = _alert("o", "WARNING", issued=None, updated=None, expires=NOW - timedelta(hours=2))
+    _merge(store, clock, old)
+    assert store.expiry(old) == old.expires
+    assert store.alert_status(old, clock) == "expired"
+
+
+def test_a_cancel_naming_an_unstored_id_ends_a_later_arriving_older_product_of_its_quake_and_source():
+    """Pinned as intended: the same fallback `_close_referenced` already applies when the cancel arrives second."""
+    store, clock = _store()
+    cancel = _alert("c", "CANCELLATION", quake_ref="us1", references=("never-seen",), issued=NOW - timedelta(minutes=5))
+    older = _alert("w", "WARNING", quake_ref="us1", issued=NOW - timedelta(hours=1), expires=NOW + timedelta(hours=4))
+    newer = _alert("w2", "WARNING", quake_ref="us1", issued=NOW, expires=NOW + timedelta(hours=4))
+    _merge(store, clock, cancel)
+    _merge(store, clock, older, newer)
+    assert store.alert_status(older, clock) == "cancelled"
+    assert [a.id for a in store.active_alerts(clock)] == ["w2"]  # a product issued after the cancel is untouched
+
+
+def test_an_area_cancel_from_another_source_ends_only_the_products_that_overlap_its_areas():
+    store, clock = _store()
+    cancel = _alert(
+        "c", "CANCELLATION", source="nws", quake_ref="us1", areas=("Oahu",), issued=NOW - timedelta(minutes=5)
+    )
+    hit = _alert("a", "WARNING", source="nws", quake_ref="us1", areas=("oahu", "Maui"), issued=NOW - timedelta(hours=1))
+    miss = _alert("b", "WARNING", source="nws", quake_ref="us1", areas=("Kauai",), issued=NOW - timedelta(hours=1))
+    other = _alert(
+        "d", "WARNING", source="tsunamigov", quake_ref="us1", areas=("Oahu",), issued=NOW - timedelta(hours=1)
+    )
+    hit, miss, other = (replace(a, expires=NOW + timedelta(hours=4)) for a in (hit, miss, other))
+    _merge(store, clock, cancel, source="nws")
+    _merge(store, clock, hit, miss, source="nws")
+    _merge(store, clock, other)
+    assert {a.id for a in store.active_alerts(clock)} == {"b", "d"}
+
+
+async def test_a_product_with_an_impossible_expiry_shows_the_believed_expiry_in_row_and_detail():
+    app = kam_alert_app()
+    base = kam(1)
+    bogus = replace(base, expires=base.issued - timedelta(hours=11), updated=base.issued)
+    app.store.merge(Batch("tsunamigov", app.clock.now(), alerts=(bogus,)), app.clock)
+    believed = app.store.expiry(bogus)
+    assert believed == base.issued + DEFAULT_TTL
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        text = screen_text(app)
+        assert f"{bogus.expires:%Y-%m-%d %H:%M:%S}" not in text, text
+        assert f"Expires  {believed:%Y-%m-%d %H:%M:%S}" in text, text

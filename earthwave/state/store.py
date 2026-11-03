@@ -467,7 +467,10 @@ class Store:
         An expiry at or before the product's own issue time is a feed error (tsunami.gov has sent one 11 h
         before its send time), not a product already over: it is not believed, and the default lifetime applies."""
         base = alert.updated or alert.issued or self._first_seen.get(alert.id)
-        if alert.expires is not None and not (alert.issued and alert.expires <= alert.issued):
+        # Without an issue time the update time stands in. Not the first-seen time: a restart reading old entries sees
+        # products that really expired before it first merged them.
+        sent = alert.issued or alert.updated
+        if alert.expires is not None and not (sent and alert.expires <= sent):
             return alert.expires
         return (base + DEFAULT_TTL) if base else datetime.max.replace(tzinfo=UTC)
 

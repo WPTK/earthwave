@@ -1,5 +1,6 @@
 """Tsunami screen: alert table, the selected alert's text, and the gauge strip."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.text import Text
@@ -16,7 +17,7 @@ from earthwave.state.store import IN_FORCE
 from earthwave.ui.labels import fmt_time
 from earthwave.ui.theme import GREEN, LEVEL_COLORS, RED, YELLOW
 from earthwave.ui.widgets.gauge_strip import GaugeStrip
-from earthwave.ui.widgets.status_bar import FRESHNESS_WORDS
+from earthwave.ui.widgets.status_bar import down_feeds
 from earthwave.ui.widgets.too_small import TooSmall, refresh_too_small, sync_too_small
 from earthwave.ui.widgets.tsunami_panel import OFFLINE_LINE, feed_line, fmt_until
 
@@ -50,7 +51,11 @@ def table_rows(alerts: list[TsunamiAlert], statuses: dict[str, str]) -> list[Tsu
     return sorted(alerts, key=key)
 
 
-def render_alert(alert: TsunamiAlert, status: str, quake_line: str, time_zone: str) -> Text:
+def render_alert(
+    alert: TsunamiAlert, status: str, quake_line: str, time_zone: str, expires: datetime | None = None
+) -> Text:
+    """`expires` is the store's believed expiry for a product that states one (the feed's own can be impossible)."""
+    expires = expires or alert.expires
     text = Text()
     if alert.level == levels.CANCELLATION:  # the headline is the cancelled alert's: the level and status say no more
         text.append("Cancelled: ", LEVEL_COLORS[alert.level])
@@ -61,8 +66,8 @@ def render_alert(alert: TsunamiAlert, status: str, quake_line: str, time_zone: s
         text.append(f"{alert.headline}\n\n", "bold")
     if alert.issued:
         text.append(f"Issued   {fmt_time(alert.issued, time_zone)}\n", "grey70")
-    if alert.expires:
-        text.append(f"Expires  {fmt_time(alert.expires, time_zone)}\n", "grey70")
+    if expires:
+        text.append(f"Expires  {fmt_time(expires, time_zone)}\n", "grey70")
     text.append(f"Source   {SOURCE_NAMES.get(alert.source, alert.source)}\n", "grey70")
     if alert.areas:
         text.append(f"Areas    {'; '.join(alert.areas)}\n", "grey70")
@@ -152,7 +157,9 @@ class TsunamiScreen(Screen):
                 if status == "overdue"
                 else fmt_until(app.store.expiry(alert), now)
                 if status == "active"
-                else fmt_time(alert.expires, tz)  # what the detail below shows, so a closed row keeps its date
+                else fmt_time(
+                    app.store.expiry(alert), tz
+                )  # what the detail below shows, so a closed row keeps its date
                 if alert.expires and alert.level != levels.CANCELLATION
                 else "",
             )
@@ -194,7 +201,7 @@ class TsunamiScreen(Screen):
         feeds, none_fresh = app.tsunami_feeds_down()
         if not feeds:
             return None
-        down = tuple(f"{name} {FRESHNESS_WORDS.get(fresh, 'incomplete')}" for name, fresh in feeds)
+        down = down_feeds(feeds)
         return feed_line(down, none_fresh)
 
     def _show_selected(self) -> None:
@@ -223,7 +230,13 @@ class TsunamiScreen(Screen):
         quake = app.store.quake_for(alert)
         quake_line = f"M{quake.mag:.1f} {quake.place} ({quake.id})" if quake else ""
         head.append_text(
-            render_alert(alert, app.store.alert_status(alert, app.clock), quake_line, app.config.view.time_zone)
+            render_alert(
+                alert,
+                app.store.alert_status(alert, app.clock),
+                quake_line,
+                app.config.view.time_zone,
+                app.store.expiry(alert) if alert.expires else None,
+            )
         )
         body.update(head)
 
