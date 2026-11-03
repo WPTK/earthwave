@@ -1618,3 +1618,13 @@ def test_a_burst_of_quakes_names_the_largest():
     quakes = [make_quake(f"m{i}", 6.0 + i / 10, place=f"Place {i}") for i in range(3)]
     (note_,) = rules.evaluate([e for q in quakes for e in (QuakeNew(q), QuakeMajor(q))])
     assert "3 notable quakes" in note_.body and "M6.2 Place 2" in note_.body
+
+
+def test_replay_fixture_nws_polls_match_what_the_source_sends():
+    """The recording must hold the URL the source really requests, or NWS answers 404 under --replay (#223)."""
+    from earthwave.sources import nws
+
+    wanted = str(httpx.Request("GET", nws.URL, params={"event": nws.EVENTS, "status": "actual"}).url)
+    rows = [json.loads(line) for line in read(FIXTURES / "replay" / "kamchatka_watch_to_warning.jsonl").splitlines()]
+    urls = {r["url"] for r in rows if r["url"].startswith(nws.URL)}
+    assert urls == {wanted}

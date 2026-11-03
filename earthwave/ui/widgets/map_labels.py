@@ -1,4 +1,4 @@
-"""Place-name labels for the map: a few continents, oceans and seas, drawn in empty cells of the braille raster.
+"""Place-name labels for the map: continents, oceans, seas and, zoomed in, countries, in empty braille cells.
 
 Labels are chosen from the view alone, by fixed priority (list order), and one that does not fit is dropped, never
 moved, so a pan changes only where a label is drawn, not which labels win.
@@ -38,9 +38,32 @@ LABELS: tuple[tuple[str, float, float, str], ...] = (
     ("Black Sea", 34, 43, "sea"),
     ("North Sea", 3, 56, "sea"),
     ("Caspian Sea", 51, 42, "sea"),
+    # Countries, shown at region and close zoom. Each sits where the coast leaves the cells free (often just offshore);
+    # one the coast crosses is dropped, never moved.
+    ("Japan", 143, 36, "country"),
+    ("Philippines", 126, 10, "country"),
+    ("Indonesia", 113, -2, "country"),
+    ("Taiwan", 121, 23.7, "country"),
+    ("Papua New Guinea", 144, -6, "country"),
+    ("New Zealand", 172, -42, "country"),
+    ("Chile", -75, -33, "country"),
+    ("Peru", -75, -10, "country"),
+    ("Ecuador", -78, -1, "country"),
+    ("Colombia", -73, 4, "country"),
+    ("Mexico", -102, 24, "country"),
+    ("Alaska", -152, 64, "country"),
+    ("California", -120, 37, "country"),
+    ("Turkey", 35, 39, "country"),
+    ("Greece", 22, 39, "country"),
+    ("Italy", 12.5, 42.5, "country"),
+    ("Iran", 54, 32, "country"),
+    ("India", 79, 22, "country"),
+    ("China", 103, 35, "country"),
+    ("Kamchatka", 160, 56, "country"),
 )
 BROAD_MIN_SPAN = 60  # continents and oceans show when the view spans at least this many degrees of latitude
 SEA_SPAN = (30, 100)  # seas show between these spans (wide and region zoom, not the world or close)
+COUNTRY_MAX_SPAN = 40  # countries show at region and close zoom, where a reader needs to find one by name
 
 
 def place_labels(
@@ -54,6 +77,9 @@ def place_labels(
     for text, lon, lat, kind in LABELS:
         if kind == "sea":
             if not SEA_SPAN[0] <= span <= SEA_SPAN[1]:
+                continue
+        elif kind == "country":
+            if span > COUNTRY_MAX_SPAN:
                 continue
         elif span < BROAD_MIN_SPAN:
             continue

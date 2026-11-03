@@ -26,12 +26,20 @@ def test_world_view_labels_continents_and_oceans_but_no_seas():
     assert not any(t.endswith("Sea") for t in shown)
 
 
-def test_region_view_labels_seas_only_and_close_view_none():
+def test_region_view_labels_seas_and_countries_but_no_continents():
     view = zoom_view(115, -2, 40, 200, 50)
     shown = words(place_labels(view, 200, 50, coastline_canvas(200, 50, view)))
     assert "Banda Sea" in shown and not any(t.isupper() for t in shown)
     close = zoom_view(115, -2, 16, 200, 50)
-    assert place_labels(close, 200, 50, coastline_canvas(200, 50, close)) == {}
+    assert not any(t.isupper() for t in words(place_labels(close, 200, 50, coastline_canvas(200, 50, close))))
+
+
+def test_japan_is_found_by_name_when_zoomed_in_and_not_in_the_world_view():
+    for span in (40, 16):
+        view = zoom_view(138, 37, span, 200, 50)
+        assert "Japan" in words(place_labels(view, 200, 50, coastline_canvas(200, 50, view)))
+    world = world_view(0, 200, 50)
+    assert "Japan" not in words(place_labels(world, 200, 50, coastline_canvas(200, 50, world)))
 
 
 def test_labels_keep_clear_of_coast_and_a_marked_cell_drops_its_label():

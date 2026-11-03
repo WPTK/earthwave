@@ -72,8 +72,8 @@ LEGEND = (
 TICK_SECONDS = 0.25  # blink refresh; finer than the 0.5 s phase flips of the attention styles, so both phases render
 
 # Magnitude band -> marker. Bands: <4.5, 4.5-5.4, 5.5-6.4, 6.5+.
-UNICODE_MARKERS = ("·", "•", "●", "◉")
-ASCII_MARKERS = ("+", "o", "O", "@")
+UNICODE_MARKERS = ("·", "•", "●", "◉", "◆")
+ASCII_MARKERS = ("+", "o", "O", "@", "#")
 UNICODE_HOME, ASCII_HOME = "⌂", "H"
 
 
@@ -95,7 +95,9 @@ def marker_band(mag: float) -> int:
         return 1
     if mag < 6.5:
         return 2
-    return 3
+    if mag < 7.0:
+        return 3
+    return 4  # the great quakes get a shape of their own, so the legend does not rest on colour alone
 
 
 def zoom_view(center_lon: float, center_lat: float, lat_span: int, cols: int, rows: int) -> Viewport:
@@ -564,7 +566,8 @@ def _truecolor(color, theme) -> RGB:
     return (t.red, t.green, t.blue)
 
 
-MARKER_RADIUS = (0.38, 0.55, 0.78, 1.05)  # marker disc radius per magnitude band, in cell widths
+MARKER_RADIUS = (0.38, 0.55, 0.78, 1.05, 1.3)  # marker disc radius per magnitude band, in cell widths
+TSUNAMI_RING_WIDTH = 4  # pixels; 2 was a hairline that land swallowed
 PIXEL_BAND = 6  # a sixel band; the image height is a whole number of them
 
 
@@ -606,7 +609,9 @@ def pixel_scene(
             for place in geometry_cells(mark.geometry, view, model.cols, model.map_rows, False):
                 tints[place] = index
         if mark.source is not None:
-            shapes.append(Shape(mark.source[1], mark.source[0], cw * 1.3, None, ring=index, ring_width=2))
+            shapes.append(
+                Shape(mark.source[1], mark.source[0], cw * 1.3, None, ring=index, ring_width=TSUNAMI_RING_WIDTH)
+            )
     selected_id = model.selected.id if model.selected else None
     tracker = model.tracker
 

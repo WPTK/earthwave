@@ -92,9 +92,22 @@ def test_markers_share_the_projection_of_the_raster():
 
 
 def test_marker_bands_and_glyph_sets():
-    assert [marker_band(m) for m in (2.5, 4.4, 4.5, 5.4, 5.5, 6.4, 6.5, 9.0)] == [0, 0, 1, 1, 2, 2, 3, 3]
-    assert UNICODE_MARKERS == ("·", "•", "●", "◉") and len(set(ASCII_MARKERS)) == 4
-    quakes = [make_quake(f"b{i}", mag, lat=10.0, lon=-170.0 + 40 * i) for i, mag in enumerate((3.0, 5.0, 6.0, 7.0))]
+    assert [marker_band(m) for m in (2.5, 4.4, 4.5, 5.4, 5.5, 6.4, 6.5, 6.9, 7.0, 9.0)] == [
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        4,
+        4,
+    ]
+    assert UNICODE_MARKERS == ("·", "•", "●", "◉", "◆") and len(set(ASCII_MARKERS)) == 5  # 7+ has its own shape
+    quakes = [
+        make_quake(f"b{i}", mag, lat=10.0, lon=-170.0 + 40 * i) for i, mag in enumerate((3.0, 5.0, 6.0, 6.7, 7.5))
+    ]
     unicode_glyphs = [
         m.glyph for m in sorted(place_markers(quakes, None, None, WORLD, 160, 40, False).values(), key=lambda m: m.col)
     ]

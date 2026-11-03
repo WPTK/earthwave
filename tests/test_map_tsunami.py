@@ -86,7 +86,7 @@ def test_source_ring_flanks_the_quake_and_never_covers_a_marker():
     m.set_quakes([kam_quake()], None)
     m.set_tsunami([mark])
     glyphs = {k: v.glyph for k, v in m.frame().markers.items()}
-    assert (glyphs[(col, row)], glyphs[(col - 1, row)], glyphs[(col + 1, row)]) == ("◉", "(", ")")
+    assert (glyphs[(col, row)], glyphs[(col - 1, row)], glyphs[(col + 1, row)]) == ("◆", "(", ")")
     left_lon, left_lat = centre(col - 1, row, world, cols, rows)
     near = make_quake("near", 5.0, lat=left_lat, lon=left_lon)  # lands in the left ring cell
     m.set_quakes([kam_quake(), near], None)
