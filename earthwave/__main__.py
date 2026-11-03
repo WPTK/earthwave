@@ -30,7 +30,7 @@ from earthwave.config import (
 from earthwave.diagnose import report as diagnose_report
 from earthwave.logging_setup import default_log_path, setup_logging
 from earthwave.models import Batch, Earthquake
-from earthwave.net import EnvProxyTransport, RecordingTransport, ReplayTransport, recording_start
+from earthwave.net import EnvProxyTransport, RecordingTransport, ReplayTransport, build_client, recording_start
 from earthwave.notify.desktop import default_notifier
 from earthwave.sources.usgs import parse_collection
 from earthwave.state.history import History, default_path
@@ -42,7 +42,7 @@ from earthwave.ui.widgets.quake_list import QuakeList
 # The release binary carries the fixtures --selftest reads (earthwave.spec) under its unpack directory.
 _ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 FIXTURES = _ROOT / "tests" / "fixtures"
-MODULES = ("textual", "httpx", "platformdirs")
+MODULES = ("textual", "httpx", "hishel", "stamina", "platformdirs")
 
 
 def _need(count: int, what: str) -> int:
@@ -116,6 +116,28 @@ async def _headless_frame(root: Path) -> str:
     return f"frame: {len(quake_list.rows)} rows, {len(frame)} bytes"
 
 
+async def _http_layer() -> str:
+    """Retry and cache working end to end on a mock server: one 503 retried, then a 304 served as the kept 200."""
+    seen: list[httpx.Request] = []
+
+    def server(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(503)
+        return (
+            httpx.Response(304)
+            if "if-none-match" in request.headers
+            else httpx.Response(200, text="ok", headers={"ETag": '"a"'})
+        )
+
+    async with build_client(transport=httpx.MockTransport(server)) as client:
+        first = await client.get("https://selftest.invalid/feed")
+        second = await client.get("https://selftest.invalid/feed")
+    if (first.text, second.text, len(seen)) != ("ok", "ok", 3):
+        raise ValueError(f"selftest: http layer gave {first.text!r}, {second.text!r} after {len(seen)} requests")
+    return "http: retry and conditional cache ok"
+
+
 def selftest(root: Path = FIXTURES) -> int:
     for name in MODULES:
         importlib.import_module(name)
@@ -131,6 +153,7 @@ def selftest(root: Path = FIXTURES) -> int:
     else:
         print(f"selftest: fixture parse SKIPPED (no fixture directory at {root})")
     try:
+        print(f"selftest: {asyncio.run(_http_layer())}")
         print(f"selftest: {asyncio.run(_headless_frame(root))}")
     except Exception as exc:
         print(f"selftest: FAILED: {exc!r}", file=sys.stderr)

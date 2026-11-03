@@ -214,7 +214,7 @@ async def test_dart_fetch_adapts_selected_stations_only():
     assert batch.stations and all(isinstance(s, Station) and s.kind == "dart" for s in batch.stations)
 
 
-async def test_dart_station_list_hourly_with_bundled_fallback(clock):
+async def test_dart_station_list_hourly_with_bundled_fallback(clock, single_try):
     answers = [(500, "down"), STATIONS_XML]
     server = Server({"activestations.xml": lambda _r: answers.pop(0) if len(answers) > 1 else answers[0]})
     source = ndbc.DartSource(clock)

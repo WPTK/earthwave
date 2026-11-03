@@ -67,8 +67,9 @@ session plays back in seconds. `--debug` writes a DEBUG log to the default log f
 ## Building the binary
 
 `earthwave.spec` builds a one-file binary with PyInstaller (a dev extra). It bundles `earthwave/data/*.json` and
-`earthwave/ui/*.tcss`, Textual's own data files, and hidden imports for Textual's lazily loaded modules, `httpx`,
-`platformdirs` and `sqlite3`. Python itself is bundled; the user needs nothing installed.
+`earthwave/ui/*.tcss`, Textual's own data files, and hidden imports for Textual's lazily loaded modules, the HTTP layer (`httpx`, `hishel`,
+`stamina` and what they import) and `platformdirs` and `sqlite3`; the HTTP libraries' package metadata is bundled so
+`--diagnose` can name their versions. Python itself is bundled; the user needs nothing installed.
 
 ```powershell
 scripts\build_exe.ps1            # builds dist\earthwave.exe, then runs --version and --selftest on it

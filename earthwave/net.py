@@ -1,18 +1,27 @@
 """HTTP client factory plus the record and replay transports."""
 
+import asyncio
 import base64
 import json
 import logging
 import math
+import sqlite3
+import time
 import urllib.request
+from contextlib import closing
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+import anysqlite
+import hishel
+import hishel.httpx as hishel_httpx
 import httpx
+import stamina
 
 from earthwave import __version__
 from earthwave.clock import Clock, ReplayClock, SystemClock
+from earthwave.paths import data_dir
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +30,21 @@ _DROPPED_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
 _CALLER_VALIDATORS = {"if-none-match", "if-modified-since"}
 RETRY_AFTER_DEFAULT = 60.0  # seconds a host is left alone after a 429 that names no wait
 RETRY_AFTER_CAP = 300.0  # a few polls of an alert feed: a longer Retry-After is honoured only up to here
-CACHE_ENTRIES = 64
+CACHE_MAX_BYTES = (
+    20 * 1024 * 1024
+)  # a larger cache file is deleted at start-up; one that grows past it while running is emptied
+CACHE_UNVALIDATED_URLS = 512  # URLs remembered as having no validator
+CACHE_TRIM_EVERY = 50  # cached requests between checks that the live size is still under the limit
+CACHE_TRIM_MIN_AGE = 60.0  # seconds; younger entries are left alone when the cache is emptied
+CACHE_TTL = 7 * 24 * 3600.0  # seconds an entry is kept
+RETRY_ATTEMPTS = 3  # tries per request, the first included
+RETRY_WINDOW = 30.0  # seconds after the first try beyond which no new try starts (poll.FETCH_DEADLINE is 120)
+RETRY_WAIT_INITIAL = 0.5  # seconds before the second try; stamina doubles it with jitter
+RETRY_WAIT_MAX = 4.0
+RETRY_INLINE_MAX = 10.0  # a Retry-After up to here is waited out in place; a longer one is left to the scheduler
+_RETRY_STATUSES = {500, 502, 503, 504}
+_RETRY_EXCEPTIONS = (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)
+_NO_CACHE_MARK = "no-cache"  # sent to hishel to force revalidation; RetryTransport removes it before the origin sees it
 
 
 def user_agent(contact: str = "") -> str:
@@ -57,65 +80,165 @@ def _endpoint(url: httpx.URL) -> str:
     return f"{url.scheme}://{url.netloc.decode('ascii')}{url.path}"
 
 
-class _Entry:
-    __slots__ = ("body", "etag", "headers", "last_modified", "status")
+class _Transient(Exception):
+    """A response worth asking for again; carries it, so the last one can still be returned when the tries run out."""
 
-    def __init__(self, response: httpx.Response, body: bytes):
-        self.etag = response.headers.get("ETag")
-        self.last_modified = response.headers.get("Last-Modified")
-        self.status = response.status_code
-        self.headers = {k: v for k, v in response.headers.items() if k.lower() not in _DROPPED_HEADERS}
-        self.body = body
-
-    def response(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(self.status, headers=self.headers, content=self.body, request=request)
+    def __init__(self, response: httpx.Response):
+        super().__init__(f"HTTP {response.status_code}")
+        self.response = response
 
 
-class PoliteTransport(httpx.AsyncBaseTransport):
-    """The one place that makes every source a considerate client.
+class RetryTransport(httpx.AsyncBaseTransport):
+    """Asks again after a failure that is likely to pass, a few times and for a short while, then lets it stand.
 
-    - A GET without a query string whose response carries an ETag or Last-Modified is kept; the next request for the URL
-      is conditional, and a 304 from the origin is answered to the caller as the kept 200. Nothing is ever answered
-      without asking the origin, so a cached copy can never pass for a fresh poll.
-    - After a 429 (or a 503 with Retry-After) that endpoint (scheme, host and path; the query is ignored, since the
-      dated queries of fdsnws and CO-OPS change on every request) is left alone for the time it named, up to
-      RETRY_AFTER_CAP: requests for it meanwhile get a synthetic 429 carrying the wait that remains, which the
-      scheduler turns into the next poll time. Other paths, even on the same host, are unaffected.
-
-    A request that already carries If-None-Match or If-Modified-Since (the USGS cursor) passes through untouched.
+    Retried: connect errors, timeouts and dropped connections; 500, 502, 503 and 504; 429 and 503 when the Retry-After
+    they carry is at most RETRY_INLINE_MAX seconds (a longer wait is the scheduler's to honour, via PoliteTransport).
+    Only GET and HEAD. When the tries run out the last exception is raised or the last response returned, so a source
+    that is really down still fails exactly as it did without retries. A 304 to a request that carried no validator is
+    an error (the cache above would otherwise take it as confirming whatever it holds). No new try starts after
+    RETRY_WINDOW seconds, which keeps a request well inside poll.FETCH_DEADLINE. The pauses between tries are stamina's
+    backoff; a rate-limit hint is slept on the injected clock.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport, clock: Clock):
         self._inner = inner
         self._clock = clock
-        self._cache: dict[str, _Entry] = {}  # least recently used first
-        self._blocked: dict[str, float] = {}  # scheme://host/path -> monotonic time it may be asked again
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        key, now = str(request.url), self._clock.monotonic()
+        if request.headers.get("Cache-Control") == _NO_CACHE_MARK:  # ours, for the cache above; not for the origin
+            del request.headers["Cache-Control"]
+        if request.method not in ("GET", "HEAD"):
+            return await self._inner.handle_async_request(request)
+        try:
+            async for attempt in stamina.retry_context(
+                on=(_Transient, *_RETRY_EXCEPTIONS),
+                attempts=RETRY_ATTEMPTS,
+                timeout=RETRY_WINDOW,
+                wait_initial=RETRY_WAIT_INITIAL,
+                wait_max=RETRY_WAIT_MAX,
+            ):
+                with attempt:
+                    response = await self._inner.handle_async_request(request)
+                    if response.status_code == 304 and not _CALLER_VALIDATORS & {k.lower() for k in request.headers}:
+                        await response.aclose()
+                        raise httpx.ProtocolError(f"{request.url}: 304 Not Modified to a request with no validator")
+                    if (wait := self._retry_wait(response)) is not None:
+                        await response.aread()
+                        await response.aclose()
+                        if wait:
+                            await self._clock.sleep(wait)
+                        raise _Transient(response)
+                    return response
+        except _Transient as last:
+            log.debug("retry: %s still answers %d, giving up", request.url, last.response.status_code)
+            return last.response
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _retry_wait(self, response: httpx.Response) -> float | None:
+        """Seconds to sleep before asking again (0 for the backoff alone), or None when the answer stands."""
+        status = response.status_code
+        header = response.headers.get("Retry-After")
+        if status == 429 or (status == 503 and header):
+            wait = retry_after(header, self._clock.now(), RETRY_AFTER_DEFAULT)
+            return wait if wait <= RETRY_INLINE_MAX else None
+        return 0.0 if status in _RETRY_STATUSES else None
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+class PoliteTransport(httpx.AsyncBaseTransport):
+    """The one place that makes every source a considerate client.
+
+    - Requests are retried as RetryTransport says.
+    - A GET without a query string and without validators of its own goes through an HTTP cache (hishel) in the user's
+      data directory, size-bounded and expiring. It is asked to revalidate every time, so nothing is answered without
+      asking the origin: the next request for the URL is conditional (ETag, Last-Modified), and a 304 from the origin
+      is answered to the caller as the kept 200. A cache that cannot be read or written is dropped for the session
+      with one warning; the request goes on without it.
+    - After a 429 (or a 503 with Retry-After) that endpoint (scheme, host and path; the query is ignored, since the
+      dated queries of fdsnws and CO-OPS change on every request) is left alone for the time it named, up to
+      RETRY_AFTER_CAP: requests for it meanwhile get a synthetic 429 carrying the wait that remains, which the
+      scheduler turns into the next poll time. Other paths, even on the same host, are unaffected.
+
+    A request that already carries If-None-Match or If-Modified-Since (the USGS cursor) bypasses the cache, so a 304
+    reaches its caller as a 304.
+    """
+
+    def __init__(
+        self, inner: httpx.AsyncBaseTransport, clock: Clock, cache_path: Path | None = None, cache: bool = True
+    ):
+        self._retrying = RetryTransport(inner, clock)
+        self._clock = clock
+        self._blocked: dict[str, float] = {}  # scheme://host/path -> monotonic time it may be asked again
+        self._cached: httpx.AsyncBaseTransport | None = None
+        self._cached_requests = 0
+        self._unvalidated: set[str] = set()  # URLs whose last 200 had no validator: nothing to store, so skip the cache
+        self._cache_path = cache_path
+        self._storage: hishel.AsyncSqliteStorage | None = None
+        if not cache:
+            return
+        try:
+            # No path: a database in memory, so a replay never reads an earlier run's and tests touch no disk.
+            self._storage = (
+                _open_storage(cache_path) if cache_path else hishel.AsyncSqliteStorage(default_ttl=CACHE_TTL)
+            )
+            self._cached = hishel_httpx.AsyncCacheTransport(
+                self._retrying,
+                storage=self._storage,
+                policy=hishel.SpecificationPolicy(hishel.CacheOptions(shared=False)),
+            )
+        except Exception as exc:  # an unusable cache costs the cache, not the app
+            log.warning("http cache unavailable (%s: %s); continuing without it", type(exc).__name__, exc)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        now = self._clock.monotonic()
         endpoint = _endpoint(request.url)
         self._blocked = {k: until for k, until in self._blocked.items() if until > now}
         if (remaining := self._blocked.get(endpoint, 0.0) - now) > 0:
             log.debug("polite: %s asked us to wait, %.0fs left", endpoint, remaining)
             return httpx.Response(429, headers={"Retry-After": str(math.ceil(remaining))}, request=request)
-        if request.method != "GET" or _CALLER_VALIDATORS & {k.lower() for k in request.headers}:
-            return await self._inner.handle_async_request(request)
-        entry = self._cache.pop(key, None) if not request.url.query else None
-        if entry:
-            self._cache[key] = entry
-            if entry.etag:
-                request.headers["If-None-Match"] = entry.etag
-            if entry.last_modified:
-                request.headers["If-Modified-Since"] = entry.last_modified
-        response = await self._inner.handle_async_request(request)
+        use_cache = (
+            self._cached is not None
+            and request.method == "GET"
+            and not request.url.query
+            and not _CALLER_VALIDATORS & {k.lower() for k in request.headers}
+        )
+        key = str(request.url)
+        if use_cache and key not in self._unvalidated:
+            response = await self._through_cache(request)
+            if response.status_code == 200 and not _has_validator(response):
+                self._remember_unvalidated(key)
+        else:
+            response = await self._retrying.handle_async_request(request)
+            if use_cache and _has_validator(response):  # it offers validators now: the cache has a use for it
+                self._unvalidated.discard(key)
         if response.status_code in (429, 503):
             self._note_rate_limit(endpoint, response, now)
-        elif response.status_code == 304 and entry:
-            await response.aclose()
-            return entry.response(request)
-        elif response.status_code == 200 and not request.url.query:
-            return await self._remember(key, request, response)
         return response
+
+    def _remember_unvalidated(self, key: str) -> None:
+        if len(self._unvalidated) >= CACHE_UNVALIDATED_URLS:
+            self._unvalidated.clear()
+        self._unvalidated.add(key)
+
+    async def _through_cache(self, request: httpx.Request) -> httpx.Response:
+        assert self._cached is not None
+        request.headers["Cache-Control"] = _NO_CACHE_MARK  # revalidate, never answer from the cache unasked
+        try:
+            if self._storage and self._storage.connection is None and not self._cache_path:
+                self._storage.connection = await anysqlite.connect(":memory:")
+            response = await self._cached.handle_async_request(request)
+            self._cached_requests += 1
+            if self._cached_requests % CACHE_TRIM_EVERY == 0 and self._cache_path:
+                await asyncio.to_thread(_trim, self._cache_path)
+            return response
+        except (httpx.HTTPError, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # a corrupt or locked cache file: not the feed's fault, so never a failed poll
+            log.warning("http cache failed (%s: %s); continuing without it", type(exc).__name__, exc)
+            self._cached = None
+            return await self._retrying.handle_async_request(request)
 
     def _note_rate_limit(self, key: str, response: httpx.Response, now: float) -> None:
         header = response.headers.get("Retry-After")
@@ -125,21 +248,50 @@ class PoliteTransport(httpx.AsyncBaseTransport):
         self._blocked[key] = now + wait
         log.warning("%s answered %d; leaving it alone for %.0fs", key, response.status_code, wait)
 
-    async def _remember(self, key: str, request: httpx.Request, response: httpx.Response) -> httpx.Response:
-        self._cache.pop(key, None)
-        if "no-store" in response.headers.get("Cache-Control", "").lower() or not (
-            response.headers.get("ETag") or response.headers.get("Last-Modified")
-        ):
-            return response
-        body = await response.aread()
-        await response.aclose()
-        entry = self._cache[key] = _Entry(response, body)
-        while len(self._cache) > CACHE_ENTRIES:
-            del self._cache[next(iter(self._cache))]
-        return entry.response(request)
-
     async def aclose(self) -> None:
-        await self._inner.aclose()
+        try:
+            if self._cached is not None:
+                await self._cached.aclose()
+                return
+        except Exception as exc:
+            log.debug("closing the http cache failed: %s", exc)
+        await self._retrying.aclose()
+
+
+def _has_validator(response: httpx.Response) -> bool:
+    return "ETag" in response.headers or "Last-Modified" in response.headers
+
+
+def _trim(path: Path) -> None:
+    """Empty the cache when what it holds (free pages not counted) is over CACHE_MAX_BYTES: one-shot URLs such as quake
+    details would otherwise fill it for the whole TTL. A failure only means the next check tries again."""
+    try:
+        with closing(sqlite3.connect(path, timeout=1.0)) as db:
+            pages = db.execute("PRAGMA page_count").fetchone()[0] - db.execute("PRAGMA freelist_count").fetchone()[0]
+            if pages * db.execute("PRAGMA page_size").fetchone()[0] > CACHE_MAX_BYTES:
+                log.info("http cache over %d bytes: emptied", CACHE_MAX_BYTES)
+                db.execute("PRAGMA foreign_keys = ON")  # a deleted entry takes its stored body with it
+                with db:  # not the youngest entries: a response still being read is writing its body there
+                    db.execute("DELETE FROM entries WHERE created_at < ?", (time.time() - CACHE_TRIM_MIN_AGE,))
+    except sqlite3.Error as exc:
+        log.debug("http cache size check failed: %s", exc)
+
+
+def _open_storage(path: Path) -> hishel.AsyncSqliteStorage:
+    """The cache database at `path`. A file that is over CACHE_MAX_BYTES or not a readable database is deleted first;
+    entries older than CACHE_TTL are not served."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            if path.stat().st_size > CACHE_MAX_BYTES:
+                raise OSError("over the size limit")
+            with closing(sqlite3.connect(path)) as db:
+                db.execute("PRAGMA quick_check").fetchall()
+        except (OSError, sqlite3.Error) as exc:
+            log.warning("discarding the http cache %s (%s)", path, exc)
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                Path(f"{path}{suffix}").unlink(missing_ok=True)
+    return hishel.AsyncSqliteStorage(database_path=path, default_ttl=CACHE_TTL)
 
 
 _SEEN_PROXIES: dict[str, bool] = {}  # setting -> usable; each bad one is logged once
@@ -199,17 +351,25 @@ class EnvProxyTransport(httpx.AsyncBaseTransport):
             await transport.aclose()
 
 
+def cache_path() -> Path:
+    return data_dir() / "cache" / "http.sqlite"
+
+
 def build_client(
-    contact: str = "", transport: httpx.AsyncBaseTransport | None = None, clock: Clock | None = None
+    contact: str = "", transport: httpx.AsyncBaseTransport | None = None, clock: Clock | None = None, cache: bool = True
 ) -> httpx.AsyncClient:
     """The one shared client: identifying User-Agent, gzip, 10 s connect and 30 s read timeouts, polite transport.
 
-    Without an explicit transport (recording and replay pass their own) requests honour the proxy environment."""
+    Without an explicit transport requests honour the proxy environment and the HTTP cache is a file in the data
+    directory. Recording and replay pass their own transport; their cache lives in a throwaway directory, so a replay
+    never reads what an earlier run left on disk. `cache=False` leaves the cache out; retries and politeness stay."""
     return httpx.AsyncClient(
         headers={"User-Agent": user_agent(contact), "Accept-Encoding": "gzip"},
         timeout=httpx.Timeout(30.0, connect=10.0),
         follow_redirects=True,
-        transport=PoliteTransport(transport or EnvProxyTransport(), clock or SystemClock()),
+        transport=PoliteTransport(
+            transport or EnvProxyTransport(), clock or SystemClock(), None if transport else cache_path(), cache
+        ),
     )
 
 

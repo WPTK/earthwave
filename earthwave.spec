@@ -1,6 +1,6 @@
 # PyInstaller spec: one-file earthwave binary. Build with `pyinstaller earthwave.spec` (see scripts/build_exe.ps1).
 # Run from the repo root; output is dist/earthwave (dist/earthwave.exe on Windows).
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 datas = [
     ("earthwave/data/*.json", "earthwave/data"),
@@ -15,7 +15,10 @@ datas = [
 ]
 # Textual loads widget CSS and other resources by path and imports screens and widgets lazily.
 datas += collect_data_files("textual")
-hiddenimports = collect_submodules("textual") + collect_submodules("earthwave") + collect_submodules("anyio") + collect_submodules("rich._unicode_data") + ["sqlite3", "httpx", "platformdirs"]
+# --diagnose reads these versions from the installed metadata.
+for dist in ("httpx", "hishel", "stamina"):
+    datas += copy_metadata(dist)
+hiddenimports = collect_submodules("textual") + collect_submodules("earthwave") + collect_submodules("anyio") + collect_submodules("hishel") + collect_submodules("anysqlite") + collect_submodules("stamina") + collect_submodules("tenacity") + collect_submodules("rich._unicode_data") + ["sqlite3", "httpx", "platformdirs", "msgpack"]
 
 a = Analysis(
     ["earthwave/__main__.py"],

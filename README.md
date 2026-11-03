@@ -111,9 +111,10 @@ The rest of the flags:
 | --- | --- | --- | --- |
 | Config | `%LOCALAPPDATA%\earthwave\config.toml` | `~/.config/earthwave/config.toml` | `~/Library/Application Support/earthwave/config.toml` |
 | Log (only with `--log` or `--debug`) | `%LOCALAPPDATA%\earthwave\Logs\earthwave.log` | `~/.local/state/earthwave/log/earthwave.log` | `~/Library/Logs/earthwave/earthwave.log` |
+| HTTP cache | `%LOCALAPPDATA%\earthwave\cache\http.sqlite` | `~/.local/share/earthwave/cache/http.sqlite` | `~/Library/Application Support/earthwave/cache/http.sqlite` |
 | Saved history | `%LOCALAPPDATA%\earthwave\history.sqlite` | `~/.local/share/earthwave/history.sqlite` | `~/Library/Application Support/earthwave/history.sqlite` |
 
-These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
+These come from [platformdirs](https://platformdirs.readthedocs.io/); `XDG_*` variables move the Linux ones. `EARTHWAVE_CONFIG_DIR` (config) and `EARTHWAVE_DATA_DIR` (history, the HTTP cache under `cache/`, and logs under `logs/`) move them on every OS. Uninstalling earthwave never deletes these directories.
 
 To report a bug, paste the output of `earthwave --diagnose`, run `earthwave --debug`, then open an issue at
 [github.com/WPTK/earthwave/issues](https://github.com/WPTK/earthwave/issues) with the version and the end of the log.

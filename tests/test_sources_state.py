@@ -248,7 +248,9 @@ def test_cold_store_is_silent_then_warm_diffs_raise_events(clock):
 def test_update_events_and_stale_updates_ignored(clock):
     store = Store()
     store.merge(batch(make_quake("a", mag=4.0)), clock)
-    events = store.merge(batch(make_quake("a", mag=4.5, updated=T0 + timedelta(minutes=1)), at=T0 + timedelta(minutes=1)), clock)
+    events = store.merge(
+        batch(make_quake("a", mag=4.5, updated=T0 + timedelta(minutes=1)), at=T0 + timedelta(minutes=1)), clock
+    )
     assert len(events) == 1 and isinstance(events[0], QuakeUpdated) and events[0].changed == ("mag",)
     assert store.merge(batch(make_quake("a", mag=3.0, updated=T0)), clock) == []  # older revision
     assert store.get("a").mag == 4.5
@@ -771,7 +773,7 @@ def test_tracker_retain_drops_attention_for_quakes_the_store_no_longer_holds(clo
 
 
 @respx.mock
-async def test_startup_feed_is_retried_until_it_succeeds(clock):
+async def test_startup_feed_is_retried_until_it_succeeds(clock, single_try):
     first = respx.get(FEED_BASE + "4.5_week.geojson").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, json={"features": []})]
     )
@@ -788,7 +790,7 @@ async def test_startup_feed_is_retried_until_it_succeeds(clock):
 
 
 @respx.mock
-async def test_a_startup_feed_that_keeps_failing_is_skipped_so_the_steady_feed_runs(clock):
+async def test_a_startup_feed_that_keeps_failing_is_skipped_so_the_steady_feed_runs(clock, single_try):
     broken = respx.get(FEED_BASE + "4.5_week.geojson").mock(return_value=httpx.Response(500))
     respx.get(FEED_BASE + "all_day.geojson").mock(return_value=httpx.Response(200, json={"features": []}))
     respx.get(FEED_BASE + "significant_month.geojson").mock(return_value=httpx.Response(500))

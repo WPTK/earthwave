@@ -19,7 +19,7 @@ from earthwave.app import EarthwaveApp
 from earthwave.clock import ReplayClock
 from earthwave.config import Config, with_overrides
 from earthwave.models import Batch, GaugeReading, Station
-from earthwave.net import CACHE_ENTRIES, RETRY_AFTER_CAP, build_client
+from earthwave.net import RETRY_AFTER_CAP, build_client
 from earthwave.poll import BACKOFF_CAP, Scheduler
 from earthwave.sources import usgs
 from earthwave.sources.usgs import DETAIL_CACHE_SIZE, UsgsSource
@@ -45,7 +45,9 @@ class Rig:
         self.store = Store()
         self.source = UsgsSource(clock)
         self.sched = Scheduler([self.source], self.store, clock, self.results.append, rng=random.Random(seed))
-        self.client = build_client(transport=httpx.MockTransport(self._handler), clock=clock)
+        self.client = build_client(
+            transport=httpx.MockTransport(self._handler), clock=clock, cache=False
+        )  # hours of polls in no time: not through a database thread
 
     def _handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -439,7 +441,6 @@ async def test_soak_36_days_caps_hold_under_random_faults(clock):
         store_peak = max(store_peak, len(rig.store))
         coverage_peak = max(coverage_peak, len(rig.store._coverage))
         cache_peak = max(cache_peak, len(rig.source._details))
-        assert len(rig.client._transport._cache) <= CACHE_ENTRIES
     per_retain = RETAIN / rate
     assert store_peak <= per_retain * 1.05, f"store grew past RETAIN: {store_peak} > {per_retain}"
     assert min(q.time for q in rig.store.all()) >= clock.now() - RETAIN - timedelta(hours=1)
