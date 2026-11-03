@@ -8,7 +8,7 @@ import httpx
 import pytest
 from conftest import FIXTURES
 
-from earthwave.sources.usgs import UsgsSource, parse_collection, parse_nearby_cities
+from earthwave.sources.usgs import STARTUP_ATTEMPTS, UsgsSource, parse_collection, parse_detail, parse_nearby_cities
 
 HOUR = (FIXTURES / "usgs" / "all_hour.geojson").read_bytes()
 DETAIL = (FIXTURES / "usgs" / "detail.geojson").read_bytes()
@@ -40,6 +40,8 @@ BAD_FEATURES = {
     "geometry_null": {"id": "g", "properties": feat()["properties"], "geometry": None},
     "updated_huge": feat(updated=10**20),
     "feature_is_list": [1, 2],
+    "depth_nan": feat(coords=[10.0, 20.0, NAN]),
+    "depth_inf": feat(coords=[10.0, 20.0, INF]),
     "mag_nan": feat(mag=NAN),
     "mag_inf": feat(mag=INF),
     "lat_nan": feat(coords=[10.0, NAN, 5.0]),
@@ -149,3 +151,22 @@ async def test_malformed_nearby_cities_keeps_the_rest_of_the_detail(clock, citie
         detail = await UsgsSource(clock).fetch_detail(client, quake)
     assert detail.products
     assert detail.nearby_cities == ()
+
+
+def test_detail_pager_alert_is_normalised():
+    data = json.loads(DETAIL)
+    data["properties"]["products"]["losspager"] = [{"properties": {"alertlevel": "Red"}}]
+    assert parse_detail(data).pager_alert == "red"
+    data["properties"]["products"]["losspager"] = [{"properties": {"alertlevel": "purple"}}]
+    assert parse_detail(data).pager_alert is None
+
+
+async def test_unconditional_304s_skip_the_startup_feed_after_the_attempt_limit(clock):
+    source = UsgsSource(clock)
+    first = source._startup[0]
+    async with make_client(lambda r: httpx.Response(304)) as client:
+        for _ in range(STARTUP_ATTEMPTS):
+            assert source._startup[0] == first
+            with pytest.raises(httpx.HTTPError):
+                await source.fetch(client, None)
+    assert not source._startup or source._startup[0] != first

@@ -115,7 +115,15 @@ def parse_feature(feature: dict) -> Earthquake | None:
     if time is None:
         raise ValueError("feature has no time")
     mag, lat, lon = float(props["mag"]), float(lat), float(lon)
-    if not (math.isfinite(mag) and math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180):
+    depth = float(rest[0]) if rest and rest[0] is not None else 0.0
+    if not (
+        math.isfinite(mag)
+        and math.isfinite(lat)
+        and math.isfinite(lon)
+        and math.isfinite(depth)
+        and abs(lat) <= 90
+        and abs(lon) <= 180
+    ):
         return None
     return Earthquake(
         id=quake_id,
@@ -123,7 +131,7 @@ def parse_feature(feature: dict) -> Earthquake | None:
         lat=lat,
         lon=lon,
         mag=mag,
-        depth_km=float(rest[0]) if rest and rest[0] is not None else 0.0,
+        depth_km=depth,
         source="usgs",
         mag_type=props.get("magType") or "",
         place=props.get("place") or "",
@@ -184,7 +192,7 @@ def _prop(products: dict, name: str, *keys: str) -> float | None:
 def parse_detail(data: dict) -> QuakeDetail:
     products = data.get("properties", {}).get("products", {})
     pager = products.get("losspager") or []
-    pager_alert = pager[0].get("properties", {}).get("alertlevel") if pager else None
+    pager_alert = _alert(pager[0].get("properties", {}).get("alertlevel")) if pager else None
     responses = _prop(products, "dyfi", "num-responses")
     return QuakeDetail(
         id=data.get("id", ""),
