@@ -296,14 +296,15 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: {exc}") from exc
 
 
-def parse_home(text: str) -> tuple[float, float]:
+def parse_home(text: str, field: str = "--home") -> tuple[float, float]:
+    """LAT,LON from `text`; `field` names what the person typed it into (a flag, or a dialog's field) in the errors."""
     try:
         lat_s, lon_s = text.split(",")
         lat, lon = float(lat_s), float(lon_s)
     except ValueError as exc:
-        raise ConfigError(f"--home expects LAT,LON (the config's [home] lat and lon), got {text!r}") from exc
+        raise ConfigError(f"{field} expects LAT,LON (the config's [home] lat and lon), got {text!r}") from exc
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        raise ConfigError(f"--home out of range (the config's [home] lat is -90 to 90, lon -180 to 180): {text!r}")
+        raise ConfigError(f"{field} out of range (the config's [home] lat is -90 to 90, lon -180 to 180): {text!r}")
     return lat, lon
 
 

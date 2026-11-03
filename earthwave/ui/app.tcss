@@ -328,3 +328,50 @@ DataTable:focus > .datatable--cursor {
     color: $bright;
     text-style: bold;
 }
+
+/* Ctrl+P palette: Textual's own is a 60% scrim over the screen behind it, which leaves the dimmed list unreadable and
+   puts the palette's text on whatever is behind it. Here it has an opaque ground and named colours, so it reads on a
+   light terminal profile and with the CVD-safe palette as the dashboard does. */
+CommandPalette {
+    background: $surface;
+    color: $bright;
+}
+
+CommandPalette > Vertical {
+    background: $panel;
+}
+
+CommandPalette > .command-palette--help-text {
+    color: $title;
+    text-style: none;
+}
+
+CommandPalette > .command-palette--highlight {
+    color: $bright;
+    text-style: bold underline;
+}
+
+CommandPalette #--input {
+    border: hkey $border;
+}
+
+CommandPalette CommandList > .option-list--option-highlighted {
+    background: $cursor;
+    color: $bright;
+}
+
+CommandPalette #--input Label {
+    color: $bright;
+}
+
+CommandPalette CommandList {
+    border-bottom: hkey $border;
+}
+
+Input > .input--placeholder {
+    color: $title;
+}
+
+CommandPalette SearchIcon {
+    color: $bright;
+}

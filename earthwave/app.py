@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 from textual import events, work
@@ -16,7 +17,7 @@ from textual.message import Message
 from textual.timer import Timer
 
 from earthwave.clock import Clock, SystemClock
-from earthwave.config import Config
+from earthwave.config import Config, ConfigError, load_config, save_home
 from earthwave.models import Batch, Earthquake
 from earthwave.net import build_client
 from earthwave.notify.desktop import Notifier
@@ -43,6 +44,7 @@ from earthwave.state.gauges import GaugeSelection, choose_stations
 from earthwave.state.history import History
 from earthwave.state.rules import AlertRules, Notification, quake_line
 from earthwave.state.store import RETAIN, SortKey, Store, ViewFilter
+from earthwave.ui.commands import EarthwaveCommands
 from earthwave.ui.glyphs import resolve_glyphs
 from earthwave.ui.graphics.probe import BRAILLE, GraphicsChoice, ReplyFilter
 from earthwave.ui.labels import filter_summary, fmt_age, fmt_time
@@ -52,6 +54,7 @@ from earthwave.ui.screens.filters import FiltersScreen
 from earthwave.ui.screens.help import HelpScreen
 from earthwave.ui.screens.history import HistoryScreen
 from earthwave.ui.screens.observations import ObservationsScreen
+from earthwave.ui.screens.sethome import SetHomeScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.theme import LegibleMonochrome, css_variables, ground_variables
 from earthwave.ui.widgets.gauge_strip import GaugeRowData, GaugeStrip
@@ -82,6 +85,7 @@ class EarthwaveApp(App):
 
     TITLE = "earthwave"
     BINDINGS = [Binding("q", "quit", "Quit")]
+    COMMANDS = App.COMMANDS | {EarthwaveCommands}  # Ctrl+P: Textual's palette, with the screen actions added
 
     def get_css_variables(self) -> dict[str, str]:
         return {**super().get_css_variables(), **ground_variables(), **css_variables()}
@@ -101,10 +105,12 @@ class EarthwaveApp(App):
         history_error: str | None = None,
         graphics: GraphicsChoice | None = None,
         replay: bool = False,
+        config_path: Path | None = None,
     ):
         super().__init__()
         self._filters = [LegibleMonochrome() if isinstance(f, Monochrome) else f for f in self._filters]
         self.config = config
+        self.config_path = config_path  # the file `Set home location` writes; None when no config file is in use
         self.clock: Clock = clock or SystemClock()
         self.store = store if store is not None else Store(config.alerts, config.home, launched=self.clock.now())
         self.tracker = AttentionTracker(self.clock)
@@ -672,3 +678,69 @@ class EarthwaveApp(App):
 
     def open_detail(self, quake: Earthquake) -> None:
         self.push_screen(DetailScreen(quake))
+
+    async def go_screen(self, name: str) -> None:
+        """A palette command's target: back to the quake list first (the way Esc would), then on to the screen."""
+        while len(self.screen_stack) > 1 and self.screen is not self.dashboard:
+            if isinstance(self.screen, ObservationsScreen):
+                self.close_observations()
+            await self.pop_screen()
+        board = self.dashboard
+        selected = board.query_one(QuakeList).selected
+        if name in ("gauges", "detail") and selected is None:
+            self.notify("Select a quake in the list first", timeout=3)
+        elif name == "gauges":
+            self.open_observations(selected)
+        elif name == "detail":
+            self.open_detail(selected)
+        elif name == "tsunami":
+            self.open_tsunami()
+        elif name == "history":
+            self.open_history()
+        elif name == "help":
+            self.open_help()
+        elif name == "filters":
+            self.open_filters()
+        elif name == "refresh":
+            board.action_refresh_now()
+        elif name == "ack":
+            board.action_ack_all()
+        elif name == "search":
+            board.action_search()
+        elif name == "map":
+            board.action_toggle_map()
+        elif name == "fullmap":
+            board.action_fullscreen_map()
+        elif name == "zoom":
+            board.action_zoom_map()
+
+    def set_sort(self, key: SortKey) -> None:
+        self.sort = key
+        self.dashboard.refresh_view()
+        self.dashboard.query_one(QuakeList).go_top()  # the head of the new order, not the old quake's row in it (#247)
+
+    def open_set_home(self) -> None:
+        def done(result: tuple[float, float, str] | None) -> None:
+            if result is not None:
+                self.save_home_location(*result)
+
+        self.push_screen(SetHomeScreen(self.config.home), done)
+
+    def save_home_location(self, lat: float, lon: float, name: str) -> None:
+        """Write the home to the config file through `save_home` (atomic; the same writer as --save-home). Distances and
+        near-home alerts are built from the home at startup, so they follow it on the next run."""
+        if self.config_path is None:
+            self.notify("No config file is in use (--no-config), so the home was not saved", severity="warning")
+            return
+        try:
+            save_home(self.config_path, name, lat, lon)
+            load_config(self.config_path)  # what was written must parse
+        except ConfigError as exc:
+            self.notify(str(exc), title="Home not saved", severity="error", timeout=10, markup=False)
+            return
+        self.notify(
+            f"{name}: {lat:g}, {lon:g} saved to {self.config_path}. Restart earthwave to use it.",
+            title="Home saved",
+            timeout=10,
+            markup=False,
+        )
