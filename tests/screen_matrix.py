@@ -24,9 +24,9 @@ from earthwave.ui.screens.observations import ObservationsScreen
 from earthwave.ui.screens.sethome import SetHomeScreen
 from earthwave.ui.screens.tsunami import TsunamiScreen
 from earthwave.ui.widgets.quake_list import QuakeList
+from earthwave.ui.widgets.too_small import is_too_small
 
 SIZES = [(80, 24), (100, 30), (120, 40), (200, 60)]
-MIN_SIZE = (100, 30)  # below it every screen shows the too-small notice instead
 
 
 def utc(app: EarthwaveApp) -> EarthwaveApp:
@@ -84,6 +84,8 @@ async def _tsunami(pilot) -> None:
 
 async def _gauges(pilot) -> None:
     await _open_key(pilot, "o", ObservationsScreen)
+    # Deliberate: the station list comes from the app's own nearest-station choice, which does not include the station
+    # the captured rows belong to. Injecting the selection puts real readings on screen without a network fetch.
     pilot.app.gauge_selection = GaugeSelection(dart=((1850.0, STATION),))  # the station the fixture rows belong to
     pilot.app.screen.refresh_gauges()
     await pilot.pause()
@@ -124,16 +126,26 @@ async def _map(pilot) -> None:
     await pilot.pause()
 
 
-async def _offline(pilot) -> None:
-    """Every feed failing under a Warning: the worst case for the status bar and the banner."""
+FAILING = ("usgs", "tsunamigov", "nws", "jma", "coops")  # dart has no station to poll, so it never fails
+
+
+async def _failing(pilot) -> None:
+    """Feeds failing under a Warning, through the real scheduler: each source gets a 503, its health records the
+    failure, and the status bar names it. Waiting for the names, not a sleep, keeps it deterministic; the error toasts
+    are cleared so that only the layout is on screen."""
     app = pilot.app
-    await _dashboard_ready(pilot)
-    app.scheduler_running = True  # judge the feeds without polling: the health is set here
-    for status in app.scheduler.statuses.values():
-        status.health.failures = 2
-    app.dashboard.refresh_status()
-    await wait_until(pilot, lambda: "OFFLINE" in str(app.dashboard.query_one("#status").render()), what="OFFLINE")
+
+    def named() -> bool:
+        bar = str(app.dashboard.query_one("#status").render())
+        return "failed:" in bar and all(name in bar.split("failed:")[1] for name in FAILING)
+
+    await wait_until(pilot, named, 5.0, "the failing feeds")
+    app.clear_notifications()
     await pilot.pause()
+
+
+def failing_kam() -> EarthwaveApp:
+    return kam_app(run_scheduler=True, transport=httpx.MockTransport(lambda request: httpx.Response(503)))
 
 
 @dataclass(frozen=True)
@@ -153,7 +165,7 @@ SCENARIOS = {
     for s in (
         Scenario("dashboard", lambda: utc(week_app()), _dashboard),
         Scenario("dashboard-warning", _kam_dashboard, _dashboard),
-        Scenario("dashboard-offline", _kam_dashboard, _offline),
+        Scenario("dashboard-failing", failing_kam, _failing),
         Scenario("detail", lambda: utc(week_app(transport=detail_transport())), _detail),
         Scenario("tsunami", kam_app, _tsunami),
         Scenario("gauges", gauge_flagged, _gauges),
@@ -169,6 +181,7 @@ SCENARIOS = {
 @dataclass(frozen=True)
 class Shot:
     text: str
+    classes: dict[str, frozenset[str]]  # the CSS classes the measured widgets carry
     regions: dict[str, Region]  # the widgets the size tests measure, by selector, where they were drawn
     backgrounds: dict[str, object]
 
@@ -180,7 +193,7 @@ async def render(scenario: Scenario, size: tuple[int, int]) -> Shot:
     """The screen at `size`. Below the minimum size the screen is opened at 120x40 and then shrunk, the way a user
     meets it: the keys that open a screen are ignored on a too-small terminal."""
     app = scenario.build()
-    open_size = size if size >= MIN_SIZE else (120, 40)
+    open_size = (120, 40) if is_too_small(*size) else size
     async with app.run_test(size=open_size) as pilot:
         await scenario.open(pilot)
         if scenario.footer:
@@ -191,6 +204,7 @@ async def render(scenario: Scenario, size: tuple[int, int]) -> Shot:
         found = {sel: app.screen.query(sel).first() for sel in MEASURED if app.screen.query(sel)}
         return Shot(
             screen_text(app),
+            {sel: frozenset(widget.classes) for sel, widget in found.items()},
             {sel: widget.region for sel, widget in found.items()},
             {sel: widget.styles.background for sel, widget in found.items()},
         )
