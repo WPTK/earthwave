@@ -16,6 +16,7 @@ from earthwave.state.events import (
     TsunamiChanged,
     TsunamiIssued,
 )
+from earthwave.ui.theme import TEXT
 
 NEW_FLASH_SECONDS = 3.0
 UPDATED_FLASH_SECONDS = 1.0
@@ -68,14 +69,14 @@ class Attention:
 @dataclass(frozen=True, slots=True)
 class RowStyle:
     bg: str
-    fg: str = "white"
+    fg: str = TEXT
     bold: bool = False
 
 
-FLASH_NEW = RowStyle("#0891b2", "white", True)
+FLASH_NEW = RowStyle("#0891b2", TEXT, True)
 DIM_NEW = RowStyle("#10343d")
-FLASH_UPDATED = RowStyle("#a16207", "white", True)
-PULSE_MAJOR = RowStyle("#b91c1c", "white", True)
+FLASH_UPDATED = RowStyle("#a16207", TEXT, True)
+PULSE_MAJOR = RowStyle("#b91c1c", TEXT, True)
 DIM_MAJOR = RowStyle("#5b2a05")
 
 

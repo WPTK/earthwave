@@ -12,7 +12,16 @@ from rich.style import Style
 from textual._ansi_theme import MONOKAI
 from textual.color import Color
 
-from earthwave.ui.theme import LEVEL_COLORS, PAGER_COLORS, contrast, css_variables, mag_color
+from earthwave.ui.theme import (
+    FRESHNESS_COLORS,
+    INK,
+    LEVEL_COLORS,
+    PAGER_COLORS,
+    TSUNAMI_BADGE_COLOR,
+    contrast,
+    css_variables,
+    mag_color,
+)
 
 _MACHADO = {
     "protanopia": [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
@@ -154,13 +163,80 @@ def test_a_warning_ground_is_louder_than_every_other_level_ground():
         assert warning[0] > loudness(other)[0] and warning[1] > loudness(other)[1], other
 
 
-def test_no_ansi_colour_names_left_in_the_styled_widgets():
-    """Textual maps ANSI names through its own terminal theme, so a widget naming one shows a different colour from the
-    theme constants for the same meaning (issue #293)."""
+def test_no_ansi_colour_names_left_in_the_ui_code():
+    """Textual maps ANSI names through the terminal's own theme, so a widget naming one shows a different colour from the
+    theme constants for the same meaning, and a light profile changes it again (issue #293). Every colour in the UI
+    code is a theme.py constant, a truecolor or a fixed 256-colour grey; Textual's own CSS colour names in app.tcss
+    are truecolor and not affected."""
     import re
     from pathlib import Path
 
-    root = Path(__file__).parent.parent / "earthwave" / "ui"
-    pattern = re.compile(r'"(?:bold )?(?:red|green|cyan|yellow|magenta)(?: on \w+)?"|on (?:red|green|cyan)')
-    for path in [*(root / "widgets").glob("*.py"), *(root / "screens").glob("*.py")]:
-        assert not pattern.search(path.read_text(encoding="utf-8")), path.name
+    names = "black|red|green|yellow|blue|magenta|cyan|white"
+    word = rf"(?:bright_)?(?:{names})"
+    # a name inside a string literal that is a Rich style: "red", "bold white", "bold black on cyan", "dim red"
+    style = re.compile(rf"""["'](?:(?:bold|dim|italic|underline|reverse) )*{word}(?: on [#\w]+)?["']|on {word}""")
+    keyword = re.compile(rf"""(?:color|bgcolor|style)\s*=\s*["']{word}["']""")
+    root = Path(__file__).parent.parent / "earthwave"
+    files = [*(root / "ui").rglob("*.py"), root / "notify" / "inapp.py"]
+    assert len(files) > 10
+    for path in files:
+        if path.name == "theme.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            code = line.split("#", 1)[0] if "#" in line and not re.search(r"""["'][^"']*#""", line) else line
+            assert not (style.search(code) or keyword.search(code)), (path.name, line.strip())
+
+
+def _chip_grounds():
+    return {state.name: _truecolor(colour) for state, colour in FRESHNESS_COLORS.items()}
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_data_state_chips_are_told_apart_by_colour_blind_readers(kind):
+    """LOADING, LIVE, STALE and OFFLINE chips: the word is printed, the colour only adds to it."""
+    delta, pair = _worst_pair(_chip_grounds(), kind)
+    assert delta >= 20, (pair, delta)
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_chip_ink_reads_on_every_chip_ground(kind):
+    for name, rgb in _chip_grounds().items():
+        assert contrast(Color.parse(INK), Color(*rgb)) >= 4.5, name
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_pulse_step_of_a_level_border_is_visible(kind):
+    """The pulsing border alternates between the calm and the bright step. A Warning is the exception: its calm step is
+    already the loudest red (issues #152, #192) and the banner and word carry the alert, so it may not pulse visibly."""
+    variables = css_variables()
+    for name in ("advisory", "watch", "threat", "info"):
+        pair = {"calm": _rgb(variables[f"level-{name}-dim"]), "bright": _rgb(variables[f"level-{name}"])}
+        delta, _ = _worst_pair(pair, kind)
+        assert delta >= 10, (name, delta)
+
+
+def test_status_colours_do_not_move_with_the_terminals_ansi_theme():
+    """A light terminal profile maps the sixteen ANSI names to other colours (Textual's light ANSI theme here). Every
+    status colour is truecolor, so the colour-blind separation pinned above holds on it unchanged."""
+    from textual._ansi_theme import ALABASTER
+
+    styles = [*LEVEL_COLORS.values(), *PAGER_COLORS.values(), *FRESHNESS_COLORS.values()]
+    styles += [mag_color(m) for m in MAG_SAMPLES.values()] + [TSUNAMI_BADGE_COLOR]
+    for style in styles:
+        colour = Style.parse(style).color
+        assert colour.get_truecolor(ALABASTER) == colour.get_truecolor(MONOKAI), style
+
+
+@pytest.mark.parametrize("kind", ["protanopia", "deuteranopia"])
+def test_threat_and_information_differ_on_every_surface(kind):
+    """The pair #293 was opened for: word, banner/pulsing border and status-bar/calm border."""
+    variables = css_variables()
+    pairs = {
+        "word": (_truecolor(LEVEL_COLORS["THREAT"]), _truecolor(LEVEL_COLORS["INFORMATION"])),
+        "bright": (_rgb(variables["level-threat"]), _rgb(variables["level-info"])),
+        "calm": (_rgb(variables["level-threat-dim"]), _rgb(variables["level-info-dim"])),
+    }
+    for surface, (a, b) in pairs.items():
+        delta, _ = _worst_pair({"threat": a, "info": b}, kind)
+        assert delta >= 10, (surface, delta)

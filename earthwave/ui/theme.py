@@ -27,6 +27,13 @@ BORDER = "#5b93d3"
 # lifts its foregrounds with lift() instead of darkening further (it must stay tellable from the #1e1e1e ground).
 CURSOR_BG = "#1e3a5f"
 INFO_VIOLET = "#9682e6"
+# Text colours, truecolor so a terminal's own ANSI theme (a light profile's white is not Monokai's) cannot change them.
+# TEXT, INK and BRIGHT are what the ANSI names "white", "black" and "bright_white" rendered as under Textual's Monokai.
+TEXT = "#c4c5b5"
+INK = "#1a1a1a"
+BRIGHT = "#f6f6ef"
+BLACK = "#000000"  # text on the loudest grounds (the Warning banner and status bar)
+WHITE = "#ffffff"
 
 
 def mag_color(mag: float) -> str:
