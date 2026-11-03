@@ -14,10 +14,9 @@ from dataclasses import fields
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 
-import platformdirs
-
 from earthwave.clock import Clock
 from earthwave.models import Earthquake, TsunamiAlert
+from earthwave.paths import data_dir
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ _DATETIME_FIELDS = {f.name for f in fields(Earthquake) if "datetime" in str(f.ty
 
 
 def default_path() -> Path:
-    return Path(platformdirs.user_data_dir("earthwave", appauthor=False, roaming=False)) / "history.sqlite"
+    return data_dir() / "history.sqlite"
 
 
 def _iso(dt: datetime) -> str:

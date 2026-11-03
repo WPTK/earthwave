@@ -26,7 +26,7 @@ def test_ci_tests_the_python_floor():
     requires = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["requires-python"]
     floor = requires.removeprefix(">=")
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert f'python-version: "{floor}"' in ci
+    assert f'python: "{floor}"' in ci
 
 
 def test_install_commands_pin_the_current_release():

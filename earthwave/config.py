@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import platformdirs
+from earthwave.paths import config_dir
 
 log = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ retain_days = 90
 
 
 def default_config_path() -> Path:
-    return Path(platformdirs.user_config_dir("earthwave", appauthor=False, roaming=False)) / "config.toml"
+    return config_dir() / "config.toml"
 
 
 def _coerce(section: str, key: str, value: Any, default: Any) -> Any:

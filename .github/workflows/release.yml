@@ -2,6 +2,7 @@ name: Release
 
 # Pushing a tag v0.y.z builds one-file binaries for Windows, Linux and macOS and attaches them, with
 # SHA256SUMS, to a GitHub Release. The tag must match earthwave/__init__.py and a CHANGELOG.md section.
+# post-release.yml then downloads the published assets and runs them.
 on:
   push:
     tags: ["v0.*.*"]
@@ -69,7 +70,9 @@ jobs:
         shell: bash
         run: |
           ./dist/${{ matrix.exe }} --version
-          ./dist/${{ matrix.exe }} --selftest
+          ./dist/${{ matrix.exe }} --selftest | tee selftest.txt
+          # a spec regression that drops the bundled fixtures must stop the release before anything is public
+          ! grep -q SKIPPED selftest.txt
       - name: Name the artifact
         shell: bash
         run: |

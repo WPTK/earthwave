@@ -5,6 +5,13 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 datas = [
     ("earthwave/data/*.json", "earthwave/data"),
     ("earthwave/ui/*.tcss", "earthwave/ui"),
+    # What --selftest parses; without these it prints SKIPPED in the binary (#259).
+    ("tests/fixtures/usgs/*.geojson", "tests/fixtures/usgs"),
+    ("tests/fixtures/tsunamigov/*", "tests/fixtures/tsunamigov"),
+    ("tests/fixtures/ndbc/activestations.xml", "tests/fixtures/ndbc"),
+    ("tests/fixtures/ndbc/46402.dart", "tests/fixtures/ndbc"),
+    ("tests/fixtures/coops/water_level_9414290.json", "tests/fixtures/coops"),
+    ("tests/fixtures/jma/*.json", "tests/fixtures/jma"),
 ]
 # Textual loads widget CSS and other resources by path and imports screens and widgets lazily.
 datas += collect_data_files("textual")

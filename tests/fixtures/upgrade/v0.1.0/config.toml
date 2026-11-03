@@ -1,0 +1,43 @@
+# earthwave configuration. Edit and restart; the app only reads this file.
+
+[poll]
+usgs_seconds = 60            # USGS feeds refresh once a minute; values below 60 are rejected
+tsunami_seconds = 60
+dart_seconds = 900
+coops_seconds = 300
+alert_gauge_seconds = 60
+
+[view]
+min_magnitude = 4.0          # hide quakes below this magnitude
+hours = 24                   # show quakes from the last N hours
+glyphs = "auto"              # auto | unicode | ascii
+map = true
+time_zone = "local"          # local | UTC
+
+[home]
+name = ""                    # empty = no home; the distance column is hidden
+lat = 0.0
+lon = 0.0
+radius_km = 500
+
+[alerts]
+major_magnitude = 6.0
+near_home_magnitude = 3.0
+pager_min = "yellow"         # green | yellow | orange | red
+tsunami = true
+gauge_anomaly_dart_m = 0.05
+gauge_anomaly_gauge_m = 0.3
+
+[notify]
+desktop = true
+bell = true
+contact = ""                 # appended to the User-Agent sent to NOAA/NWS
+
+[sources]
+usgs = true
+tsunamigov = true
+nws = true
+jma = true
+
+[history]
+retain_days = 90
