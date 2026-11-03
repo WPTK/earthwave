@@ -32,6 +32,8 @@ dev = [
     "pytest-timeout>=2.3",
     "psutil>=6",
     "pytest-cov>=5",
+    "hypothesis>=6",
+    "geographiclib>=2",
     "pytest-textual-snapshot",
     "textual==8.2.8",
     "ruff>=0.8",
@@ -63,6 +65,9 @@ asyncio_mode = "auto"
 # Slowest test is about 10 s; 120 s leaves room for a loaded CI runner and still stops a hang.
 timeout = 120
 testpaths = ["tests"]
+markers = [
+    "chaos: slow soak and random-input probes under tests/chaos (deselect with -m \"not chaos\")",
+]
 
 [tool.ruff]
 line-length = 120
