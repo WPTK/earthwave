@@ -16,6 +16,15 @@ from earthwave.state.events import (
     TsunamiChanged,
     TsunamiIssued,
 )
+from earthwave.ui.theme import (
+    DIM_MAJOR_BG,
+    DIM_NEW_BG,
+    FLASH_NEW_BG,
+    FLASH_UPDATED_BG,
+    PULSE_MAJOR_BG,
+    TEXT,
+    WHITE,
+)
 
 NEW_FLASH_SECONDS = 3.0
 UPDATED_FLASH_SECONDS = 1.0
@@ -68,15 +77,15 @@ class Attention:
 @dataclass(frozen=True, slots=True)
 class RowStyle:
     bg: str
-    fg: str = "white"
+    fg: str = TEXT
     bold: bool = False
 
 
-FLASH_NEW = RowStyle("#0891b2", "white", True)
-DIM_NEW = RowStyle("#10343d")
-FLASH_UPDATED = RowStyle("#a16207", "white", True)
-PULSE_MAJOR = RowStyle("#b91c1c", "white", True)
-DIM_MAJOR = RowStyle("#5b2a05")
+FLASH_NEW = RowStyle(FLASH_NEW_BG, WHITE, True)
+DIM_NEW = RowStyle(DIM_NEW_BG)
+FLASH_UPDATED = RowStyle(FLASH_UPDATED_BG, WHITE, True)
+PULSE_MAJOR = RowStyle(PULSE_MAJOR_BG, WHITE, True)
+DIM_MAJOR = RowStyle(DIM_MAJOR_BG)
 
 
 class AttentionTracker:

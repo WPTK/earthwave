@@ -5,7 +5,7 @@ from textual.widgets import Static
 
 from earthwave.models import Earthquake
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import RED, mag_color
+from earthwave.ui.theme import RED, TEXT, mag_color
 
 MIN_PLACE = 8  # the place is shortened to fit the line, but never below this
 
@@ -32,7 +32,7 @@ class Ticker(Static):
         else:
             text = Text(" Latest major: ", style="grey62")
             text.append(f"M{quake.mag:.1f} ", mag_color(quake.mag))
-            place = Text(quake.place, "white")
+            place = Text(quake.place, TEXT)
             if self.size.width:
                 place.truncate(max(self.size.width - text.cell_len - tail.cell_len, MIN_PLACE), overflow="ellipsis")
             text.append_text(place)
