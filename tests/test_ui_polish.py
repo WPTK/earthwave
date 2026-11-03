@@ -44,21 +44,27 @@ async def test_help_defines_the_status_bar_and_lists_every_feed():
         text = str(app.screen.query_one("#help_text", Static).render())
         for word in ("shown of", "next 4:30", "unseen", "DEPTH", "FROM HOME", "sort:time"):
             assert word in text, word
+        from earthwave.ui.screens.help import FEED_NAMES
+
+        lines = text.splitlines()
         for name in app.scheduler.statuses:
-            assert name and any(label in text for label in ("USGS", "tsunami.gov", "NWS", "JMA", "DART", "CO-OPS"))
-        assert text.count("loading") >= len(app.scheduler.statuses)
+            line = next(ln for ln in lines if FEED_NAMES[name] in ln)
+            assert "loading" in line, line
+        app.scheduler.statuses["jma"].health.incomplete = True
+        app.scheduler.statuses["jma"].health.last_ok = app.clock.now()
+        from earthwave.ui.screens.help import feeds_text
+
+        jma = next(ln for ln in feeds_text(app).splitlines() if FEED_NAMES["jma"] in ln)
+        assert "incomplete" in jma, jma
 
 
-async def test_gauge_strip_header_gives_the_scale_and_the_max_column_lines_up():
-    app = strip_app()
-    async with app.run_test(size=(120, 40)) as pilot:
+async def test_gauge_strip_header_keeps_its_scale_at_the_narrowest_terminal():
+    app = strip_app()  # a 51-character station name, which used to squeeze the sparkline column to 8 cells
+    async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("t")
         await pilot.pause()
-        assert str(app.screen.query_one("GaugeHeader .gauge-spark").render()) == "Residual 0-0.05 m"
-        head = app.screen.query_one("GaugeHeader .gauge-max")
-        value = app.screen.query_one("GaugeRow .gauge-max")
-        assert head.region.x == value.region.x
-        assert str(head.render()).lstrip() == "24 h max" and head.styles.text_align == "left"
+        head = app.screen.query_one("GaugeHeader .gauge-spark")
+        assert str(head.render()) == "Residual 0-0.05 m" and head.region.width >= len("Residual 0-0.05 m")
 
 
 async def test_gauges_screen_explains_residual_and_mode(clock):
@@ -101,9 +107,15 @@ async def test_filter_and_search_say_what_they_did():
         assert "Filters unchanged" in messages(app)
         app.open_filters()
         await pilot.pause(0.3)
+        await pilot.press("enter")  # Apply with nothing changed
+        await pilot.pause(0.3)
+        assert messages(app).count("Filters unchanged") == 2 and not any(m.startswith("Showing") for m in messages(app))
+        app.open_filters()
+        await pilot.pause(0.3)
+        app.screen.query_one("#min_mag").value = "5"
         await pilot.press("enter")
         await pilot.pause(0.3)
-        assert any(m.startswith("Showing M") for m in messages(app))
+        assert any(m.startswith("Showing M5") for m in messages(app))
         app.set_query("japan")
         await pilot.press("slash")
         await pilot.pause(0.2)

@@ -18,7 +18,7 @@ from earthwave.ui.theme import CYAN, GREEN, RED, YELLOW
 MAX_POINTS = 240  # sparkline samples drawn per row; the "24 h max" summary reads every stored residual
 NAME_WIDTH = 26  # the least room a station name gets; a wider strip gives names the free width (see GaugeStrip)
 LABEL_REST = 32  # after the name: space, distance, mode, and the longest reading ("last batch 12h ago")
-OTHER_COLUMNS = 8 + 2 + 18  # the sparkline's minimum width, its margins, and the "24 h max" column
+OTHER_COLUMNS = 18 + 2 + 18  # the sparkline (wide enough for its "Residual (0-alert)" header), its margins, "24 h max"
 STALE_AFTER = timedelta(hours=1)  # a live gauge (6-minute, 1-minute, 15-second) silent this long is stale
 RESIDUAL_LAG = timedelta(hours=1)  # residuals this far behind the newest reading no longer describe the water now
 STALE_AFTER_BATCH = timedelta(hours=7)  # a 15-minute DART file arrives in batches, hours apart; 7 h is one past a gap
@@ -186,7 +186,7 @@ class GaugeStrip(Vertical):
     GaugeStrip > Horizontal { height: 1; }
     GaugeStrip > GaugeHeader { color: $text-muted; }
     GaugeStrip .gauge-spark { width: 1fr; min-width: 8; margin: 0 1; }
-    GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: left; }
+    GaugeStrip .gauge-max { width: 18; padding: 0 1; text-align: right; }
     GaugeStrip > .gauge-legend { color: $text-muted; margin-top: 1; height: auto; }
     GaugeStrip > .gauge-empty { color: $text-muted; }
     """

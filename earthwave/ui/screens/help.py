@@ -6,8 +6,8 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from earthwave.poll import Freshness
 from earthwave.ui.labels import fmt_age
+from earthwave.ui.widgets.status_bar import feed_word
 
 HELP_TEXT = """\
 [b]Keys[/b]
@@ -69,7 +69,7 @@ def feeds_text(app) -> str:
     for name in app.scheduler.statuses:
         fresh = app.scheduler.freshness(name)
         age = app.scheduler.age(name)
-        state = {Freshness.FRESH: "ok", Freshness.LOADING: "loading", Freshness.STALE: "stale"}.get(fresh, "failed")
+        state = feed_word(fresh, app.scheduler.statuses[name].health.incomplete)
         last = f", last good {fmt_age(age)} ago" if age is not None else ", no good answer yet"
         lines.append(f"  {FEED_NAMES.get(name, name):<20} {state}{last}")
     return "\n".join(lines) + "\n\n"

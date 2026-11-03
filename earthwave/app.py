@@ -609,6 +609,9 @@ class EarthwaveApp(App):
             if result is None:
                 self.notify("Filters unchanged", timeout=3)
                 return
+            if result == (self.view.min_magnitude, self.view.hours):
+                self.notify("Filters unchanged", timeout=3)
+                return
             self.apply_filters(*result)
             self.notify(f"Showing {filter_summary(self.view)}", timeout=3)
 
