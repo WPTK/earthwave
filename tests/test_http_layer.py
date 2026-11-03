@@ -404,3 +404,139 @@ async def test_parallel_first_requests_share_one_in_memory_connection(clock, cap
         with caplog.at_level(logging.WARNING, logger="earthwave.net"):
             got = await asyncio.gather(*(client.get(f"https://example.test/{i}") for i in range(8)))
     assert [g.status_code for g in got] == [200] * 8 and "http cache failed" not in caplog.text
+
+
+# --- one entry, several requests, one deadline ---------------------------------------------------------------------
+
+CAP_URL = "https://www.tsunami.gov/events/PAAQ/2026/10/25/tnfxzn/1/WEAK53/PAAQCAP.xml"
+BULLETIN_URL = CAP_URL.replace("PAAQCAP.xml", "WEAK53.txt")
+
+
+def _tsunami_entry():
+    return {"id": "PAAQ-1-tnfxzn", "cap_url": CAP_URL, "bulletin_url": BULLETIN_URL}
+
+
+def _entry_world(clock, handler):
+    """A client whose answers take simulated time, and the source that reads one entry through it."""
+    from conftest import FIXTURES
+
+    from earthwave.sources import tsunamigov
+
+    sleeps = _ticking(clock)
+    cap = (FIXTURES / "tsunamigov" / "PAAQ_0.cap.xml").read_text(encoding="utf-8")
+    bulletin = (FIXTURES / "tsunamigov" / "PAAQ_0.txt").read_text(encoding="utf-8")
+    tries: dict[str, int] = {}
+
+    def wrapped(request, n):
+        url = str(request.url)
+        tries[url] = tries.get(url, 0) + 1
+        return handler(request, url, tries[url], cap, bulletin)
+
+    client, _ = _client(clock, wrapped)
+    return client, tsunamigov.TsunamiGovSource(clock), tries, sleeps
+
+
+async def test_a_tsunami_entry_ends_on_an_httpx_error_inside_the_limit_and_never_counts(clock):
+    from earthwave.sources.base import ENTRY_LIMIT
+    from earthwave.sources.tsunamigov import permanent, stalled
+
+    def handler(request, url, n, cap, bulletin):
+        if url == CAP_URL:
+            if n == 1:
+                clock.advance(10.0)  # the first connect times out after its 10 s
+                raise httpx.ConnectTimeout("slow", request=request)
+            return httpx.Response(200, text=cap)
+        clock.advance(10.0)  # the bulletin never connects
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    client, source, tries, _ = _entry_world(clock, handler)
+    alerts: list = []
+    start = clock.monotonic()
+    async with client:
+        assert await source._entry(client, _tsunami_entry(), alerts) is False
+    assert clock.monotonic() - start < ENTRY_LIMIT
+    assert tries[CAP_URL] == 2 and tries[BULLETIN_URL] == 1  # the bulletin had no room left for a retry
+    assert len(alerts) == 1 and source._failures == {}  # the CAP's alert is shown; nothing counted toward giving up
+    assert not stalled(httpx.ConnectTimeout("x")) and not permanent(httpx.ConnectTimeout("x"))
+
+
+async def test_a_tsunami_entry_with_ten_second_retry_afters_ends_inside_the_limit_and_never_counts(clock):
+    from earthwave.sources.base import ENTRY_LIMIT
+
+    def handler(request, url, n, cap, bulletin):
+        if url == CAP_URL:
+            return httpx.Response(429, headers={"Retry-After": "10"}) if n < 3 else httpx.Response(200, text=cap)
+        return httpx.Response(503, headers={"Retry-After": "10"})
+
+    client, source, _tries, sleeps = _entry_world(clock, handler)
+    alerts: list = []
+    start = clock.monotonic()
+    async with client:
+        assert await source._entry(client, _tsunami_entry(), alerts) is False
+    assert clock.monotonic() - start < ENTRY_LIMIT and sum(sleeps) < ENTRY_LIMIT - net.ENTRY_MARGIN
+    assert source._failures == {}
+
+
+async def test_the_first_try_of_the_second_request_is_cut_inside_the_entry_limit(clock):
+    """A request that hangs is ended with an httpx timeout before the entry's own limit fires as a builtin one."""
+    import asyncio
+
+    from earthwave.sources.base import ENTRY_LIMIT
+
+    def handler(request, url, n, cap, bulletin):
+        raise AssertionError("not reached")
+
+    client, _source, _, _ = _entry_world(clock, handler)
+
+    async def hang(request):
+        await asyncio.sleep(3600)
+
+    client._transport._retrying._inner = httpx.MockTransport(hang)
+    clock.monotonic = lambda: 0.0  # real time passes in the wait; the deadline is read off this frozen clock
+    async with client, net.entry_deadline(clock, 0.3):
+        with pytest.raises(httpx.TimeoutException):
+            async with asyncio.timeout(5):
+                await client.get(CAP_URL)
+    assert ENTRY_LIMIT > net.ENTRY_MARGIN
+
+
+async def test_the_refetch_after_a_cache_failure_uses_what_is_left_of_the_budget(clock, tmp_path):
+    ticks = _ticking(clock)
+
+    def handler(request, n):
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    client, seen = _client(clock, handler, tmp_path / "h.sqlite")
+    transport = client._transport
+
+    async def broken(request):
+        clock.advance(20.0)  # the cached try used most of the budget, then the cache itself failed
+        raise sqlite3.OperationalError("disk I/O error")
+
+    transport._cached.handle_async_request = broken
+    async with client:
+        with pytest.raises(httpx.TimeoutException):
+            await client.get("https://example.test/f")
+    assert len(seen) <= 1 and sum(ticks) == 0  # no fresh 22 s: at most the first try, and no retry
+
+
+async def test_a_jma_report_that_times_out_is_an_outage_and_never_counts(clock):
+    from earthwave.sources import jma
+    from earthwave.sources.base import ENTRY_LIMIT
+
+    sleeps = _ticking(clock)
+
+    def handler(request, n):
+        clock.advance(10.0)
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    client, seen = _client(clock, handler)
+    source = jma.JmaSource(clock)
+    entry = {"json": "20261101_x.json", "rdt": clock.now().isoformat()}
+    start = clock.monotonic()
+    async with client:
+        for _ in range(jma.MAX_ENTRY_FAILURES + 2):
+            clock.advance(0.0)
+            assert await source._report(client, entry, clock.now(), {}, [], []) is False
+    assert source._failures == {} and clock.monotonic() - start < ENTRY_LIMIT * (jma.MAX_ENTRY_FAILURES + 2)
+    assert sleeps is not None and len(seen) >= jma.MAX_ENTRY_FAILURES
