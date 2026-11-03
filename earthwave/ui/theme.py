@@ -9,7 +9,6 @@ from earthwave.poll import Freshness
 
 # ANSI "yellow" is not yellow on screen: Textual maps the sixteen ANSI colours through its own terminal theme (Monokai),
 # where yellow is (253,151,31), orange, next to dark_orange. Anything that must read as yellow uses this truecolor.
-# app.tcss defines the same value as $watch.
 YELLOW = "#ffd700"
 
 # The status colours differ in lightness as well as hue, so a red-green colour-blind reader still tells adjacent bands
@@ -27,13 +26,21 @@ BORDER = "#5b93d3"
 # lifts its foregrounds with lift() instead of darkening further (it must stay tellable from the #1e1e1e ground).
 CURSOR_BG = "#1e3a5f"
 INFO_VIOLET = "#9682e6"
-# Text colours, truecolor so a terminal's own ANSI theme (a light profile's white is not Monokai's) cannot change them.
-# TEXT, INK and BRIGHT are what the ANSI names "white", "black" and "bright_white" rendered as under Textual's Monokai.
-TEXT = "#c4c5b5"
-INK = "#1a1a1a"
-BRIGHT = "#f6f6ef"
-BLACK = "#000000"  # text on the loudest grounds (the Warning banner and status bar)
-WHITE = "#ffffff"
+# Text colours, truecolor so no terminal ANSI theme can change them. TEXT, INK and BRIGHT are what the ANSI names
+# "white", "black" and "bright_white" rendered as under Textual's Monokai, which the app uses on every profile. The app
+# has no light theme (it paints its own dark ground under every cell), so none of these has a light-ground counterpart.
+TEXT = "#c4c5b5"  # body words on the dark ground
+INK = "#1a1a1a"  # words on the status chips (lit grounds)
+BRIGHT = "#f6f6ef"  # the home marker on the map
+BLACK = "#000000"  # words on the loudest grounds: the Warning banner and status bar
+WHITE = "#ffffff"  # words on the cursor and button grounds, the focused input's border
+TITLE = "#e0e0e0"  # panel titles, which the level border colours cannot carry
+# Row flashes (notify/inapp.py): the lit grounds carry WHITE (4.5:1), the calm ones TEXT
+FLASH_NEW_BG = "#067b97"
+DIM_NEW_BG = "#10343d"
+FLASH_UPDATED_BG = "#a16207"
+PULSE_MAJOR_BG = "#b91c1c"
+DIM_MAJOR_BG = "#5b2a05"
 
 
 def mag_color(mag: float) -> str:
@@ -78,14 +85,14 @@ LEVEL_COLORS = {
 # Surfaces that carry a level (banner, status bar, panel border) take their colour from the same constants, as these
 # variables for app.tcss (EarthwaveApp.get_css_variables adds them): the bare name is the pulsing border and the banner
 # (black text), -dim the calm border and status-bar ground (white text). A Warning must be the loudest thing on screen
-# (issues #152, #192), so its dim ground is a bright red and the other four are deep enough for white text; with five
-# grounds that cannot also be eight CIE units apart under protanopia, so tests/test_cvd_palette.py pins Warning against
-# each other ground at dE >= 20 and the other pairs at >= 10 (the level word is printed on every surface).
+# (issues #152, #192), so its dim ground is a bright red and the other four are deep enough for white text (4.5:1) while
+# still 20 CIE units apart from one another and from the Warning under protanopia and deuteranopia
+# (tests/test_cvd_palette.py). The level word is printed on every surface as well.
 LEVEL_SURFACES = {
     "warning": (RED, "#e85641"),
-    "advisory": (ORANGE, "#613013"),
-    "watch": (YELLOW, "#5c4300"),
-    "threat": (THREAT_BLUE, "#4c7999"),
+    "advisory": (ORANGE, "#55281d"),
+    "watch": (YELLOW, "#5e4100"),
+    "threat": (THREAT_BLUE, "#577484"),
     "info": (INFO_VIOLET, "#7f6ab0"),
 }
 
@@ -95,8 +102,11 @@ def ground_variables() -> dict[str, str]:
     return {
         "border": BORDER,
         "cursor": CURSOR_BG,
-        "bright": "#ffffff",  # white text on the cursor and button grounds, the focused input's border
-        "title": "#e0e0e0",  # panel titles, which the level border colours cannot carry
+        "bright": WHITE,
+        "title": TITLE,
+        "ink": INK,
+        "text": TEXT,
+        "black": BLACK,
         "button": "#2f4663",
         "button-primary": "#1d5fa8",
     }

@@ -35,7 +35,7 @@ from earthwave.ui.graphics.raster import Palette, Scene, Shape
 from earthwave.ui.graphics.sixel import HOLE, RGB, encode
 from earthwave.ui.graphics.smooth import render_smooth
 from earthwave.ui.labels import fmt_age
-from earthwave.ui.theme import BRIGHT, LEVEL_COLORS, TEXT, mag_color
+from earthwave.ui.theme import BRIGHT, LEVEL_COLORS, mag_color
 from earthwave.ui.widgets.braille import (
     WORLD,
     Viewport,
@@ -233,7 +233,7 @@ def _level_style(mark: TsunamiMark, tracker: AttentionTracker | None) -> Style:
     key = TSUNAMI_PREFIX + mark.alert_id
     if tracker is not None and tracker.kind_of(key) is not None:
         flash = tracker.style_for(key)
-        style = Style(color=TEXT, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
+        style = Style(color=flash.fg, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
     return style
 
 
@@ -296,7 +296,7 @@ def _marker_style(quake: Earthquake, selected: bool, tracker: AttentionTracker |
     if tracker is not None and tracker.kind_of(quake.id) is not None:
         attended = True
         flash = tracker.style_for(quake.id)
-        style = Style(color=TEXT, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
+        style = Style(color=flash.fg, bgcolor=flash.bg, bold=True) if flash is not None else style + Style(bold=True)
     if selected:
         style = Style(color=style.color, bold=True, reverse=True)
     return style, attended
