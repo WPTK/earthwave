@@ -291,6 +291,19 @@ class QuakeList(ScrollView, can_focus=True):
     def action_cursor_last(self) -> None:
         self._move(len(self.rows) - 1)
 
+    def reveal(self, quake: Earthquake) -> bool:
+        """Put the cursor on `quake`, opening its aftershock group first if it is folded away. False when the view
+        does not hold it."""
+        main = self._children.get(quake.id)
+        if main is not None and main not in self._expanded:
+            self._expanded.add(main)
+            self.set_rows(self._source)
+        index = next((i for i, q in enumerate(self.rows) if q.id == quake.id), None)
+        if index is None:
+            return False
+        self._move(index)
+        return True
+
     def action_select(self) -> None:
         if (quake := self.selected) is not None:
             self.post_message(self.Selected(quake))

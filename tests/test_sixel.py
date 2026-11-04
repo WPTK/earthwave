@@ -6,6 +6,7 @@ import random
 import pytest
 from sixel_decode import decode
 from test_ui import wait_for, week_app
+from textual._compositor import ChopsUpdate
 
 from earthwave.config import Config, ConfigError, parse_config
 from earthwave.ui.graphics.probe import (
@@ -216,7 +217,7 @@ async def test_sixel_panel_draws_image_once_then_stays_quiet():
         panel.emit_image(again.append)
         assert again == []
         # Textual repainting the cells erases the picture, so it is sent again
-        panel.render_lines(region)
+        panel.note_update(ChopsUpdate([], [(region.y + 1, region.x, region.right)], []))
         panel.emit_image(again.append)
         assert again
 

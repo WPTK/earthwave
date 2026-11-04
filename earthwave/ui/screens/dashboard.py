@@ -340,6 +340,16 @@ class DashboardScreen(Screen):
         app.set_query(query)
         self._focus_main()
 
+    def on_map_panel_picked(self, event: MapPanel.Picked) -> None:
+        self.query_one(QuakeList).reveal(event.quake)
+
+    @property
+    def allow_select(self) -> bool:
+        """Textual repaints the whole screen when a mouse press starts a text selection and again when the release
+        clears it. Over a sixel map that erases the picture, which is then drawn again: a flash on every click anywhere.
+        The dashboard has no use for selecting text, so with the picture on it does not offer selection."""
+        return self.earthwave.graphics.renderer != "sixel"
+
     def on_quake_list_highlighted(self, event: QuakeList.Highlighted) -> None:
         self.query_one(MapPanel).select(event.quake)
 

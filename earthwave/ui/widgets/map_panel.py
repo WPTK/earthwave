@@ -17,9 +17,11 @@ from functools import lru_cache, partial
 
 from rich.segment import Segment
 from rich.style import Style
+from textual._compositor import ChopsUpdate
 from textual.binding import Binding
-from textual.events import Resize
+from textual.events import Click, Resize
 from textual.geometry import Region
+from textual.message import Message
 from textual.strip import Strip
 from textual.timer import Timer
 from textual.widget import Widget
@@ -41,10 +43,12 @@ from earthwave.ui.widgets.braille import (
     Viewport,
     coastline_canvas,
     dot_raster,
+    project,
     project_cell,
     render_ascii,
     unproject,
     warm_coastline,
+    wrap_lon,
 )
 from earthwave.ui.widgets.map_labels import place_labels
 
@@ -426,6 +430,36 @@ class MapModel:
             self.pan_lon = self.pan_lat = 0
         self.selected = quake
 
+    def quake_at(self, col: int, row: int, cell: tuple[int, int] | None = None) -> Earthquake | None:
+        """The quake whose dot the map cell (`col`, `row`) shows, the nearest if several; None for empty sea.
+
+        `cell` is the pixel size of a cell when the map is a sixel picture (dots are discs of `MARKER_RADIUS` cell
+        widths, projected at pixel resolution); None for the braille map, where a dot fills the one cell it projects
+        to. A dot is hit when the cell's rectangle comes within a quarter of a cell width of it.
+        """
+        rows = self.map_rows
+        if not (0 <= col < self.cols and 0 <= row < rows):
+            return None
+        cw, ch = cell or (2, 4)  # braille: a cell is 2 dots wide and 4 tall
+        view = self.view()
+        left, top = col * cw, row * ch
+        best: tuple[float, Earthquake] | None = None
+        for quake in self.quakes:
+            lon = wrap_lon(quake.lon, view)
+            if lon > view.lon1 or not view.lat0 <= quake.lat <= view.lat1:
+                continue
+            x, y = project(lon, quake.lat, view, self.cols * cw, rows * ch)
+            if cell is None:  # a dot is drawn in the cell it falls in
+                x, y = (round(x) // 2) * 2 + 1, (round(y) // 4) * 4 + 2
+            radius = cw * MARKER_RADIUS[marker_band(quake.mag)] if cell else 0.0
+            gap = math.hypot(max(left - x, 0, x - (left + cw)), max(top - y, 0, y - (top + ch)))
+            if gap > radius + cw * 0.25:
+                continue
+            distance = math.hypot(x - (left + cw / 2), y - (top + ch / 2))
+            if best is None or (distance, -quake.mag) < (best[0], -best[1].mag):
+                best = (distance, quake)
+        return best[1] if best else None
+
     def cycle_zoom(self) -> ZoomMode:
         """World -> wide -> region -> close -> world. Each step recentres on the selected quake; with none, on the
         point the map is panned to, else home, else the latest major quake (no quake at all: it stays on the world)."""
@@ -698,6 +732,20 @@ class MapPanel(Widget, can_focus=True):
         self._holes: tuple[tuple[int, int, int, int], ...] = ()  # cell rectangles of toasts over the image
         self._rgb_cache: dict[tuple[str, int], RGB] = {}
 
+    def note_update(self, update: object) -> None:
+        """A screen update is about to be written to the terminal: if it covers cells under the picture, the picture is
+        gone and the next `emit_image` sends it again. Only what is written counts. Textual renders the whole widget
+        for a change to any of its lines, and for every mouse event to find the style under it; neither touches the
+        terminal."""
+        if not self._sixel or self._stale:
+            return
+        if isinstance(update, ChopsUpdate):  # the lines and column spans of the cells being written
+            region = self.content_region
+            bottom = region.y + self.model.map_rows
+            if not any(region.y <= y < bottom and x1 < region.right and x2 > region.x for y, x1, x2 in update.spans):
+                return
+        self._stale = True
+
     @property
     def renderer(self) -> str:
         return "sixel" if self._sixel else "braille"
@@ -765,6 +813,20 @@ class MapPanel(Widget, can_focus=True):
         if list(marks) != list(self.model.tsunami):
             self.model.set_tsunami(marks)
             self.refresh()
+
+    class Picked(Message):
+        """A quake's dot was clicked."""
+
+        def __init__(self, quake: Earthquake):
+            super().__init__()
+            self.quake = quake
+
+    def on_click(self, event: Click) -> None:
+        offset = event.get_content_offset(self)
+        if offset is None or self.model.cols < 1:
+            return
+        if (quake := self.model.quake_at(offset.x, offset.y, self._cell if self._sixel else None)) is not None:
+            self.post_message(self.Picked(quake))
 
     def action_cycle_zoom(self) -> None:
         self.model.cycle_zoom()
@@ -1004,17 +1066,10 @@ class MapPanel(Widget, can_focus=True):
             self._repaint_rows(min(top, before_top), self.model.rows)
         self._spare_top = top
 
-    def render_lines(self, crop):
-        gutter = self.gutter
-        if self._sixel and crop.y < gutter.top + self.model.map_rows and crop.bottom > gutter.top:
-            self._stale = True  # the compositor is about to write these cells (even from its cache), erasing the image
-        return super().render_lines(crop)
-
     def render_line(self, y: int) -> Strip:
         if self._sixel:
             if y >= self.model.map_rows:
                 return self._spare_row(y - self.model.map_rows)
-            self._stale = True  # these cells are about to be written, which erases the image under them
             return Strip.blank(self.size.width, self.rich_style)
         if self._frame is None:
             self._frame = self.model.frame()
