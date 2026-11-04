@@ -377,6 +377,25 @@ async def test_click_the_map_gives_it_focus_so_the_arrows_pan():
         assert Snap.take(app).pan != before.pan
 
 
+async def test_click_a_map_dot_selects_its_quake():
+    app = build("week")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause(0.2)
+        panel, quakes = app.screen.query_one(MapPanel), app.screen.query_one(QuakeList)
+        model = panel.model
+        start = quakes.selected
+        spot = next(
+            (c, r, q)
+            for r in range(model.map_rows)
+            for c in range(model.cols)
+            if (q := model.quake_at(c, r)) is not None and q is not start
+        )
+        origin = panel.content_region.offset
+        await pilot.click(offset=(origin.x + spot[0], origin.y + spot[1]))
+        await pilot.pause(0.2)
+        assert quakes.selected is spot[2]
+
+
 async def test_click_the_filter_buttons():
     for button, applied in (("#cancel", False), ("#apply", True)):
         app = build("week")
@@ -471,6 +490,7 @@ CLICK_CASES = {
     "click:HistoryList": "test_click_a_history_row_selects_it_and_it_sticks",
     "click:QuakeList#quakes": "test_click_a_quake_row_selects_it_and_it_sticks_through_refresh",
     "click:HistoryList#history_list": "test_click_a_history_row_selects_it_and_it_sticks",
+    "click:MapPanel": "test_click_a_map_dot_selects_its_quake",
     "click:MapPanel#map": "test_click_the_map_gives_it_focus_so_the_arrows_pan",
     "click:Button#apply": "test_click_the_filter_buttons",
     "click:Button#cancel": "test_click_the_filter_buttons",

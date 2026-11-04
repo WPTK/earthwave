@@ -235,6 +235,13 @@ class EarthwaveApp(App):
         for panel in self.dashboard.query(MapPanel):
             panel.set_cell(cell)
 
+    def _display(self, screen, renderable) -> None:
+        """Tell the map pictures which cells this update writes, before it writes them."""
+        if self.graphics.renderer == "sixel" and renderable is not None and screen is self.screen:
+            for panel in screen.query(MapPanel):
+                panel.note_update(renderable)
+        super()._display(screen, renderable)
+
     def _end_update(self) -> None:
         """Textual brackets each screen update in a synchronized update; overlays draw inside it, so the cells and the
         image they sit on appear together."""

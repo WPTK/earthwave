@@ -87,6 +87,7 @@ saved history are in [`docs/features.md`](docs/features.md). Setup, checks and r
 | `f` `s` `/` | filters, sort, search |
 | `g` `Space` | group aftershocks under their mainshock; open or close the group under the cursor |
 | `m` `z` | show or hide the map, zoom it |
+| click a dot | select that quake in the list (opening its aftershock group if it is folded) |
 | `t` `o` `h` | tsunami alerts and bulletins; sea-level gauges; history by day |
 | `a` `r` | acknowledge alerts; refresh now |
 | `Ctrl+P` | command palette: every action by name, and Set home location |
