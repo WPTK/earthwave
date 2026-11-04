@@ -4,12 +4,12 @@ earthwave is a terminal app for following earthquakes and tsunami alerts. It sho
 a world map and in a detail screen, and it watches the tsunami warning centres and sea-level gauges so you can see an
 alert next to what the water is actually doing. It uses only free public feeds that need no key or account.
 
-![earthwave replaying a recorded Kamchatka earthquake: a tsunami watch, then a warning, then the quake in the list and on the map](docs/img/demo.svg)
+![earthwave replaying a recorded Kamchatka earthquake: a tsunami watch, then a warning, then the quake in the list and on the map](https://raw.githubusercontent.com/WPTK/earthwave/main/docs/img/demo.svg)
 
 *Recorded data, not live: the app replaying a saved session with `--replay`.*
 
-This is a 0.x release. It works and is tested, but it is young, and details such as key bindings and the config file may
-still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md).
+earthwave uses 0.x version numbers: details such as key bindings and the config file may change between minor
+versions. See [`CHANGELOG.md`](https://github.com/WPTK/earthwave/blob/main/CHANGELOG.md).
 
 ## Install
 
@@ -37,7 +37,7 @@ python -m pip install git+https://github.com/WPTK/earthwave.git@TAG     # inside
 
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
 download against `SHA256SUMS` from the same release. The platforms CI covers are listed in
-[`docs/development.md`](docs/development.md#platforms); older Windows versions and the legacy console host are not tested.
+[`docs/development.md`](https://github.com/WPTK/earthwave/blob/main/docs/development.md#platforms); older Windows versions and the legacy console host are not tested.
 
 **Check the install** with `earthwave --version` and `earthwave --selftest`. The self-test imports five dependencies,
 parses the bundled sample feeds, renders one screen without a terminal, prints `selftest: ok` and exits 0. It does not
@@ -72,9 +72,9 @@ For example, `earthwave --min-mag 4.5 --hours 72 --home 40.7,-74.0`.
 | `--version`, `--selftest` | see "Check the install" |
 
 Config keys, home location, file paths, environment variables, proxies and the map renderer are in
-[`docs/configuration.md`](docs/configuration.md). Aftershock grouping, tsunami banners and notifications, replay and the
-saved history are in [`docs/features.md`](docs/features.md). Setup, checks and releases are in
-[`docs/development.md`](docs/development.md).
+[`docs/configuration.md`](https://github.com/WPTK/earthwave/blob/main/docs/configuration.md). Aftershock grouping, tsunami banners and notifications, replay and the
+saved history are in [`docs/features.md`](https://github.com/WPTK/earthwave/blob/main/docs/features.md). Setup, checks and releases are in
+[`docs/development.md`](https://github.com/WPTK/earthwave/blob/main/docs/development.md).
 
 ## Keys
 
@@ -115,7 +115,7 @@ Run `earthwave --diagnose` and paste its output into an issue at
 
 ## Licence
 
-[MIT](LICENSE)
+[MIT](https://github.com/WPTK/earthwave/blob/main/LICENSE)
 
 The release binary bundles third-party libraries under their own licences: hishel and anysqlite (BSD-3-Clause), stamina,
 Textual and Rich (MIT), tenacity and msgpack (Apache-2.0), and httpx (BSD-3-Clause). The licence texts of these

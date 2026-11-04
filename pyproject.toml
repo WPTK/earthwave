@@ -8,9 +8,23 @@ dynamic = ["version"]
 description = "Earthquakes and tsunami alerts in your terminal. Live USGS quakes, tsunami warnings and sea-level readings."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [{ name = "Bill Kane" }]
 keywords = ["earthquake", "tsunami", "usgs", "tui", "terminal", "textual"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Terminals",
+]
 
 dependencies = [
     "textual>=8.2,<9",
@@ -23,6 +37,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/WPTK/earthwave"
+Repository = "https://github.com/WPTK/earthwave"
 Issues = "https://github.com/WPTK/earthwave/issues"
 Changelog = "https://github.com/WPTK/earthwave/blob/main/CHANGELOG.md"
 
