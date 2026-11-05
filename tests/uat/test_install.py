@@ -1,7 +1,6 @@
 """J2/J3: the install lines in the README, run literally in a clean virtual environment.
 
-``UAT_INSTALL=1`` runs them (network: pip fetches the repository from GitHub; the test records the commit pip resolved,
-because "installs from main" is only meaningful with the commit named). ``UAT_PY312=<path to a python3.12>`` adds the
+``UAT_INSTALL=1`` runs them (network: pip fetches earthwave from PyPI). ``UAT_PY312=<path to a python3.12>`` adds the
 Python 3.12 case. Without the variables the tests skip; the README-text tests always run.
 """
 
@@ -29,8 +28,8 @@ def install_section() -> str:
 
 
 def literal_pip_line() -> list[str]:
-    """The pip command exactly as the README prints it (the `pip install git+...` inline code)."""
-    m = re.search(r"`(pip install git\+https://[^`\s]+)`", install_section())
+    """The pip command exactly as the README prints it (the `python -m pip install earthwave` line)."""
+    m = re.search(r"^python -m (pip install earthwave)", install_section(), re.M)
     assert m, "the README has no literal pip install line"
     return m[1].split()
 
@@ -52,10 +51,8 @@ def clean_venv(tmp: Path, python: str | None = None) -> Path:
 def test_j2_readme_pip_line_installs_a_working_app(tmp_path: Path) -> None:
     bin_dir = clean_venv(tmp_path)
     line = literal_pip_line()
-    got = run([str(bin_dir / "python"), "-m", *line[:1], *line[1:]])
+    got = run([str(bin_dir / "python"), "-m", *line])
     assert got.returncode == 0, got.stdout[-1500:] + got.stderr[-1500:]
-    sha = re.search(r"commit ([0-9a-f]{40})", got.stdout + got.stderr)
-    print(f"\ninstalled {' '.join(line)} resolved to commit {sha[1] if sha else 'unknown (pip did not say)'}")
     exe = bin_dir / ("earthwave.exe" if sys.platform == "win32" else "earthwave")
     for flag in ("--version", "--selftest"):
         r = run([str(exe), flag])

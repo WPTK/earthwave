@@ -27,13 +27,21 @@ def test_ci_tests_the_python_floor():
     assert f'python: "{floor}"' in ci
 
 
-def test_install_commands_name_no_release_and_say_to_use_the_latest():
+def test_install_section_leads_with_pypi():
+    section = _install_section()
+    first = "pipx install earthwave\n"
+    assert first in section
+    assert section.index(first) < section.index("git+https")
+    assert "pipx upgrade earthwave" in section
+    assert "pipx uninstall earthwave" in section
+
+
+def test_source_install_names_no_release_and_uses_the_tag_placeholder():
     section = _install_section()
     assert not re.findall(r"\bv\d+\.\d+\.\d+\b", section), "the install section names no fixed release tag"
-    assert "latest release" in section
     assert "`TAG`" in section
     urls = re.findall(r"earthwave\.git\S*", section)
-    assert urls and all(u == "earthwave.git@TAG" for u in urls), "every install URL carries the @TAG placeholder"
+    assert urls and all(u == "earthwave.git@TAG" for u in urls), "every source install URL carries the @TAG placeholder"
 
 
 def test_readme_asset_names_match_the_release_workflow():
