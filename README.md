@@ -13,20 +13,30 @@ versions. See [`CHANGELOG.md`](https://github.com/WPTK/earthwave/blob/main/CHANG
 
 ## Install
 
-Pick one. The first two need Python 3.12 or newer; the binary needs none. Install the latest release: replace `TAG`
-with its tag from [Releases](https://github.com/WPTK/earthwave/releases). Without `@TAG` the commands build `main`, which
-can be ahead of the latest release.
+Pick one. The first needs Python 3.12 or newer; the binary needs none. earthwave is on
+[PyPI](https://pypi.org/project/earthwave/).
 
-**With uv, pipx or pip.** uv fetches Python 3.12 if you lack it. On an older Python, pip refuses with
+**From PyPI.** uv fetches Python 3.12 if you lack it. On an older Python, pip refuses with
 `requires a different Python`; use uv or the binary.
 
 ```
-uv tool install --python 3.12 git+https://github.com/WPTK/earthwave.git@TAG
-pipx install --python python3.12 git+https://github.com/WPTK/earthwave.git@TAG
-python -m pip install git+https://github.com/WPTK/earthwave.git@TAG     # inside a virtual environment
+pipx install earthwave
+uv tool install earthwave
+python -m pip install earthwave     # inside a virtual environment
 ```
 
-**Release binary.** Download the file for your system from the latest release (names carry the tag):
+To upgrade, run `pipx upgrade earthwave` or `uv tool upgrade earthwave`. To remove it, run `pipx uninstall earthwave`
+or `uv tool uninstall earthwave`.
+
+**From source (development version).** This builds `main`, which can be ahead of the latest release. To pin a release
+instead, replace `TAG` with its tag from [Releases](https://github.com/WPTK/earthwave/releases).
+
+```
+pipx install git+https://github.com/WPTK/earthwave.git@TAG
+```
+
+**Release binary.** Download the file for your system from the latest
+[release](https://github.com/WPTK/earthwave/releases) (names carry the tag, shown here as `TAG`):
 
 - Windows: `earthwave-TAG-windows-x86_64.exe`. Save it in a folder on your `PATH` and rename it to `earthwave.exe`.
 - Linux x86-64: `earthwave-TAG-linux-x86_64.tar.gz`. Unpack it and put `earthwave` on your `PATH`:
