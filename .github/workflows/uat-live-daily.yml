@@ -34,9 +34,9 @@ jobs:
       # a scheduled run does only its own cell; a manual run does both
       RUN_ME: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == matrix.cron }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.RUN_ME == 'true'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: env.RUN_ME == 'true'
         with:
           python-version: "3.13"
@@ -48,14 +48,14 @@ jobs:
       - name: One real capture, kept for the corpus (tests/uat/test_corpus.py replays every saved capture)
         if: always() && env.RUN_ME == 'true'
         run: python scripts/uat/capture.py capture/${{ matrix.os }}-capture.jsonl 60
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && env.RUN_ME == 'true'
         with:
           name: uat-capture-${{ matrix.os }}
           path: capture
           if-no-files-found: ignore
           retention-days: 90
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && env.RUN_ME == 'true'
         with:
           name: uat-live-${{ matrix.os }}
