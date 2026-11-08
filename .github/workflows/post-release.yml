@@ -1,12 +1,13 @@
 name: Post-release smoke
 
-# Downloads the PUBLISHED release assets by their public URLs, on the OS each one is built for, verifies them against the
-# published SHA256SUMS and runs them. Release.yml tests the binary before upload; this tests what users actually get.
+# Downloads the PUBLISHED release assets by their public URLs, verifies them against the published SHA256SUMS and their
+# build attestations, and runs each binary on the OS and CPU it is built for. Release.yml tests the binary before upload;
+# this tests what users actually get.
 #
 # A release made with GITHUB_TOKEN does not fire `release: published` for other workflows, so this follows the Release
 # workflow instead. It can also be started by hand for an existing tag (Actions > Post-release smoke > Run workflow).
-# v0.2.0 and earlier lack --diagnose and the fixed spec (--selftest prints SKIPPED), so they fail on purpose; the first
-# tag expected to pass is the next release.
+# v0.2.0 and earlier lack --diagnose, the fixed spec (--selftest prints SKIPPED), the Linux arm64 and macOS Intel
+# binaries and build attestations, so they fail on purpose; the first tag expected to pass is the next release.
 on:
   workflow_run:
     workflows: [Release]
@@ -21,83 +22,84 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  tag:
+    name: Resolve the tag
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-2025
-            name: windows-x86_64
-            ext: exe
-          - os: ubuntu-24.04
-            name: linux-x86_64
-            ext: tar.gz
-          - os: macos-15
-            name: macos-arm64
-            ext: tar.gz
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      version: ${{ steps.t.outputs.version }}
+    steps:
+      - id: t
+        env:
+          # head_branch of a workflow_run started by a tag push is the tag name.
+          TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # The shared workflow downloads every published file, checks SHA256SUMS and each attestation (signed by this
+  # repository's release.yml), then runs each binary on a runner of its own kind with nothing of ours installed.
+  published:
+    name: Published files and binaries
+    needs: tag
+    permissions:
+      contents: read
+      attestations: read
+    uses: WPTK/release-workflows/.github/workflows/verify-published.yml@48ad720b496558ebdf47c0a0529475b6bf3b4517 # v0.1.0
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+      app: earthwave
+      asset-prefix: earthwave-${{ needs.tag.outputs.tag }}
+      verify-attestations: true
+      expected-files: |
+        earthwave-${{ needs.tag.outputs.tag }}-windows-x86_64.exe
+        earthwave-${{ needs.tag.outputs.tag }}-linux-x86_64.tar.gz
+        earthwave-${{ needs.tag.outputs.tag }}-linux-arm64.tar.gz
+        earthwave-${{ needs.tag.outputs.tag }}-macos-arm64.tar.gz
+        earthwave-${{ needs.tag.outputs.tag }}-macos-x86_64.tar.gz
+      smoke-command: |
+        version=$("$BIN" --version)
+        echo "$version"
+        [ "$version" = "earthwave ${{ needs.tag.outputs.version }}" ] || { echo "::error::--version says '$version', expected ${{ needs.tag.outputs.version }}"; exit 1; }
+        "$BIN" --selftest | tee selftest.txt
+        if grep -q SKIPPED selftest.txt; then echo "::error::--selftest skipped checks in the published binary"; exit 1; fi
+        grep -q "selftest: ok" selftest.txt
+        "$BIN" --diagnose --offline
+
+  # Windows only: the real-input suite (ConPTY, real keystrokes) against the published exe. The suite checks the exe
+  # against the SHA256SUMS next to it. Not yet seen running in CI; it does not block the smoke verdict until it is.
+  realinput:
+    name: Real-input suite (Windows)
+    needs: tag
+    runs-on: windows-2025
     timeout-minutes: 20
+    continue-on-error: true
     env:
-      # head_branch of a workflow_run started by a tag push is the tag name.
-      TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
+      TAG: ${{ needs.tag.outputs.tag }}
     defaults:
       run:
         shell: bash
     steps:
-      - name: Check the tag
-        run: |
-          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
-      # Before anything is downloaded: checkout cleans the workspace. Windows only, for the real-input suite below.
-      - uses: actions/checkout@v7
-        if: matrix.ext == 'exe'
+      # Before anything is downloaded: checkout cleans the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.tag.outputs.tag }}
           persist-credentials: false
-      - uses: actions/setup-python@v7
-        if: matrix.ext == 'exe'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: Download the published assets
+      - name: Download the published exe
         run: |
           mkdir smoke && cd smoke
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          asset="earthwave-${TAG}-${{ matrix.name }}.${{ matrix.ext }}"
+          asset="earthwave-${TAG}-windows-x86_64.exe"
           curl --fail --location --silent --show-error --retry 5 --retry-delay 10 -o "$asset" "$base/$asset"
           curl --fail --location --silent --show-error --retry 5 --retry-delay 10 -o SHA256SUMS "$base/SHA256SUMS"
-          echo "ASSET=$asset" >> "$GITHUB_ENV"
-      - name: Verify the checksum
-        working-directory: smoke
-        run: |
-          grep -F " $ASSET" SHA256SUMS > mine.sums || { echo "::error::$ASSET is not in SHA256SUMS"; exit 1; }
-          if command -v sha256sum >/dev/null; then sha256sum --check mine.sums; else shasum -a 256 --check mine.sums; fi
-      - name: Unpack
-        working-directory: smoke
-        run: |
-          if [ "${{ matrix.ext }}" = "exe" ]; then
-            cp "$ASSET" earthwave.exe
-          else
-            tar -xzf "$ASSET"
-          fi
-      - name: Run --version and --selftest
-        working-directory: smoke
-        run: |
-          exe=./earthwave; [ "${{ matrix.ext }}" = "exe" ] && exe=./earthwave.exe
-          version=$($exe --version)
-          echo "$version"
-          [ "$version" = "earthwave ${TAG#v}" ] || { echo "::error::--version says '$version', expected ${TAG#v}"; exit 1; }
-          $exe --selftest | tee selftest.txt
-          if grep -q SKIPPED selftest.txt; then echo "::error::--selftest skipped checks in the published binary"; exit 1; fi
-          grep -q "selftest: ok" selftest.txt
-          $exe --diagnose --offline
-      - name: Keep the asset path for the real-input run
-        if: matrix.ext == 'exe'
-        run: echo "EARTHWAVE_EXE=$PWD/smoke/$ASSET" >> "$GITHUB_ENV"  # the published name, so its SHA256SUMS line matches
-      # Windows only: the real-input suite (ConPTY, real keystrokes) against the published exe. The suite checks the exe
-      # against the SHA256SUMS next to it. Not yet seen running in CI; it does not block the smoke verdict until it is.
+          echo "EARTHWAVE_EXE=$PWD/$asset" >> "$GITHUB_ENV"  # the published name, so its SHA256SUMS line matches
       - name: Real-input suite
-        if: matrix.ext == 'exe'
-        continue-on-error: true
         run: |
           python -m pip install -e ".[dev]"
           python -m pytest tests/uat/test_realinput.py -q -p no:cacheprovider

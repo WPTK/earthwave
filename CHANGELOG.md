@@ -9,7 +9,12 @@
 - Add `--save-home` and `--home-name` to keep a home location in the config file without editing it
 - Add `--diagnose`: version, Python, OS, terminal variables, config, history and log paths and feed reachability in one block to paste into a bug report
 - Add `EARTHWAVE_MAP_RENDERER` (`auto`, `braille`, `sixel`) to force the map renderer for one run
+- Add release binaries for Linux arm64 (`linux-arm64`) and macOS Intel (`macos-x86_64`), and a build provenance attestation for every release file (verify with `gh attestation verify FILE --repo WPTK/earthwave`)
 - Add `EARTHWAVE_CONFIG_DIR` and `EARTHWAVE_DATA_DIR` to move the config file, the history database and the log; on Windows the defaults follow `%LOCALAPPDATA%`
+
+### Changed
+
+- Lower the Linux binary's glibc requirement from 2.35 to 2.31: it is now built in a Debian 11 container, so Ubuntu 20.04 and Debian 11 can run it
 
 ### Fixed
 
