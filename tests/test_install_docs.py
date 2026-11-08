@@ -45,10 +45,20 @@ def test_source_install_names_no_release_and_uses_the_tag_placeholder():
 
 
 def test_readme_asset_names_match_the_release_workflow():
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert 'base="earthwave-${GITHUB_REF_NAME}-${{ matrix.name }}"' in workflow
-    for suffix in ("windows-x86_64.exe", "linux-x86_64.tar.gz", "macos-arm64.tar.gz"):
+    workflows = ROOT / ".github" / "workflows"
+    # The shared build workflow names each file <asset-prefix>-<platform>; the prefix is earthwave-v<version>.
+    assert "asset-prefix: earthwave-v${{ needs.version.outputs.version }}" in (workflows / "binaries.yml").read_text(encoding="utf-8")
+    release = (workflows / "release.yml").read_text(encoding="utf-8")
+    suffixes = (
+        "windows-x86_64.exe",
+        "linux-x86_64.tar.gz",
+        "linux-arm64.tar.gz",
+        "macos-arm64.tar.gz",
+        "macos-x86_64.tar.gz",
+    )
+    for suffix in suffixes:
         assert f"earthwave-TAG-{suffix}" in _install_section()
+        assert f"earthwave-${{{{ github.ref_name }}}}-{suffix}" in release
 
 
 def test_readme_mentions_every_cli_flag():

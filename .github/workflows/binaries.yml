@@ -1,0 +1,62 @@
+name: Binaries
+
+# Builds a one-file binary for each platform and checks each one runs. Called by release.yml on a tag; also runs by hand
+# and on pull requests that touch the build, so a broken build shows up before a release rather than during one.
+# Nothing here publishes anything and it has no secrets.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - earthwave/**
+      - tests/fixtures/**
+      - earthwave.spec
+      - pyproject.toml
+      - .github/workflows/binaries.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binaries-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  version:
+    name: Read the version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' earthwave/__init__.py)
+          [ -n "$version" ] || { echo "::error::no __version__ in earthwave/__init__.py"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # One binary per platform, built by the shared workflow (WPTK/release-workflows). The Linux builds run inside
+  # python:3.13-bullseye, pinned by digest, so the binaries need only glibc 2.31 (Ubuntu 20.04, Debian 11 and newer);
+  # building on the runner itself would set the floor at that runner's glibc. Move the pin on purpose. The macOS Intel
+  # build uses GitHub's last Intel image. Assets: earthwave-v<version>-<os>-<arch>, .exe on Windows and .tar.gz
+  # elsewhere.
+  binary:
+    name: Binary
+    needs: version
+    uses: WPTK/release-workflows/.github/workflows/build-binaries.yml@48ad720b496558ebdf47c0a0529475b6bf3b4517 # v0.1.0
+    with:
+      app: earthwave
+      asset-prefix: earthwave-v${{ needs.version.outputs.version }}
+      python-version: "3.13"
+      linux-container: python:3.13-bullseye@sha256:f58f33e0563f2ba81c7afe6259cd912f0c33413da93c75cc3a70a941c17afa8c
+      install-command: python -m pip install -e ".[dev]"
+      build-command: python -m PyInstaller --noconfirm --clean earthwave.spec
+      smoke-command: |
+        "$BIN" --version
+        "$BIN" --selftest | tee selftest.txt
+        # a spec regression that drops the bundled fixtures must stop the release before anything is public
+        if grep -q SKIPPED selftest.txt; then echo "::error::--selftest skipped checks in the built binary"; exit 1; fi

@@ -17,7 +17,9 @@ servers on Windows.
 CI (`.github/workflows/ci.yml`) runs the tests on Python 3.13 on `windows-2025`, `ubuntu-24.04`, `macos-15` and
 `windows-2022`, on Python 3.12 (the floor) on `ubuntu-24.04`, and on Python 3.14 on `ubuntu-24.04` without blocking the
 merge. The Windows runners are Windows Server images, used as stand-ins for the console. The release workflow builds
-the Windows exe on `windows-2025`, the Linux binary on `ubuntu-22.04` and the macOS binary on `macos-latest`. Separately
+the Windows exe on a Windows runner, the Linux binaries (x86_64 and arm64) inside a pinned `python:3.13-bullseye`
+container on `ubuntu-latest` and `ubuntu-24.04-arm`, and the macOS binaries on `macos-latest` (arm64) and `macos-15-intel`.
+Separately
 from CI, the app is used by hand on Windows 11 in Windows Terminal; nothing in the repository records that. Older
 Windows versions and the legacy console host are not tested.
 
@@ -85,8 +87,9 @@ scripts\build_exe.ps1            # builds dist\earthwave.exe, then runs --versio
 ```
 
 On Linux and macOS, run `python -m PyInstaller --noconfirm --clean earthwave.spec`; the result is `dist/earthwave`.
-A PyInstaller binary is built for the OS and CPU it was built on. The release workflow builds the Linux binary on
-Ubuntu 22.04, so it needs glibc 2.35 or newer. The binary bundles the fixtures `--selftest`
+A PyInstaller binary is built for the OS and CPU it was built on. The release workflow builds the Linux binaries inside a
+Debian 11 (bullseye) container pinned by digest in `.github/workflows/binaries.yml`, so they need glibc 2.31 or newer;
+the build fails if a binary needs a newer symbol. The binary bundles the fixtures `--selftest`
 parses (`earthwave.spec`), so its self-test does the same fixture parse as a source checkout.
 
 ### Signing
@@ -112,9 +115,12 @@ Only on the maintainer's word.
    ```
 
 3. `.github/workflows/release.yml` runs. It fails at once if the tag is not `v0.y.z`, does not equal `__version__`,
-   has no dated changelog section, or is not on `main`. Otherwise it builds Windows (`.exe`), Linux (x86-64, `.tar.gz`) and macOS (arm64, `.tar.gz`) binaries, runs
-   `--version` and `--selftest` on each, and creates the GitHub Release with the binaries, `SHA256SUMS` and the
-   changelog section as notes.
+   has no dated changelog section, or is not on `main`. Otherwise it builds Windows (`.exe`), Linux (x86-64 and arm64) and macOS (arm64 and Intel) binaries
+   (`.tar.gz` except on Windows) through `binaries.yml`, which calls the shared workflows in
+   [WPTK/release-workflows](https://github.com/WPTK/release-workflows), runs `--version` and `--selftest` on each,
+   checks the file set, attests build provenance, and creates the GitHub Release with the binaries, `SHA256SUMS` and the
+   changelog section as notes. `binaries.yml` also runs on pull requests that touch the build.
+   `post-release.yml` then checks the published files, their checksums and attestations (`gh attestation verify`) and runs each binary.
 4. Run through [`smoke-test.md`](smoke-test.md) on a machine without Python.
 
 If a run publishes a bad release, remove the release and its tag together, fix on a branch and tag again:

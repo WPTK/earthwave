@@ -41,9 +41,11 @@ pipx install git+https://github.com/WPTK/earthwave.git@TAG
 - Windows: `earthwave-TAG-windows-x86_64.exe`. Save it in a folder on your `PATH` and rename it to `earthwave.exe`.
 - Linux x86-64: `earthwave-TAG-linux-x86_64.tar.gz`. Unpack it and put `earthwave` on your `PATH`:
   `tar -xzf earthwave-TAG-linux-x86_64.tar.gz && mkdir -p ~/.local/bin && install -m 755 earthwave ~/.local/bin/`.
-  It needs glibc 2.35 or newer (Ubuntu 22.04 and later); musl systems such as Alpine are not supported.
-- macOS arm64: `earthwave-TAG-macos-arm64.tar.gz`, installed the same way (`~/.local/bin` is not on the macOS `PATH`
-  by default). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
+  It needs glibc 2.31 or newer (Ubuntu 20.04, Debian 11 and later); musl systems such as Alpine are not supported.
+- Linux arm64: `earthwave-TAG-linux-arm64.tar.gz`, installed the same way, with the same glibc requirement.
+- macOS arm64 (Apple silicon): `earthwave-TAG-macos-arm64.tar.gz`, installed the same way (`~/.local/bin` is not on the
+  macOS `PATH` by default). To clear the Gatekeeper prompt: `xattr -d com.apple.quarantine earthwave`.
+- macOS Intel: `earthwave-TAG-macos-x86_64.tar.gz`, installed the same way.
 
 The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper will ask you to confirm. Check the
 download against `SHA256SUMS` from the same release. The platforms CI covers are listed in
