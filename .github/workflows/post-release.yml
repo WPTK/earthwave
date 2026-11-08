@@ -61,7 +61,7 @@ jobs:
         earthwave-${{ needs.tag.outputs.tag }}-macos-arm64.tar.gz
         earthwave-${{ needs.tag.outputs.tag }}-macos-x86_64.tar.gz
       smoke-command: |
-        version=$("$BIN" --version)
+        version=$("$BIN" --version | tr -d '\r')
         echo "$version"
         [ "$version" = "earthwave ${{ needs.tag.outputs.version }}" ] || { echo "::error::--version says '$version', expected ${{ needs.tag.outputs.version }}"; exit 1; }
         "$BIN" --selftest | tee selftest.txt
